@@ -1,0 +1,38 @@
+{
+  "name": "entropy-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.3.1",
+    "@tsconfig/svelte": "^5.0.6",
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/node": "^24.10.1",
+    "autoprefixer": "^10.4.23",
+    "jsdom": "^27.4.0",
+    "postcss": "^8.5.6",
+    "svelte": "^5.43.8",
+    "svelte-check": "^4.3.4",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.9.3",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.1",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-shell": "^2.3.4",
+    "libsodium-wrappers": "^0.8.2",
+    "lucide-svelte": "^0.563.0"
+  }
+}
