@@ -1,4 +1,4 @@
-# 📄 Entropy Desktop Specification (v1.0)
+# Entropy Desktop Specification
 
 This document defines the cryptographic and architectural specifications for the Entropy Desktop client.
 
@@ -99,6 +99,7 @@ The desktop app contributes to metadata resistance on its end:
 - Client automatically sends `ping` messages to the server during idle periods
 - Responds to server `dummy_pacing` packets with acknowledgments
 - Maintains constant connection activity to mask when real messages are being sent
+- **Note**: This feature is currently disabled by default to save bandwidth but can be enabled in settings
 
 ### 7.3 Decoy Requests
 - Client periodically fetches random user key bundles (via `/keys/random`) even when not initiating conversations

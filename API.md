@@ -1,4 +1,4 @@
-# 🌐 Entropy Network API Reference
+# Entropy Network API Reference
 
 The Entropy Desktop client interacts with decentralized relay nodes via a set of REST and WebSocket endpoints. This document summarizes the expected interaction patterns.
 

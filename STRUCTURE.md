@@ -1,4 +1,4 @@
-# 📂 Project Structure
+# Project Structure
 
 This document provides a high-level overview of the Entropy Desktop codebase.
 
@@ -36,7 +36,7 @@ This document provides a high-level overview of the Entropy Desktop codebase.
 └── CONTRIBUTING.md          # Development Roadmap
 ```
 
-## 🛠️ Key Design Patterns
+## Key Design Patterns
 
 1.  **Strict IPC Separation**: No business logic exists in the UI layer. All cryptographic operations are handled by the Rust backend via asynchronous IPC calls.
 2.  **Stateless UI**: The frontend reflects the state of the backend vault. On app reload, the session is re-ratcheted from the local database.

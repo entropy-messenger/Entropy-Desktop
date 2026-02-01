@@ -1,10 +1,10 @@
-# 🛡️ Security Policy
+# Security Policy
 
-## ⚠️ Security Audits
+## Security Audits
 
-The Entropy project is currently in **Alpha**. 
+The Entropy project is currently in **Alpha**.
 
-## 🕵️ Vulnerability Disclosure
+## Vulnerability Disclosure
 
 If you discover a security vulnerability, please do NOT open a public issue. Instead, follow our disclosure process:
 
@@ -13,7 +13,7 @@ If you discover a security vulnerability, please do NOT open a public issue. Ins
 
 We aim to acknowledge all reports within 48 hours and provide a fix or mitigation within 10 business days.
 
-## 📦 Core Security Principles
+## Core Security Principles
 
 - **Client-Side Only**: All cryptographic material is generated on the client. We do not support "cloud backups" of private keys.
 - **Perfect Forward Secrecy**: We use a Double Ratchet algorithm to ensure that the compromise of one key does not reveal past or future messages.

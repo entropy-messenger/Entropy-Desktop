@@ -21,7 +21,7 @@ By participating in this project, you agree to abide by our standards of profess
 1.  Fork the repo and create your branch from `main`.
 2.  If you've added code that should be tested, add tests.
 3.  If you've changed APIs, update the documentation.
-5.  Make sure your code follows the existing style (Modern Rust/TypeScript standards).
+4.  Make sure your code follows the existing style (Modern Rust/TypeScript standards).
 
 ## Technical Standards
 

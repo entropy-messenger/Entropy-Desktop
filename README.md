@@ -1,4 +1,4 @@
-# 🌌 Entropy Desktop
+# Entropy Desktop
 
 [![Status](https://img.shields.io/badge/status-active-green?style=for-the-badge&logo=statuspage)](https://github.com/Moyzy/entropy)
 [![License](https://img.shields.io/badge/license-AGPLv3-blue?style=for-the-badge&logo=gnu)](./LICENSE)
@@ -6,21 +6,23 @@
 
 **Entropy Desktop** is a sovereign, decentralized messaging client built for the future. It leverages a "Zero-Knowledge" routing architecture where privacy isn't just a policy—it's a mathematical guarantee.
 
+> **⚠️ Alpha Status Warning**: This project is currently in **Active Alpha Testing**. While the cryptographic primitives are standard, the implementation has not yet undergone a third-party security audit. Use with caution for critical communications.
+
 ---
 
-## ✨ What Entropy Desktop Does
+## Features
 
-- **� End-to-End Encrypted Messaging**: Send text, files, and media with complete privacy. Messages are encrypted using a hybrid X3DH+Kyber1024 protocol before leaving your device.
-- **👥 Private Group Chats**: Create encrypted group conversations with perfect forward secrecy. Each participant gets individually encrypted envelopes.
-- **📎 Secure File Attachments**: Share images, videos, and files up to 100MB. All attachments are encrypted locally and split into chunks for efficient P2P delivery.
-- **🎭 Anonymous Identity System**: No phone numbers, no email addresses. Your identity is just a cryptographic hash that only you control.
-- **📛 Human-Readable Nicknames**: Register optional nicknames (e.g., `@alice`) for easier discovery while maintaining cryptographic verification.
-- **📬 Offline Message Queue**: If you're offline, messages are stored encrypted on the relay server and delivered when you reconnect (with automatic deletion after retrieval).
-- **🔔 Desktop Notifications**: Get notified of new messages with privacy-preserving desktop notifications (content is kept minimal).
-- **🗑️ Forensic Burn**: Instantly wipe your entire account from both your device and all relay servers with one click.
-- **💾 Vault Export/Import**: Backup your encrypted conversation history and transfer it between devices.
-- **🌐 Multi-Relay Support**: Connect to any compatible Entropy relay server or run your own.
-- **🕵️ Traffic Normalization**: Client-side padding and dummy messages hide metadata like message size and timing from network observers.
+- **End-to-End Encrypted Messaging**: Send text, files, and media with complete privacy. Messages are encrypted using a hybrid X3DH+Kyber1024 protocol before leaving your device.
+- **Private Group Chats**: Create encrypted group conversations with perfect forward secrecy. Each participant gets individually encrypted envelopes.
+- **Secure File Attachments**: Share images, videos, and files up to 100MB. All attachments are encrypted locally and split into chunks for efficient P2P delivery.
+- **Anonymous Identity System**: No phone numbers, no email addresses. Your identity is just a cryptographic hash that only you control.
+- **Human-Readable Nicknames**: Register optional nicknames (e.g., `@alice`) for easier discovery while maintaining cryptographic verification.
+- **Offline Message Queue**: If you're offline, messages are stored encrypted on the relay server and delivered when you reconnect (with automatic deletion after retrieval).
+- **Desktop Notifications**: Get notified of new messages with privacy-preserving desktop notifications (content is kept minimal).
+- **Forensic Burn**: Instantly wipe your entire account from both your device and all relay servers with one click.
+- **Vault Export/Import**: Backup your encrypted conversation history and transfer it between devices.
+- **Multi-Relay Support**: Connect to any compatible Entropy relay server or run your own.
+- **Traffic Normalization**: Client-side padding and dummy messages hide metadata like message size and timing from network observers.
 
 ### Cryptographic Features
 
@@ -31,7 +33,7 @@
 
 ---
 
-## 🛠️ Technical Architecture
+## Technical Architecture
 
 Entropy Desktop is a native cross-platform desktop application with a security-first architecture:
 
@@ -56,7 +58,7 @@ We explicitly chose to build the core backend logic in Rust rather than JavaScri
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 - **Node.js** 20+
@@ -77,20 +79,21 @@ npm run tauri dev
 
 ---
 
-## ⚙️ Configuration (Environment Variables)
+## Configuration (Environment Variables)
 
 Entropy uses Vite environment variables for build-time configuration. Create a `.env` file in the `DesktopApp` directory:
 
 ```ini
 # The URL of the Entropy Relay server
 VITE_RELAY_URL= ...
+```
 
 - **Development**: Defaults to `http://localhost:8080`.
 - **Production**: Set `VITE_RELAY_URL` before running `npm run tauri build` to bake in your custom relay.
 
 ---
 
-## 🏗️ Building for Production
+## Building for Production
 
 To create a production-ready bundle optimized for your platform:
 
@@ -101,7 +104,7 @@ The optimized binary will be located in `src-tauri/target/release/bundle`.
 
 ---
 
-## 🧪 Verification
+## Verification
 
 Security is a primary goal. You can audit the protocol and implementation via our test suites:
 
@@ -115,7 +118,7 @@ npm run test
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 - **[Technical Specifications](./SPECS.md)**: Deep dive into the cryptographic architecture.
 - **[Network API](./API.md)**: Details on relay node interaction.
@@ -123,7 +126,7 @@ npm run test
 
 ---
 
-## 📄 License
+## License
 
 Entropy is free and open-source software licensed under the **AGPLv3**.
 
