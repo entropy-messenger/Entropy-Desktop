@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLinkPreview } from './utils';
+import { parseLinkPreview } from '../lib/utils';
 
 describe('utils', () => {
     describe('parseLinkPreview', () => {

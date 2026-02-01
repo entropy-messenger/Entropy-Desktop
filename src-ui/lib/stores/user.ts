@@ -1,6 +1,6 @@
 
 import { writable } from 'svelte/store';
-import type { Chat, Message, PrivacySettings } from './types';
+import type { Chat, Message, PrivacySettings } from '../types';
 
 export interface AppState {
     identityHash: string | null;
@@ -42,7 +42,7 @@ const initialState: AppState = {
     connectionStatus: 'disconnected',
     authError: null,
     keysMissing: false,
-    relayUrl: 'http://localhost:8080'
+    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080'
 };
 
 export const userStore = writable<AppState>(initialState);

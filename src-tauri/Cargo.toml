@@ -1,8 +1,8 @@
 [package]
 name = "entropy"
-version = "0.0.0"
-description = "Entropy Desktop Application"
-authors = ["you"]
+version = "0.1.0"
+description = "Sovereign, Decentralized Messaging Client"
+authors = ["Entropy Team <contact@entropy.network>"]
 edition = "2021"
 
 [build-dependencies]
@@ -46,3 +46,6 @@ panic = "abort" # Reduce binary size and remove stack trace info
 codegen-units = 1 # Better optimizations
 lto = true # Link Time Optimization across all crates
 strip = true # Remove all debug symbols and symbol tables from the binary
+
+[dev-dependencies]
+tempfile = "3.24.0"

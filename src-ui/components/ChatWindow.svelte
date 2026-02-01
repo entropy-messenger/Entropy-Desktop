@@ -1,6 +1,6 @@
 
 <script lang="ts">
-  import { userStore } from '../lib/user_store';
+  import { userStore } from '../lib/stores/user';
   import { 
     sendMessage, sendFile, sendVoiceNote, 
     sendTypingStatus, setLocalNickname, toggleStar, 
@@ -111,7 +111,7 @@
 
   const setDisappearing = () => {
       if (!activeChat) return;
-      const val = prompt("Set disappearing messages timer (seconds, 0 to disable):", activeChat.disappearingTimer || 0);
+      const val = prompt("Set disappearing messages timer (seconds, 0 to disable):", (activeChat.disappearingTimer || 0).toString());
       if (val !== null) setDisappearingTimer(activeChat.peerHash, parseInt(val) || null);
   };
 
@@ -327,7 +327,7 @@
                                 tabindex="0"
                             >
                                 {#if msg.replyTo}
-                                    <div onclick={() => scrollToMessage(msg.replyTo.id)} onkeypress={(e) => e.key === 'Enter' && scrollToMessage(msg.replyTo.id)} role="button" tabindex="0" class="bg-black/5 p-2 rounded-lg border-l-4 border-blue-500 mb-2 cursor-pointer hover:bg-black/10 transition overflow-hidden">
+                                    <div onclick={() => scrollToMessage(msg.replyTo!.id)} onkeypress={(e) => e.key === 'Enter' && scrollToMessage(msg.replyTo!.id)} role="button" tabindex="0" class="bg-black/5 p-2 rounded-lg border-l-4 border-blue-500 mb-2 cursor-pointer hover:bg-black/10 transition overflow-hidden">
                                         <div class="text-[10px] font-black text-blue-600 truncate">{msg.replyTo.senderAlias || 'Peer'}</div>
                                         <div class="text-xs text-gray-600 truncate opacity-80">{msg.replyTo.content}</div>
                                     </div>
@@ -548,9 +548,9 @@
                         </div>
                         <div class="space-y-2">
                              {#each linkMessages.slice(0, 5) as m}
-                                <a href={m.linkPreview.url} target="_blank" class="block p-3 bg-gray-50 border border-transparent hover:border-blue-100 hover:bg-blue-50/50 rounded-xl transition duration-200 no-underline">
-                                    <div class="text-[11px] font-bold text-gray-800 truncate">{m.linkPreview.title}</div>
-                                    <div class="text-[9px] text-blue-500 truncate mt-1">{m.linkPreview.url}</div>
+                                <a href={m.linkPreview!.url} target="_blank" class="block p-3 bg-gray-50 border border-transparent hover:border-blue-100 hover:bg-blue-50/50 rounded-xl transition duration-200 no-underline">
+                                    <div class="text-[11px] font-bold text-gray-800 truncate">{m.linkPreview!.title}</div>
+                                    <div class="text-[9px] text-blue-500 truncate mt-1">{m.linkPreview!.url}</div>
                                 </a>
                              {/each}
                         </div>

@@ -2,7 +2,7 @@
 import { writable, get } from 'svelte/store';
 import { network } from './network';
 import { signalManager } from './signal_manager';
-import { userStore } from './user_store';
+import { userStore } from './stores/user';
 import { addMessage } from './store';
 import type { Message } from './types';
 
@@ -15,7 +15,7 @@ export interface CallState {
     remoteStream: MediaStream | null;
     isIncoming: boolean;
     status: 'idle' | 'calling' | 'ringing' | 'connected' | 'ended';
-    duration: number; 
+    duration: number;
 }
 
 const initialCallState: CallState = {
@@ -225,7 +225,7 @@ class CallManager {
                 this.logCall('declined');
             }
 
-            
+
             await new Promise(r => setTimeout(r, 200));
         }
 

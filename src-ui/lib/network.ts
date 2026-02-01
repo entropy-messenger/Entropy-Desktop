@@ -11,15 +11,15 @@ export class NetworkLayer {
     private heartbeatInterval: any;
     private isConnected = false;
 
-    
+
     private userStoreModule: any = null;
     private logicStoreModule: any = null;
 
     constructor() {
-        import('./user_store').then(m => this.userStoreModule = m);
+        import('./stores/user').then(m => this.userStoreModule = m);
         import('./store').then(m => this.logicStoreModule = m);
 
-        
+
         listen('network-msg', (event) => {
             this.handleMessage(event.payload as string);
         });
@@ -71,8 +71,8 @@ export class NetworkLayer {
     private onConnect() {
         console.log('Native network layer connected');
 
-        
-        
+
+
         if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
         this.stabilityTimer = setTimeout(() => {
             console.log("Connection stabilized. Resetting retry count.");
@@ -97,7 +97,7 @@ export class NetworkLayer {
     private onDisconnect() {
         console.log('Native network layer disconnected');
 
-        
+
         if (this.stabilityTimer) {
             clearTimeout(this.stabilityTimer);
             this.stabilityTimer = null;
@@ -126,12 +126,12 @@ export class NetworkLayer {
 
     private startHeartbeat() {
         this.stopHeartbeat();
-        
-        
+
+
         this.heartbeatInterval = setInterval(() => {
             if (!this.isConnected) return;
 
-            
+
             if (this.messageQueue.length > 0) {
                 const item = this.messageQueue.shift();
                 if (item) {
@@ -142,7 +142,6 @@ export class NetworkLayer {
                     }
                 }
             } else {
-                
                 this.executeSendJSON({ type: 'dummy', ts: Date.now() });
             }
         }, 500);
@@ -255,7 +254,7 @@ export class NetworkLayer {
         packet.set(hashBytes, 0);
         packet.set(data, 64);
 
-        
+
         const hex = Array.from(packet).map(b => b.toString(16).padStart(2, '0')).join('');
 
         try {

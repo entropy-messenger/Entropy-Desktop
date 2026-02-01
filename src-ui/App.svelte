@@ -1,7 +1,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { userStore } from './lib/user_store';
+  import { userStore } from './lib/stores/user';
   import { createIdentity, initApp } from './lib/store';
   import { network } from './lib/network';
   import Sidebar from './components/Sidebar.svelte';
@@ -99,7 +99,7 @@
     async function handleExport() {
         try {
             const data = await signalManager.exportIdentity();
-            const blob = new Blob([data], { type: 'application/octet-stream' });
+            const blob = new Blob([data as any], { type: 'application/octet-stream' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;

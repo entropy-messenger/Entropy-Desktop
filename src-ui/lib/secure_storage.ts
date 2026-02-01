@@ -28,7 +28,6 @@ export const secureLoad = async (key: string): Promise<string | null> => {
             const secret = await invoke('get_secret', { key });
             return secret as string | null;
         } catch (e) {
-            console.debug(`[SecureStorage] ${key} not found in keyring.`);
             return null;
         }
     } else {

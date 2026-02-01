@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { userStore } from './user_store';
+import { userStore } from '../lib/stores/user';
 import { get } from 'svelte/store';
 
 describe('userStore', () => {
@@ -50,6 +50,6 @@ describe('userStore', () => {
         }));
         const state = get(userStore);
         expect(state.privacySettings.readReceipts).toBe(false);
-        expect(state.privacySettings.decoyMode).toBe(true); 
+        expect(state.privacySettings.decoyMode).toBe(true);
     });
 });

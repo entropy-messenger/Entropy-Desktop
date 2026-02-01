@@ -1,6 +1,6 @@
 
 <script lang="ts">
-  import { userStore } from '../lib/user_store';
+  import { userStore } from '../lib/stores/user';
   import { 
     startChat, createGroup, updateMyProfile, 
     togglePin, toggleArchive, toggleMute, toggleBlock, updatePrivacy,
@@ -327,10 +327,10 @@
                                 const nick = prompt("Register a global nickname (min 3 chars):", $userStore.myAlias || "");
                                 if (nick) {
                                     const res = await registerGlobalNickname(nick);
-                                    if (res.success) {
+                                    if (res && res.success) {
                                         alert("Nickname registered successfully!");
                                     } else {
-                                        alert("Registration failed: " + res.error);
+                                        alert("Registration failed: " + (res?.error || "Unknown"));
                                     }
                                 }
                             }}

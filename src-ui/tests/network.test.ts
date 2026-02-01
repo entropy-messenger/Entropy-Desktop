@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NetworkLayer } from './network';
+import { NetworkLayer } from '../lib/network';
 
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -34,11 +34,11 @@ describe('NetworkLayer', () => {
     it('should attempt to connect via native invoke', async () => {
         vi.mocked(invoke).mockResolvedValue(undefined);
 
-        
-        
-        
 
-        
+
+
+
+
         (network as any).userStoreModule = {
             userStore: {
                 subscribe: vi.fn().mockReturnValue(() => { }),

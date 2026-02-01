@@ -43,8 +43,8 @@ export const decryptBinary = async (combined: Uint8Array, key: Uint8Array): Prom
 };
 
 export const sha256 = async (input: Uint8Array | string): Promise<string> => {
-    const data = typeof input === 'string' ? input : toHex(input);
-    return await invoke('crypto_sha256', { data });
+    const data = typeof input === 'string' ? new TextEncoder().encode(input) : input;
+    return await invoke('crypto_sha256', { data: Array.from(data) });
 };
 
 export const minePoW = async (seed: string, difficulty: number = 3, context: string = ""): Promise<{ nonce: number, seed: string }> => {
@@ -74,8 +74,8 @@ export const fromBase64 = (base64: string): Uint8Array => {
     try {
         return sodium.from_base64(base64);
     } catch (e) {
-        
-        
+
+
         const cleaned = base64.replace(/[\s\n\r]/g, '');
         return Uint8Array.from(atob(cleaned), c => c.charCodeAt(0));
     }

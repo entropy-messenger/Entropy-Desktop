@@ -26,9 +26,9 @@
                     
                     const hexData = toHex(data);
                     const decrypted = await signalManager.decryptMedia(hexData, msg.attachment.bundle);
-                    blobUrl = URL.createObjectURL(new Blob([decrypted], {type: msg.attachment.fileType}));
+                    blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
                 } else {
-                    blobUrl = URL.createObjectURL(new Blob([data], {type: msg.attachment.fileType}));
+                    blobUrl = URL.createObjectURL(new Blob([data as any], {type: msg.attachment.fileType}));
                 }
             } else {
                 error = true;

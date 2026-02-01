@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SignalStore } from './signal_store';
-import * as secureStorage from './secure_storage';
+import { SignalStore } from '../lib/signal_store';
+import * as secureStorage from '../lib/secure_storage';
 
-vi.mock('./secure_storage', () => ({
+vi.mock('../lib/secure_storage', () => ({
     vaultSave: vi.fn(),
     vaultLoad: vi.fn(),
 }));
@@ -24,7 +24,7 @@ describe('SignalStore', () => {
     it('should set encryption key', () => {
         const key = new Uint8Array([1, 2, 3]);
         store.setEncryptionKey(key);
-        
+
     });
 
     it('should call clear_vault on deleteAllData', async () => {

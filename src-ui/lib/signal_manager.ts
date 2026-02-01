@@ -73,7 +73,7 @@ export class SignalManager {
 
     async init(password: string, autoCreate: boolean = true): Promise<string | null> {
         return this.lock(async () => {
-            
+
             const identityExists = !(await this.store.isBlankSlate());
             let salt = await secureLoad('entropy_vault_salt');
 
@@ -88,7 +88,7 @@ export class SignalManager {
                     await this.store.deleteAllData();
                 }
 
-                console.info("SignalManager: Generating new vault salt.");
+                console.debug("SignalManager: Generating new vault salt.");
                 salt = crypto.randomUUID();
                 await secureStore('entropy_vault_salt', salt);
             }
@@ -96,7 +96,7 @@ export class SignalManager {
             const vaultKey = await deriveVaultKey(password, salt);
             this.store.setEncryptionKey(vaultKey);
 
-            
+
             let identityBundle: any;
             try {
                 identityBundle = await invoke('protocol_init');
@@ -105,10 +105,10 @@ export class SignalManager {
                 return null;
             }
 
-            
+
             this.initialRegistrationId = identityBundle.registration_id;
 
-            
+
             const pubKeyB64 = identityBundle.identity_key;
 
             if (!pubKeyB64) {
@@ -116,24 +116,24 @@ export class SignalManager {
                 throw new Error("Identity Key missing");
             }
 
-            
-            
+
+
             const cleanKey = pubKeyB64.replace(/[\n\r\s]/g, '');
             let binaryKey: Uint8Array;
             try {
                 binaryKey = fromBase64(cleanKey);
             } catch (e) {
                 console.error("SignalManager: Failed to decode Identity Key:", cleanKey, e);
-                
+
                 const standardKey = cleanKey.replace(/-/g, '+').replace(/_/g, '/');
                 binaryKey = fromBase64(standardKey);
             }
 
             this.userIdentity = await sha256(binaryKey);
 
-            console.log("Initialized Rust Protocol. User Hash:", this.userIdentity);
+            console.debug("Initialized Rust Protocol. User Hash:", this.userIdentity);
 
-            
+
             (this as any)._cachedBundle = identityBundle;
 
             return this.userIdentity;
@@ -180,9 +180,9 @@ export class SignalManager {
     async ensureKeysUploaded(serverUrl: string, force: boolean = false) {
         if (!force && localStorage.getItem('signal_keys_uploaded') === 'true') return;
 
-        console.log("Preparing keys for upload form Rust backend...");
+        console.debug("Preparing keys for upload form Rust backend...");
 
-        
+
         const rustBundle = (this as any)._cachedBundle;
         if (!rustBundle) throw new Error("Rust identity bundle not found. Init first.");
 
@@ -203,8 +203,8 @@ export class SignalManager {
             }))
         };
 
-        
-        
+
+
         const signData = JSON.stringify({
             identityKey: bundle.identityKey,
             pq_identityKey: bundle.pq_identityKey,
@@ -213,12 +213,12 @@ export class SignalManager {
         });
         bundle.bundle_signature = await invoke('protocol_sign', { message: signData });
 
-        
+
         const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${this.userIdentity}`);
         const { seed, difficulty } = await challengeRes.json();
 
-        
-        const pow = await minePoW(seed, difficulty);
+
+        const pow = await minePoW(seed, difficulty, this.userIdentity);
 
         const response = await fetch(`${serverUrl}/keys/upload`, {
             method: 'POST',
@@ -234,7 +234,7 @@ export class SignalManager {
             throw new Error(`Failed to upload keys: ${await response.text()}`);
         }
 
-        console.log("Keys uploaded successfully.");
+        console.debug("Keys uploaded successfully.");
         localStorage.setItem('signal_keys_uploaded', 'true');
     }
 
@@ -321,18 +321,12 @@ export class SignalManager {
     }
 
     async replenishPreKeys(serverUrl: string): Promise<void> {
-        const result: any = await invoke('protocol_replenish_pre_keys', { count: 50 });
-        if (result && result.pre_keys) {
-            
-            await fetch(`${serverUrl}/prekeys/upload`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    identity_hash: this.userIdentity,
-                    pre_keys: result.pre_keys
-                })
-            });
-        }
+        await invoke('protocol_replenish_pre_keys', { count: 50 });
+        // Refresh the cached bundle from Rust DB so ensureKeysUploaded uses the new pre-keys.
+        const bundle: any = await invoke('protocol_init');
+        (this as any)._cachedBundle = bundle;
+
+        await this.ensureKeysUploaded(serverUrl, true);
     }
 
     async groupInit(groupId: string): Promise<any> {
@@ -366,12 +360,16 @@ export class SignalManager {
     async exportIdentity(): Promise<Uint8Array> {
         return this.lock(async () => {
             const salt = await secureLoad('entropy_vault_salt');
+            const vaultBinary: number[] = await invoke('protocol_export_vault');
+
+            // Still include these for convenience/portability
             const vaultData = await invoke('dump_vault');
 
             const payload = {
-                v: 1,
+                v: 2, // Upgraded version
                 ts: Date.now(),
                 s: salt,
+                db: vaultBinary, // The actual encrypted database bytes
                 vlt: vaultData,
                 cfg: { ...localStorage }
             };
@@ -379,7 +377,7 @@ export class SignalManager {
             const json = JSON.stringify(payload);
             const encoded = new TextEncoder().encode(json);
 
-            const header = new TextEncoder().encode("ENTROPY_VAULT_V1\n");
+            const header = new TextEncoder().encode("ENTROPY_VAULT_V2\n");
             const combined = new Uint8Array(header.length + encoded.length);
             combined.set(header);
             combined.set(encoded, header.length);
@@ -390,26 +388,33 @@ export class SignalManager {
 
     async importIdentity(data: Uint8Array | string): Promise<void> {
         return this.lock(async () => {
-            let json: string;
+            let json = "";
+            const headerV2 = "ENTROPY_VAULT_V2";
 
-            if (data instanceof Uint8Array) {
-                const header = "ENTROPY_VAULT_V1\n";
+            if (typeof data !== 'string') {
                 const decoded = new TextDecoder().decode(data);
-                if (!decoded.startsWith(header)) {
-                    throw new Error("Invalid Entropy Vault file.");
-                }
-                json = decoded.substring(header.length);
+                const start = decoded.indexOf('{');
+                if (start === -1) throw new Error("Invalid Entropy Vault file: Missing JSON");
+                json = decoded.substring(start);
             } else {
                 json = data;
             }
 
-            const payload = JSON.parse(json);
+            if (!json) throw new Error("Empty vault data");
+            const finalJson = json.toString();
+            const payload = JSON.parse(finalJson.substring(finalJson.indexOf('{')).trim());
             const salt = payload.s || payload.salt;
-            const vault = payload.vlt || payload.vault;
+            const dbBinary = payload.db; // The raw binary database (V2+)
             const settings = payload.cfg || payload.settings;
 
             if (salt) await secureStore('entropy_vault_salt', salt);
-            if (vault) await invoke('restore_vault', { data: vault });
+
+            if (dbBinary) {
+                await invoke('protocol_import_vault', { bytes: dbBinary });
+            } else {
+                throw new Error("Invalid vault backup: Missing binary database (Legacy V1 backups are no longer supported)");
+            }
+
             if (settings) {
                 for (const k in settings) {
                     localStorage.setItem(k, settings[k]);
@@ -426,7 +431,7 @@ export class SignalManager {
 
             const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${this.userIdentity}`);
             const { seed, difficulty } = await challengeRes.json();
-            const pow = await minePoW(seed, 5, this.userIdentity); 
+            const pow = await minePoW(seed, 5, this.userIdentity);
 
             const signature = await this.signMessage("BURN:" + this.userIdentity);
 

@@ -1,0 +1,52 @@
+name: Entropy Desktop CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.0-dev \
+          build-essential \
+          curl \
+          wget \
+          file \
+          libssl-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install Frontend Dependencies
+      run: npm install
+
+    - name: Check Frontend Types
+      run: npm run check
+
+    - name: Run Frontend Tests
+      run: npm run test
+
+    - name: Run Backend Tests
+      working-directory: ./src-tauri
+      run: cargo test --verbose
+
+    - name: Build
+      run: npm run tauri build
