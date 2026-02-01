@@ -1,4 +1,4 @@
-# Logs
+
 logs
 *.log
 npm-debug.log*
@@ -12,11 +12,9 @@ dist
 dist-ssr
 *.local
 
-# Tauri
 src-tauri/target/
 src-tauri/gen/
 
-# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -27,7 +25,5 @@ src-tauri/gen/
 *.sln
 *.sw?
 
-# Environment variables
 .env
-.env.*
-!.env.example
+.env.local
