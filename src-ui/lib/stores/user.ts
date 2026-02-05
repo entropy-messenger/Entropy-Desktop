@@ -19,6 +19,8 @@ export interface AppState {
     authError: string | null;
     keysMissing: boolean;
     relayUrl: string;
+    activeAudioId: string | null;
+    activeAudioChatId: string | null;
 }
 
 const initialState: AppState = {
@@ -38,16 +40,18 @@ const initialState: AppState = {
         lastSeen: 'everyone',
         profilePhoto: 'everyone',
         routingMode: 'direct',
-        proxyUrl: 'socks5://127.0.0.1:9050',
-        decoyMode: true,
+        proxyUrl: '',
+        decoyMode: false,
         forceTurn: false,
-        iceServers: ['stun:stun.l.google.com:19302']
+        iceServers: []
     },
     sessionToken: null,
     connectionStatus: 'disconnected',
     authError: null,
     keysMissing: false,
-    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080'
+    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080',
+    activeAudioId: null,
+    activeAudioChatId: null
 };
 
 export const userStore = writable<AppState>(initialState);

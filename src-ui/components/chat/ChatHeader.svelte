@@ -1,16 +1,15 @@
 <script lang="ts">
-  import { LucidePhone, LucideVideo, LucideSearch, LucideMoreVertical, LucideShieldCheck, LucideShieldAlert } from 'lucide-svelte';
+  import { LucideSearch, LucideMoreVertical, LucideShieldCheck, LucideShieldAlert } from 'lucide-svelte';
   import type { Chat } from '../../lib/types';
 
   interface Props {
     activeChat: Chat;
-    onInitiateCall: (type: 'voice' | 'video') => void;
     onToggleGallery: () => void;
     onToggleSearch: () => void;
     onShowOptions: () => void;
   }
 
-  let { activeChat, onInitiateCall, onToggleGallery, onToggleSearch, onShowOptions }: Props = $props();
+  let { activeChat, onToggleGallery, onToggleSearch, onShowOptions }: Props = $props();
 </script>
 
 <div class="bg-white/95 backdrop-blur-md p-3 px-4 border-b border-gray-200 flex justify-between items-center shadow-sm z-30">
@@ -38,17 +37,12 @@
                 {/if}
             </h3>
             <span class="text-[10px] font-bold uppercase tracking-widest {activeChat.isOnline ? 'text-emerald-500' : 'text-gray-400'}">
-                {activeChat.isOnline ? 'OnlineNow' : activeChat.isTyping ? 'Typing...' : 'EncryptedSignal'}
+                {activeChat.isOnline ? 'OnlineNow' : activeChat.isTyping ? 'Typing...' : 'DirectSignal'}
             </span>
         </div>
     </div>
 
     <div class="flex items-center space-x-1">
-        {#if !activeChat.isGroup}
-            <button onclick={() => onInitiateCall('voice')} class="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-gray-100 rounded-xl transition active:scale-90"><LucidePhone size={20} /></button>
-            <button onclick={() => onInitiateCall('video')} class="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-gray-100 rounded-xl transition active:scale-90"><LucideVideo size={20} /></button>
-        {/if}
-        <div class="w-px h-6 bg-gray-200 mx-1"></div>
         <button onclick={onToggleSearch} class="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-gray-100 rounded-xl transition active:scale-90"><LucideSearch size={20} /></button>
         <button onclick={onShowOptions} class="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-gray-100 rounded-xl transition active:scale-90"><LucideMoreVertical size={20} /></button>
     </div>

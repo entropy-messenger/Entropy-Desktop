@@ -6,7 +6,6 @@
   import { network } from './lib/network';
   import Sidebar from './components/Sidebar.svelte';
   import ChatWindow from './components/ChatWindow.svelte';
-  import CallOverlay from './components/CallOverlay.svelte';
   import TitleBar from './components/TitleBar.svelte';
   import { LucideWifiOff, LucideShieldCheck, LucideLock, LucideFingerprint } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -55,6 +54,7 @@
     }
   };
 
+
   const handleCreate = async () => {
     if (!password) return;
     isInitializing = true;
@@ -87,7 +87,6 @@
         if (!confirm("This will PERMANENTLY delete your vault and all messages. Are you sure?")) return;
         try {
             await invoke('nuclear_reset');
-            localStorage.clear();
             window.location.reload();
         } catch (e) {
             alert("Reset failed: " + e);
@@ -209,7 +208,7 @@
                             >
                                 {#if isInitializing}
                                     <div class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                    <span>Unlocking Vault...</span>
+                                    <span>{$userStore.connectionStatus === 'mining' ? 'Solving PoW...' : 'Unlocking Vault...'}</span>
                                 {:else}
                                     <LucideFingerprint size={20} class="group-hover:scale-110 transition-transform" />
                                     <span>Unlock Identity</span>
@@ -224,7 +223,7 @@
                             >
                                 {#if isInitializing}
                                     <div class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                    <span>Generating Seed...</span>
+                                    <span>{$userStore.connectionStatus === 'mining' ? 'Mining Identity...' : 'Generating Seed...'}</span>
                                 {:else}
                                     <LucideShieldCheck size={20} class="group-hover:scale-110 transition-transform" />
                                     <span>Create Secure Identity</span>
@@ -271,48 +270,8 @@
             <Sidebar />
             <div class="flex-1 relative flex flex-col min-w-0">
                 <ChatWindow />
-            
-                {#if $userStore.connectionStatus !== 'connected'}
-                    <div class="absolute inset-0 bg-white/60 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-500">
-                        <div class="bg-white p-10 rounded-[2.5rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.15)] border border-gray-100 flex flex-col items-center space-y-8 max-w-sm text-center relative overflow-hidden">
-                            <div class="absolute top-0 left-0 w-full h-1 bg-gray-100">
-                                <div class="h-full bg-blue-600 animate-progress"></div>
-                            </div>
-                            
-                            {#if $userStore.connectionStatus === 'mining'}
-                                <div class="relative">
-                                    <div class="w-20 h-20 border-4 border-blue-600/10 border-t-blue-600 rounded-full animate-spin"></div>
-                                    <div class="absolute inset-0 flex items-center justify-center text-blue-600">
-                                        <LucideShieldCheck size={32} />
-                                    </div>
-                                </div>
-                                <div class="space-y-2">
-                                    <div class="text-xl font-black text-gray-900 tracking-tight">Securing Session</div>
-                                    <div class="text-[12px] text-gray-500 font-medium leading-relaxed px-4">Computing cryptographic proof to protect your identity. This only happens once per session.</div>
-                                </div>
-                            {:else if $userStore.connectionStatus === 'connecting'}
-                                <div class="w-20 h-20 border-4 border-indigo-600/10 border-t-indigo-600 rounded-full animate-spin"></div>
-                                <div class="space-y-2">
-                                    <div class="text-xl font-black text-gray-900 tracking-tight">Verifying Identity</div>
-                                    <div class="text-[12px] text-gray-500 font-medium px-4">
-                                        {$userStore.sessionToken ? 'Validating session token with relay...' : 'Handshaking with Entropy relay nodes...'}
-                                    </div>
-                                </div>
-                            {:else}
-                                <div class="w-20 h-20 bg-amber-50 rounded-full flex items-center justify-center text-amber-500 animate-pulse">
-                                    <LucideWifiOff size={40} />
-                                </div>
-                                <div class="space-y-2">
-                                    <div class="text-xl font-black text-gray-900 tracking-tight">Reconnecting</div>
-                                    <div class="text-[12px] text-gray-500 font-medium px-4">The secure link was interrupted. Attempting to re-establish the connection...</div>
-                                </div>
-                            {/if}
-                        </div>
-                    </div>
-                {/if}
             </div>
         </div>
-        <CallOverlay />
     {/if}
 
 </main>

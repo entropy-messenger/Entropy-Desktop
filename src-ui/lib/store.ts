@@ -15,6 +15,20 @@ import { signalManager } from './signal_manager';
 import { vaultSave } from './secure_storage';
 
 // -----------------------------------------------------------------------------
+// Global Audio Management
+// -----------------------------------------------------------------------------
+export const setActiveAudio = (audioId: string, chatId: string) => {
+    userStore.update(s => ({ ...s, activeAudioId: audioId, activeAudioChatId: chatId }));
+};
+
+export const clearActiveAudio = (audioId?: string) => {
+    userStore.update(s => {
+        if (audioId && s.activeAudioId !== audioId) return s;
+        return { ...s, activeAudioId: null, activeAudioChatId: null };
+    });
+};
+
+// -----------------------------------------------------------------------------
 // Subscriptions & Background Logic
 // -----------------------------------------------------------------------------
 
@@ -37,29 +51,32 @@ userStore.subscribe(state => {
     saveTimeout = setTimeout(async () => {
         try {
             isSaving = true;
-            const chatsCopy = JSON.parse(JSON.stringify(state.chats));
-            for (const h in chatsCopy) {
-                delete chatsCopy[h].isOnline;
-                delete chatsCopy[h].isTyping;
-                for (const m of chatsCopy[h].messages) {
-                    if (m.attachment?.data) delete m.attachment.data;
-                }
+
+            // Fast, shallow-ish clone. We only need to strip volatile UI state.
+            const chatsToSave: Record<string, any> = {};
+            for (const [h, chat] of Object.entries(state.chats)) {
+                chatsToSave[h] = {
+                    ...chat,
+                    isOnline: undefined,
+                    isTyping: undefined
+                };
             }
 
             const vault = {
-                chats: chatsCopy,
+                chats: chatsToSave,
                 myAlias: state.myAlias,
                 myPfp: state.myPfp,
                 blockedHashes: state.blockedHashes,
                 privacySettings: state.privacySettings,
-                sessionToken: state.sessionToken
+                sessionToken: state.sessionToken,
+                relayUrl: state.relayUrl
             };
 
-            await vaultSave(`entropy_chats_${state.identityHash}`, JSON.stringify(vault));
+            await vaultSave(`entropy_vault_${state.identityHash}`, JSON.stringify(vault));
         } catch (e) {
-            console.error("Failed to persist vault:", e);
+            console.error("Auto-save failed:", e);
         } finally {
             isSaving = false;
         }
-    }, 2000);
+    }, 1000); // 1 second debounce for stability
 });

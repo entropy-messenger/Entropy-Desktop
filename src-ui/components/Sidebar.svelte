@@ -12,7 +12,7 @@
     LucideCamera, LucideUser, LucidePin, LucideArchive, LucideBellOff,
     LucideLock, LucideCheckCircle2, LucideBan, LucideEyeOff,
     LucideShieldAlert, LucideCpu, LucideGlobe, LucideTrash2,
-    LucideShieldCheck, LucideActivity
+    LucideShieldCheck, LucideActivity, LucideVolume2
   } from 'lucide-svelte';
 
   let activeHash = $state<string | null>(null);
@@ -44,28 +44,78 @@
   });
 
   const selectChat = (hash: string) => {
-    userStore.update(s => {
-        if (s.chats[hash]) s.chats[hash].unreadCount = 0;
-        return { ...s, activeChatHash: hash };
-    });
     startChat(hash);
   };
 
-  const createChatPrompt = async () => {
-    const input = prompt("Enter Peer ID Hash (64-char Hex) or Global Nickname:");
+
+  let showAddContact = $state(false);
+  let addContactInput = $state("");
+  let qrFileInput = $state<HTMLInputElement | null>(null);
+
+  const handleAddContact = async () => {
+    const input = addContactInput.trim();
     if (!input) return;
 
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
         startChat(input);
+        showAddContact = false;
+        addContactInput = "";
     } else {
         const hash = await lookupNickname(input);
         if (hash) {
             startChat(hash, input);
+            showAddContact = false;
+            addContactInput = "";
         } else {
             alert("Could not find user with that hash or nickname.");
         }
     }
   };
+
+  const handleQRScan = async (e: Event) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+        try {
+            const img = new Image();
+            img.onload = async () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+                ctx.drawImage(img, 0, 0);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // Dynamically import jsqr to keep bundle small if possible
+                const jsQR = (await import('jsqr')).default;
+                const code = jsQR(imageData.data, imageData.width, imageData.height);
+                
+                if (code && code.data) {
+                    let hash = code.data;
+                    if (hash.startsWith('entropy://')) hash = hash.replace('entropy://', '');
+                    if (hash.length === 64 && /^[0-9a-fA-F]+$/.test(hash)) {
+                        startChat(hash);
+                        showAddContact = false;
+                        addContactInput = "";
+                    } else {
+                        alert("Decoded data does not look like a valid identity hash.");
+                    }
+                } else {
+                    alert("No QR code found in this image.");
+                }
+            };
+            img.src = ev.target?.result as string;
+        } catch (err) {
+            console.error(err);
+            alert("Failed to process image.");
+        }
+    };
+    reader.readAsDataURL(file);
+  };
+
 
   const handleCreateGroup = () => {
       if (!groupName.trim() || groupMembers.length === 0) return;
@@ -129,8 +179,9 @@
   };
 
   const copyHash = () => {
-    if ($userStore.identityHash) {
-        navigator.clipboard.writeText($userStore.identityHash);
+    const id = $userStore.identityHash;
+    if (id) {
+        navigator.clipboard.writeText(id);
         copied = true;
         setTimeout(() => copied = false, 2000);
     }
@@ -159,7 +210,7 @@
     const query = searchQuery.toLowerCase();
     const chatName = (chat.localNickname || chat.peerAlias || "").toLowerCase();
     const matchesName = chatName.includes(query) || chat.peerHash.toLowerCase().includes(query);
-    const matchesMessages = chat.messages.some(m => m.content.toLowerCase().includes(query));
+    const matchesMessages = chat.messages.some(m => (m.content || "").toLowerCase().includes(query));
     
     if (filter === 'archived' && !chat.isArchived) return false;
     if (filter === 'all' && chat.isArchived) return false;
@@ -194,7 +245,7 @@
             <button onclick={() => showCreateGroup = true} class="p-2 hover:bg-gray-200 rounded-full text-gray-600 transition" title="New Group">
                 <LucideUsers size={18} />
             </button>
-            <button onclick={createChatPrompt} class="p-2 hover:bg-gray-200 rounded-full text-blue-600 transition" title="New Message">
+            <button onclick={() => showAddContact = true} class="p-2 hover:bg-gray-200 rounded-full text-blue-600 transition" title="New Message">
                 <LucidePlus size={20} />
             </button>
             <button onclick={toggleSettings} class="p-2 hover:bg-gray-200 rounded-full text-gray-500 transition">
@@ -261,6 +312,11 @@
                         <div class="text-[13px] truncate pr-2 flex-1 {chat.isTyping ? 'text-green-600 font-bold' : 'text-gray-500'}">
                             {#if chat.isTyping}
                                 <span>typing...</span>
+                            {:else if $userStore.activeAudioChatId === chat.peerHash}
+                                <div class="flex items-center space-x-1.5 overflow-hidden">
+                                    <LucideVolume2 size={12} class="text-blue-500 animate-pulse" />
+                                    <span class="text-[10px] text-blue-600 font-black uppercase tracking-widest">Playing VN</span>
+                                </div>
                             {:else if chat.messages.length > 0}
                                 <div class="flex items-center space-x-1">
                                     {#if chat.messages[chat.messages.length - 1].isMine}
@@ -338,7 +394,6 @@
             <button onclick={() => settingsTab = 'profile'} class="flex-1 py-3 {settingsTab === 'profile' ? 'text-blue-600 border-b-2 border-blue-600' : ''}">Profile</button>
             <button onclick={() => settingsTab = 'privacy'} class="flex-1 py-3 {settingsTab === 'privacy' ? 'text-blue-600 border-b-2 border-blue-600' : ''}">Privacy</button>
             <button onclick={() => settingsTab = 'blocked'} class="flex-1 py-3 {settingsTab === 'blocked' ? 'text-blue-600 border-b-2 border-blue-600' : ''}">Blocked</button>
-            <button onclick={() => settingsTab = 'audit'} class="flex-1 py-3 {settingsTab === 'audit' ? 'text-blue-600 border-b-2 border-blue-600' : ''}">Audit</button>
         </div>
 
         <div class="p-6 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
@@ -441,10 +496,11 @@
                     <div class="flex justify-center mt-2">
                         <div class="bg-white p-2 rounded-xl border border-blue-100 shadow-sm relative overflow-hidden group/qr">
                             <img 
-                                src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={$userStore.identityHash}" 
+                                src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={encodeURIComponent($userStore.identityHash || '')}" 
                                 alt="QR Identity" 
                                 class="w-32 h-32 blur-[1px] group-hover/qr:blur-0 transition-all duration-300"
                             />
+
                             <div class="absolute inset-0 bg-white/40 flex items-center justify-center opacity-100 group-hover/qr:opacity-0 transition-opacity">
                                 <LucideLock size={24} class="text-blue-600" />
                             </div>
@@ -493,41 +549,12 @@
                             </div>
                         </div>
 
-                        <div class="space-y-1">
-                            <h3 class="font-bold text-gray-800 flex items-center space-x-2">
-                                <LucideCpu size={18} class="text-teal-500" />
-                                <span>Decoy Fetching</span>
-                            </h3>
-                            <p class="text-xs text-gray-500 leading-relaxed">Fetch multiple random keys when looking up a peer to hide your intent from the server.</p>
-                            <div class="flex items-center justify-between pt-2">
-                                <button 
-                                    onclick={async (e) => {
-                                        const btn = e.currentTarget;
-                                        btn.disabled = true;
-                                        const original = btn.innerText;
-                                        btn.innerText = "REFRESHING...";
-                                        await refreshDecoys('http://localhost:8080');
-                                        btn.innerText = "DONE!";
-                                        setTimeout(() => { 
-                                            btn.innerText = original; 
-                                            btn.disabled = false;
-                                        }, 1000);
-                                    }}
-                                    class="text-[9px] font-bold text-teal-600 hover:text-teal-700 uppercase tracking-tighter"
-                                >
-                                    REFRESH POOL
-                                </button>
-                                <button onclick={() => updatePrivacy({ decoyMode: !$userStore.privacySettings.decoyMode })} class="w-12 h-6 rounded-full transition-colors relative {$userStore.privacySettings.decoyMode ? 'bg-teal-500' : 'bg-gray-300'}" aria-label="Toggle Decoy Mode">
-                                    <div class="absolute top-1 w-4 h-4 bg-white rounded-full transition-all {$userStore.privacySettings.decoyMode ? 'left-7' : 'left-1'}"></div>
-                                </button>
-                            </div>
-                        </div>
 
                         <div class="p-4 bg-blue-50 rounded-2xl border border-blue-100 flex items-start space-x-3">
                             <img src="/logo.png" alt="logo" class="w-8 h-8 object-contain shrink-0 opacity-40 ml-[-4px]" />
                             <div>
-                                <div class="text-[11px] font-bold text-blue-900 uppercase tracking-widest mb-1">E2E Integrity</div>
-                                <p class="text-[10px] text-blue-700 leading-snug">All privacy signals are encrypted. Even routing configurations are only used locally to establish the secure tunnel.</p>
+                                <div class="text-[11px] font-bold text-blue-900 uppercase tracking-widest mb-1">Direct Signal</div>
+                                <p class="text-[10px] text-blue-700 leading-snug">All messages are sent in plain text for maximum transparency. No encryption is used.</p>
                             </div>
                         </div>
 
@@ -541,85 +568,8 @@
                                 class="w-full py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold hover:bg-red-600 hover:text-white transition flex items-center justify-center space-x-2"
                              >
                                 <LucideTrash2 size={14} />
-                                <span>Nuke Account (Forensic Burn)</span>
+                                <span>Delete Account</span>
                              </button>
-                        </div>
-                    </div>
-                {:else if settingsTab === 'audit'}
-                    <div class="space-y-6 animate-in slide-in-from-right-4 duration-300">
-                        <div class="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl space-y-4">
-                            <div class="flex items-center space-x-3 text-emerald-800">
-                                <LucideShieldCheck size={24} />
-                                <h3 class="font-black text-xs uppercase tracking-[0.2em]">Protocol Integrity Audit</h3>
-                            </div>
-                            
-                            <div class="space-y-3">
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">PQXDH Key Exchange</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Kyber-1024</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Perfect Forward Secrecy</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Double Ratchet</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Sender Ratcheting</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Group V2 Secure</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Anonymity Layers</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Sealed Sender</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">IP Protection</span>
-                                    <span class="text-blue-600 flex items-center space-x-1"><span>{$userStore.privacySettings.routingMode.toUpperCase()}</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Network Obfuscation</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Traffic Padding</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Vault Hardening</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>SQLCipher AES-256</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Large Media</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>AES-GCM Chunked</span></span>
-                                </div>
-                                <div class="flex items-center justify-between text-[11px] font-bold">
-                                    <span class="text-gray-500">Multi-Device</span>
-                                    <span class="text-emerald-600 flex items-center space-x-1"><LucideCheck size={12}/> <span>Real-time Sync</span></span>
-                                </div>
-                            </div>
-
-                            <p class="text-[9px] text-gray-400 leading-relaxed pt-2 border-t border-emerald-100">
-                                This audit verifies that all active communication channels are currently utilizing the maximum security parameters defined in the <b>Entropy Protocol Specification v1.2</b>.
-                            </p>
-                        </div>
-
-                        <div class="px-2 space-y-4">
-                            <div class="flex items-center space-x-3">
-                                <LucideActivity size={16} class="text-blue-500" />
-                                <span class="text-[10px] font-black uppercase text-gray-400 tracking-widest">Active Session Health</span>
-                            </div>
-                            <div class="space-y-2">
-                                {#each Object.values($userStore.chats).slice(0, 5) as chat}
-                                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                                        <div class="flex items-center space-x-3">
-                                            <div class="w-6 h-6 rounded-lg bg-white border border-gray-100 flex items-center justify-center text-[10px] font-bold">
-                                                {(chat.localNickname || chat.peerAlias || "?")[0].toUpperCase()}
-                                            </div>
-                                            <span class="text-[10px] font-bold text-gray-700">{chat.localNickname || chat.peerAlias || 'Peer'}</span>
-                                        </div>
-                                        <div class="flex items-center space-x-2">
-                                            {#if chat.isVerified}
-                                                <LucideShieldCheck size={12} class="text-emerald-500" />
-                                            {/if}
-                                            <span class="text-[8px] px-2 py-0.5 bg-gray-200 rounded-full font-bold">AES-GCM</span>
-                                        </div>
-                                    </div>
-                                {/each}
-                            </div>
                         </div>
                     </div>
                 {:else if settingsTab === 'blocked'}
@@ -694,7 +644,56 @@
         </div>
         <div class="p-6 border-t border-gray-100"><button onclick={handleCreateGroup} disabled={!groupName || groupMembers.length === 0} class="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg active:scale-[0.98] transition">Create Group Chat</button></div>
     </div>
-  {/if}
+    {/if}
+    {#if showAddContact}
+
+        <div class="absolute inset-0 bg-white/30 backdrop-blur-md z-[70] flex items-center justify-center p-4">
+            <div class="bg-white rounded-[2.5rem] shadow-2xl border border-gray-100 w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+                <div class="p-6 border-b border-gray-50 flex items-center justify-between">
+                    <h3 class="font-black text-xs uppercase tracking-[0.2em] text-gray-400">Add New Secure Chat</h3>
+                    <button onclick={() => showAddContact = false} class="p-2 text-gray-400 hover:text-gray-800 transition"><LucideX size={18} /></button>
+                </div>
+                
+                <div class="p-8 space-y-6">
+                    <div class="space-y-4">
+                        <div class="bg-gray-50 p-4 rounded-3xl border border-gray-100 flex flex-col space-y-2">
+                             <label for="contact-input" class="text-[9px] font-black text-gray-400 uppercase tracking-widest pl-1">Identity Hash or Nickname</label>
+                             <input 
+                                id="contact-input"
+                                bind:value={addContactInput} 
+                                placeholder="Paste hash here..." 
+                                class="w-full bg-transparent border-none text-xs font-mono focus:ring-0"
+                                onkeydown={(e) => e.key === 'Enter' && handleAddContact()}
+                             />
+                        </div>
+                        
+                        <div class="flex items-center space-x-3">
+                            <div class="h-px bg-gray-100 flex-1"></div>
+                            <span class="text-[9px] font-black text-gray-300 uppercase">OR</span>
+                            <div class="h-px bg-gray-100 flex-1"></div>
+                        </div>
+
+                        <button 
+                            onclick={() => qrFileInput?.click()}
+                            class="w-full py-4 bg-indigo-50 text-indigo-600 rounded-3xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center space-x-3 hover:bg-indigo-100 transition active:scale-[0.98]"
+                        >
+                            <LucideCamera size={18} />
+                            <span>Scan QR from Image</span>
+                        </button>
+                        <input type="file" bind:this={qrFileInput} onchange={handleQRScan} accept="image/*" class="hidden" />
+                    </div>
+
+                    <button 
+                        onclick={handleAddContact}
+                        disabled={!addContactInput.trim()}
+                        class="w-full py-5 bg-blue-600 text-white rounded-[2rem] font-black text-sm uppercase tracking-widest hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-[0.98] disabled:opacity-50"
+                    >
+                        Start Secure Link
+                    </button>
+                </div>
+            </div>
+        </div>
+    {/if}
 </div>
 
 <style>

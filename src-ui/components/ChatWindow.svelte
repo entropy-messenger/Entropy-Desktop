@@ -6,7 +6,6 @@
     setDisappearingTimer, setReplyingTo,
     bulkDelete, bulkStar, toggleBlock, toggleVerification 
   } from '../lib/store';
-  import { callManager } from '../lib/call_manager';
   import { signalManager } from '../lib/signal_manager';
   import { 
     LucideX, LucideSearch, 
@@ -30,20 +29,34 @@
   let isRecording = $state(false);
   let mediaRecorder = $state<MediaRecorder | null>(null);
   let audioChunks = $state<Blob[]>([]);
+  let recordedBlob = $state<Blob | null>(null);
+  let lastActiveHash = ""; // Non-reactive tracker to avoid recursive effect loops
 
   let activeChat = $derived($userStore.activeChatHash ? $userStore.chats[$userStore.activeChatHash] : null);
   let replyingTo = $derived($userStore.replyingTo);
   let safetyNumber = $state("");
   
+  import { untrack } from 'svelte';
+
   $effect(() => {
-    if (showGallery && activeChat && !activeChat.isGroup) {
-      signalManager.getSafetyNumber(activeChat.peerHash, 'http://localhost:8080')
-          .then(sn => safetyNumber = sn)
-          .catch(e => safetyNumber = "Session not established");
-    } else {
-      safetyNumber = "";
-    }
+    // Only react to changes in the active chat hash
+    const chatHash = $userStore.activeChatHash || "";
+    
+    untrack(() => {
+      if (chatHash !== lastActiveHash) {
+          console.log("Chat switched to", chatHash, "- resetting VN state");
+          lastActiveHash = chatHash;
+          
+          if (isRecording) {
+              try { mediaRecorder?.stop(); } catch (e) {}
+              isRecording = false;
+          }
+          recordedBlob = null;
+          audioChunks = [];
+      }
+    });
   });
+
 
   const handleSend = (text: string) => {
     if (activeChat) sendMessage(activeChat.peerHash, text);
@@ -60,23 +73,54 @@
     } else {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
+            
+            // Prefer webm, then ogg, then default
+            const mimeType = ['audio/webm', 'audio/ogg', 'audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+            console.log("Starting recorder with MIME type:", mimeType || "default");
+            
+            mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
             audioChunks = [];
-            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+            
+            mediaRecorder.ondataavailable = (e) => { 
+                if (e.data.size > 0) {
+                    audioChunks.push(e.data);
+                } 
+            };
+            
             mediaRecorder.onstop = () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                if (activeChat) sendVoiceNote(activeChat.peerHash, audioBlob);
+                const actualMime = mediaRecorder?.mimeType || 'audio/webm';
+                recordedBlob = new Blob(audioChunks, { type: actualMime });
+                console.log("Recording stopped. Blob size:", recordedBlob.size, "MIME:", actualMime);
+                
                 stream.getTracks().forEach(track => track.stop());
             };
+            
             mediaRecorder.start();
             isRecording = true;
-        } catch (e) { console.error(e); }
+        } catch (e: any) { 
+            console.error("Recording error:", e); 
+            if (e.name === 'NotAllowedError') {
+                alert("Microphone permission denied. Please enable it in your system settings.");
+            } else {
+                alert(`Could not start recording: ${e.message || e}`);
+            }
+        }
     }
   };
 
-  const initiateCall = (type: 'voice' | 'video') => {
-      if (activeChat && !activeChat.isGroup) callManager.startCall(activeChat.peerHash, type);
+
+  const discardRecording = () => {
+    recordedBlob = null;
+    audioChunks = [];
   };
+
+  const sendRecording = (duration?: number) => {
+    if (activeChat && recordedBlob && recordedBlob.size > 0) {
+        sendVoiceNote(activeChat.peerHash, recordedBlob, duration);
+        discardRecording();
+    }
+  };
+
 
   const scrollToMessage = (id: string) => {
       const el = document.getElementById(`msg-${id}`);
@@ -130,7 +174,6 @@
             
             <ChatHeader 
                 {activeChat} 
-                onInitiateCall={initiateCall} 
                 onToggleGallery={() => showGallery = !showGallery}
                 onToggleSearch={() => showMessageSearch = !showMessageSearch}
                 onShowOptions={() => showOptions = !showOptions}
@@ -153,7 +196,7 @@
             {/if}
 
             <MessageList 
-                messages={messageSearchQuery ? activeChat.messages.filter(m => m.content.toLowerCase().includes(messageSearchQuery.toLowerCase())) : activeChat.messages}
+                messages={messageSearchQuery ? activeChat.messages.filter(m => (m.content || "").toLowerCase().includes(messageSearchQuery.toLowerCase())) : activeChat.messages}
                 {activeChat}
                 {selectionMode}
                 {selectedIds}
@@ -178,13 +221,18 @@
             {/if}
 
             <MessageInput 
+                peerHash={activeChat.peerHash}
                 {replyingTo}
                 onCancelReply={() => setReplyingTo(null)}
                 onSend={handleSend}
                 {onFileSelect}
                 onToggleRecording={toggleRecording}
                 {isRecording}
+                {recordedBlob}
+                onDiscardRecording={discardRecording}
+                onSendRecording={sendRecording}
             />
+
         </div>
 
         {#if showGallery}
@@ -229,30 +277,6 @@
                         </div>
                     </div>
 
-                    {#if !activeChat.isGroup}
-                        <div class="px-6 space-y-6">
-                            <div class="space-y-3">
-                                <h4 class="text-[10px] font-black uppercase tracking-widest text-gray-400 flex items-center space-x-2">
-                                    <LucideShieldCheck size={12} />
-                                    <span>Safety Verification</span>
-                                </h4>
-                                <div class="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl space-y-3">
-                                    <div class="text-[10px] font-bold text-emerald-800 leading-relaxed uppercase tracking-wider">
-                                        Verify this safety number matches on your contact's device:
-                                    </div>
-                                    <div class="font-mono text-xs font-black text-emerald-950 tracking-[0.2em] bg-white/50 p-3 rounded-xl border border-emerald-100">
-                                        {safetyNumber}
-                                    </div>
-                                    <button 
-                                        onclick={() => toggleVerification(activeChat!.peerHash)}
-                                        class="w-full py-2.5 {activeChat.isVerified ? 'bg-amber-600' : 'bg-emerald-600'} text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-110 shadow-lg transition"
-                                    >
-                                        {activeChat.isVerified ? 'Mark Unverified' : 'Mark Verified'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    {/if}
                 </div>
             </div>
         {/if}

@@ -29,3 +29,11 @@ export const fromHex = (hex: string): Uint8Array => {
 export const toHex = (bytes: Uint8Array): string => {
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 };
+
+export const fromBase64 = (s: string): Uint8Array => {
+    return new Uint8Array(atob(s).split('').map(c => c.charCodeAt(0)));
+};
+
+export const toBase64 = (b: Uint8Array): string => {
+    return btoa(String.fromCharCode(...b));
+};

@@ -30,8 +30,8 @@ pub async fn connect_network(
         let host = url.host_str().ok_or("No host")?;
         let port = url.port().unwrap_or(80);
         let proxy_addr = format!("{}:{}", p_url.host_str().unwrap_or("127.0.0.1"), p_url.port().unwrap_or(9050));
-        let socks = Socks5Stream::connect(proxy_addr.as_str(), (host, port)).await.map_err(|e| e.to_string())?;
-        let (ws_stream, _) = tokio_tungstenite::client_async(url.as_str(), socks).await.map_err(|e| e.to_string())?;
+        let socks = Socks5Stream::connect(proxy_addr.as_str(), (host, port)).await.map_err(|e: tokio_socks::Error| e.to_string())?;
+        let (ws_stream, _) = tokio_tungstenite::client_async(url.as_str(), socks).await.map_err(|e: tokio_tungstenite::tungstenite::Error| e.to_string())?;
         spawn_ws_loop(app, ws_stream, rx, bearer_token);
     } else {
         let (ws_stream, _) = connect_async(url.as_str()).await.map_err(|e| e.to_string())?;

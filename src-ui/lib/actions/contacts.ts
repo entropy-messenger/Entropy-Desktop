@@ -1,8 +1,9 @@
 import { get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
 import { userStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
-import { minePoW } from '../crypto';
+import { minePoW } from '../pow';
 import { bulkDelete, sendReceipt } from './message_utils';
 import type { PrivacySettings } from '../types';
 
@@ -277,4 +278,57 @@ export const startChat = (peerHash: string, alias?: string) => {
 
 export const updateAlias = (peerHash: string, newAlias: string) => {
     userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].peerAlias = newAlias; return s; });
+};
+
+export const burnAccount = async (serverUrl: string) => {
+    if (!confirm("PERMANENTLY DELETE YOUR ACCOUNT FROM THE SERVER? This cannot be undone.")) return;
+
+    const state = get(userStore);
+    if (!state.identityHash) return;
+
+    try {
+        userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
+
+        // 1. Get PoW
+        const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${state.identityHash}`);
+        const { seed, difficulty } = await challengeRes.json();
+
+        // 2. Mine PoW
+        const { nonce } = await minePoW(seed, difficulty, state.identityHash);
+
+        // 3. Sign "BURN:<hash>"
+        const message = `BURN:${state.identityHash}`;
+        const signature = await signalManager.signMessage(message);
+
+        // 4. Send request
+        const response = await fetch(`${serverUrl}/account/burn`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-PoW-Seed': seed,
+                'X-PoW-Nonce': nonce
+            },
+            body: JSON.stringify({
+                identity_hash: state.identityHash,
+                signature
+            })
+        });
+
+        if (response.ok) {
+            alert("Account burned! Deleting local data...");
+            await invoke('nuclear_reset');
+            window.location.reload();
+        } else {
+            const err = await response.json();
+            alert("Burn failed: " + (err.error || response.statusText));
+        }
+    } catch (e) {
+        alert("Burn failed: " + e);
+    } finally {
+        userStore.update(s => ({ ...s, connectionStatus: 'connected' }));
+    }
+};
+
+export const refreshDecoys = () => {
+    // Decoys are legacy/mixnet features, disabled in simplified mode
 };

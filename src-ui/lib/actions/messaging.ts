@@ -3,11 +3,9 @@ import { userStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
 import { attachmentStore } from '../attachment_store';
-import { callManager } from '../call_manager';
 import { invoke } from '@tauri-apps/api/core';
 import type { Message, ServerMessage } from '../types';
-import { parseLinkPreview, fromHex } from '../utils';
-import { fromBase64, toBase64 } from '../crypto';
+import { parseLinkPreview, fromHex, fromBase64, toBase64 } from '../utils';
 import { markOnline, setOnlineStatus, broadcastProfile, statusTimeouts } from './contacts';
 import { addMessage, sendReceipt } from './message_utils';
 
@@ -169,16 +167,14 @@ export const sendFile = async (destId: string, file: File) => {
             const end = Math.min(start + CHUNK_SIZE, uint8.length);
             const chunkData = uint8.slice(start, end);
 
-            const encryptedChunk = await signalManager.encryptMediaChunk(bundle.key_b64, bundle.nonce_b64, i, chunkData);
-
             const chunkMsg = {
                 type: 'file_chunk',
                 fileId: msgId,
                 index: i,
-                data: toBase64(encryptedChunk)
+                data: toBase64(chunkData)
             };
 
-            const encryptedChunkMsg = await signalManager.encrypt(destId, JSON.stringify(chunkMsg), state.relayUrl, true); // volatile for chunks? maybe not
+            const encryptedChunkMsg = await signalManager.encrypt(destId, JSON.stringify(chunkMsg), state.relayUrl, true);
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(encryptedChunkMsg)));
         }
 
@@ -264,9 +260,6 @@ const processPlaintext = async (senderHash: string, plaintext: string, groupId?:
                 }
                 return s;
             });
-            if (parsed.type === 'group_invite_v2' && parsed.distribution) {
-                await signalManager.processGroupDistribution(senderHash, parsed.distribution);
-            }
             return;
         }
 
@@ -311,12 +304,7 @@ const processPlaintext = async (senderHash: string, plaintext: string, groupId?:
             const progress = incomingChunksProgress.get(parsed.fileId);
             if (progress) {
                 try {
-                    const decryptedChunk = await signalManager.decryptMediaChunk(
-                        progress.bundle.key_b64,
-                        progress.bundle.nonce_b64,
-                        parsed.index,
-                        fromBase64(parsed.data)
-                    );
+                    const decryptedChunk = fromBase64(parsed.data);
                     progress.chunks[parsed.index] = decryptedChunk;
                     progress.received++;
 
@@ -411,7 +399,7 @@ const processPlaintext = async (senderHash: string, plaintext: string, groupId?:
             });
             return;
         } else if (parsed.type === 'signaling') {
-            callManager.handleSignaling(senderHash, parsed.data);
+            // Call signaling removed
             return;
         } else if (parsed.type === 'disappearing_sync') {
             userStore.update(s => {
@@ -501,16 +489,6 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage)
             ciphertextObj = payload;
         }
 
-        if (ciphertextObj.sealed) {
-            try {
-                const unsealed = await signalManager.unseal(ciphertextObj);
-                ciphertextObj = unsealed.message;
-                ciphertextObj.sender = unsealed.sender_hash || unsealed.sender;
-            } catch (e) {
-                console.error("Failed to unseal message:", e);
-                return;
-            }
-        }
 
         if (ciphertextObj.type === 'group_message_v2') {
             const { groupId, sender, id } = ciphertextObj;

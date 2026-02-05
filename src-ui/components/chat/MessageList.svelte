@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import AttachmentRenderer from '../AttachmentRenderer.svelte';
-  import { LucideCheck, LucideCheckCheck, LucidePhoneIncoming, LucidePhoneOutgoing, LucidePhoneMissed, LucideStar, LucideReply } from 'lucide-svelte';
+  import { LucideCheck, LucideCheckCheck, LucideStar, LucideReply } from 'lucide-svelte';
   import type { Chat, Message } from '../../lib/types';
 
   interface Props {
@@ -31,8 +31,10 @@
       if (scrollContainer && !selectionMode) scrollContainer.scrollTop = scrollContainer.scrollHeight;
   };
 
+  let lastCount = $state(0);
   $effect(() => {
-    if (messages) {
+    if (messages.length !== lastCount) {
+      lastCount = messages.length;
       scrollToBottom();
     }
   });
@@ -90,24 +92,7 @@
                         </button>
                     {/if}
 
-                    {#if msg.type === 'call_log'}
-                        <div class="flex items-center space-x-3 py-1">
-                            <div class="w-10 h-10 rounded-xl flex items-center justify-center 
-                                {msg.call_status === 'missed' ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}">
-                                {#if msg.call_status === 'missed'}
-                                    <LucidePhoneMissed size={20} />
-                                {:else if msg.isMine}
-                                    <LucidePhoneOutgoing size={20} />
-                                {:else}
-                                    <LucidePhoneIncoming size={20} />
-                                {/if}
-                            </div>
-                            <div class="flex flex-col">
-                                <span class="text-sm font-bold text-gray-800">{msg.content}</span>
-                                <span class="text-[10px] font-bold uppercase text-gray-400">WebRTC End-to-End</span>
-                            </div>
-                        </div>
-                    {:else if msg.type === 'voice_note'}
+                    {#if msg.type === 'voice_note'}
                         <div class="flex flex-col space-y-2 min-w-[200px]">
                             <AttachmentRenderer {msg} />
                         </div>
