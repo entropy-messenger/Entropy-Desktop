@@ -33,6 +33,11 @@ rand = "0.9"
 subtle = "2.6"
 async-trait = "0.1"
 uuid = { version = "1.13", features = ["v4"] }
+zip = "0.6"
+walkdir = "2"
+tar = "0.4.44"
+flate2 = "1.1.9"
+aes-gcm = "0.10"
 
 [features]
 default = ["custom-protocol"]

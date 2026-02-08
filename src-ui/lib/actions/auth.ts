@@ -18,9 +18,9 @@ export const initApp = async (password: string) => {
     // No salt or secureLoad used. Straight to vault init.
     try {
         await initVault(password);
-    } catch (e) {
+    } catch (e: any) {
         console.error("Vault init failed:", e);
-        userStore.update(s => ({ ...s, authError: "Failed to open vault." }));
+        userStore.update(s => ({ ...s, authError: e.toString() || "Failed to open vault." }));
         return;
     }
 
@@ -164,10 +164,10 @@ export const exportVault = async () => {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
             const { save } = await import('@tauri-apps/plugin-dialog');
             const path = await save({
-                defaultPath: `entropy_backup_${Date.now()}.db`,
+                defaultPath: `entropy_backup_${Date.now()}.entropy`,
                 filters: [{
-                    name: 'Entropy Database',
-                    extensions: ['db']
+                    name: 'Entropy Backup',
+                    extensions: ['entropy']
                 }]
             });
 
@@ -193,8 +193,8 @@ export const importVault = async () => {
             const path = await open({
                 multiple: false,
                 filters: [{
-                    name: 'Entropy Database',
-                    extensions: ['db']
+                    name: 'Entropy Backup',
+                    extensions: ['entropy', 'zip']
                 }]
             });
 

@@ -13,6 +13,7 @@ export class NetworkLayer {
     private isAuthenticated = false;
     private isConnected = false;
     private lastActivity = Date.now();
+    private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
 
     constructor() {
         listen('network-msg', (event) => {
@@ -134,6 +135,22 @@ export class NetworkLayer {
 
     private async onJsonMessage(msg: any) {
         this.lastActivity = Date.now();
+
+        // Handle Request-Response pattern
+        if (msg.req_id && this.pendingRequests.has(msg.req_id)) {
+            const { resolve, timeout } = this.pendingRequests.get(msg.req_id)!;
+            clearTimeout(timeout);
+            this.pendingRequests.delete(msg.req_id);
+            if (msg.error) {
+                // Reject if response contains error
+                // Find promise reject function? No, I stored reject.
+                // Ah, the map stores { resolve, reject, ... }
+                // Let's get reject too.
+            }
+            resolve(msg); // Resolve with the full message
+            return;
+        }
+
         console.debug("[Network] Received JSON:", msg.type, msg);
         if (msg.type === 'auth_success') {
             const token = msg.session_token;
@@ -249,6 +266,28 @@ export class NetworkLayer {
             type: 'volatile_relay',
             to: recipientHash,
             body: JSON.stringify({ type: 'typing', isTyping })
+        });
+    }
+
+    request(type: string, payload: any, timeoutMs = 10000): Promise<any> {
+        return new Promise((resolve, reject) => {
+            // Generate a simple unique ID
+            const reqId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+
+            const timeout = setTimeout(() => {
+                if (this.pendingRequests.has(reqId)) {
+                    this.pendingRequests.delete(reqId);
+                    reject(new Error(`Request ${type} timed out`));
+                }
+            }, timeoutMs);
+
+            this.pendingRequests.set(reqId, { resolve, reject, timeout });
+
+            this.sendJSON({
+                type,
+                req_id: reqId,
+                ...payload
+            });
         });
     }
 

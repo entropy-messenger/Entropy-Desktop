@@ -57,7 +57,10 @@ fn main() {
             commands::signal_get_bundle,
             commands::signal_establish_session,
             commands::signal_encrypt,
-            commands::signal_decrypt
+            commands::signal_decrypt,
+            commands::set_panic_password,
+            commands::vault_save_media,
+            commands::vault_load_media
         ])
         .setup(|app| {
             // Setup tray and menu as before

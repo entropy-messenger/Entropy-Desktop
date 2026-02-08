@@ -95,14 +95,17 @@ export class SignalManager {
     async establishSession(recipientHash: string, serverUrl: string): Promise<string | null> {
         try {
             console.log(`[Signal] Fetching pre-key bundle for ${recipientHash}...`);
-            // Fetch remote bundle from server
-            const res = await fetch(`${serverUrl}/keys/fetch?user=${recipientHash}`);
-            if (!res.ok) {
-                const text = await res.text();
-                console.warn(`[Signal] Failed to fetch bundle for ${recipientHash}: ${res.status} ${text}`);
+
+            // Use WebSocket multiplexing instead of HTTP
+            // const res = await fetch(`${serverUrl}/keys/fetch?user=${recipientHash}`);
+            const { network } = await import('./network');
+            const res = await network.request('fetch_key', { target_hash: recipientHash });
+
+            if (!res.found || !res.bundle) {
+                console.warn(`[Signal] Failed to fetch bundle for ${recipientHash}: Not Found`);
                 return null;
             }
-            const bundle = await res.json();
+            const bundle = res.bundle;
 
             await invoke('signal_establish_session', {
                 remoteHash: recipientHash,

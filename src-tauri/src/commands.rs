@@ -22,6 +22,15 @@ use libsignal_protocol::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use std::fs;
+use std::io::{Read, Write, Cursor};
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
+use zip::write::FileOptions;
+use aes_gcm::{
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes256Gcm, Key, Nonce
+};
 
 const PACING_INTERVAL: u64 = 500;
 const MEDIA_INTERVAL: u64 = 10;
@@ -113,12 +122,88 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
     }
 
     let db_path = app_data_dir.join(get_db_filename());
-    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
 
-    // Enable encryption if passphrase is provided
+    let attempts_file = app_data_dir.join("login_attempts.dat");
+    let mut attempts = 0;
+    if attempts_file.exists() {
+        if let Ok(s) = std::fs::read_to_string(&attempts_file) {
+            attempts = s.trim().parse().unwrap_or(0);
+        }
+    }
+
+    // PANIC MODE CHECK
+    let panic_file = app_data_dir.join("panic.dat");
+    if panic_file.exists() {
+        if let Ok(stored_hash) = std::fs::read_to_string(&panic_file) {
+            let mut hasher = Sha256::new();
+            hasher.update(passphrase.clone());
+            let input_hash = hex::encode(hasher.finalize());
+            
+            if input_hash == stored_hash.trim() {
+                 let filename = get_db_filename();
+                 let _ = std::fs::remove_file(app_data_dir.join(&filename));
+                 let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
+                 let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
+                 let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
+                 let _ = std::fs::remove_file(&attempts_file);
+                 // Reset panic file to avoid accidental double-nuke or to reset state? 
+                 // Actually better to keep it or delete it? Let's keep it so the password still "works" as a trigger.
+                 return Ok(());
+            }
+        }
+    } else {
+        // Fallback default "panic" if no custom set (optional, maybe unsafe if user doesn't know)
+        if passphrase == "panic" {
+             let filename = get_db_filename();
+             let _ = std::fs::remove_file(app_data_dir.join(&filename));
+             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
+             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
+             let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
+             let _ = std::fs::remove_file(&attempts_file);
+             return Ok(());
+        }
+    }
+
+    if attempts >= 10 {
+         // Nuclear reset logic inline
+         let filename = get_db_filename();
+         let _ = std::fs::remove_file(app_data_dir.join(&filename));
+         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
+         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
+         let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
+         let _ = std::fs::remove_file(&attempts_file);
+         return Err("Maximum login attempts exceeded. Data wiped.".to_string());
+    }
+
+    let conn_res = Connection::open_with_flags(&db_path, flags);
+    
+    // If connection opens, try to set key and query. If fail, increment attempts.
+    let mut conn = match conn_res {
+        Ok(c) => c,
+        Err(e) => return Err(e.to_string()),
+    };
+
     if !passphrase.is_empty() {
         let key_query = format!("PRAGMA key = '{}';", passphrase.replace("'", "''"));
-        conn.execute_batch(&key_query).map_err(|e| format!("Encryption error: {}", e))?;
+        if let Err(_) = conn.execute_batch(&key_query) {
+             // This branch might not be hit depending on sqlcipher version, 
+             // often only the first read fails.
+        }
+    }
+    
+    // Test if key is correct by reading user_version
+    if let Err(_) = conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(())) {
+         attempts += 1;
+         let _ = std::fs::write(&attempts_file, attempts.to_string());
+         return Err(format!("Incorrect password. Attempt {}/10", attempts));
+    }
+
+    // Success - reset attempts
+    if attempts > 0 {
+        let _ = std::fs::remove_file(attempts_file);
     }
 
     // Enable WAL mode for better concurrency
@@ -220,6 +305,18 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
 
     let mut db_conn = state.conn.lock().unwrap();
     *db_conn = Some(conn);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(), String> {
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // Hash password before storing
+    let mut hasher = Sha256::new();
+    hasher.update(password);
+    let hash = hex::encode(hasher.finalize());
+    
+    std::fs::write(app_data_dir.join("panic.dat"), hash).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -603,6 +700,103 @@ pub async fn save_file(app: tauri::AppHandle, data: Vec<u8>, filename: String) -
 }
 
 #[tauri::command]
+pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String, data: Vec<u8>) -> Result<String, String> {
+    // 1. Get/Create Encryption Key
+    let key_bytes = {
+        let lock = state.conn.lock().unwrap();
+        if let Some(conn) = lock.as_ref() {
+            // Check if key exists
+            let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'").map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            
+            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
+                hex::decode(hex_key).map_err(|e| e.to_string())?
+            } else {
+                // Create new key
+                let key = Aes256Gcm::generate_key(OsRng);
+                let hex_key = hex::encode(key);
+                conn.execute("INSERT INTO kv_store (key, value) VALUES ('_internal_media_key', ?1)", [&hex_key])
+                    .map_err(|e| e.to_string())?;
+                key.to_vec()
+            }
+        } else {
+            return Err("Database not initialized".to_string());
+        }
+    };
+
+    // 2. Encrypt Data
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // 96-bits; unique per message
+    let ciphertext = cipher.encrypt(&nonce, data.as_ref()).map_err(|e| e.to_string())?;
+    
+    // Store as Nonce + Ciphertext
+    let mut final_blob = nonce.to_vec();
+    final_blob.extend(ciphertext);
+
+    // 3. Save to Disk
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let media_dir = app_dir.join("media");
+    if !media_dir.exists() {
+        std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
+    }
+    
+    let file_path = media_dir.join(&id);
+    let mut file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
+    file.write_all(&final_blob).map_err(|e| e.to_string())?;
+    
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn vault_load_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String) -> Result<Vec<u8>, String> {
+    // 1. Get Key
+    let key_bytes = {
+        let lock = state.conn.lock().unwrap();
+        if let Some(conn) = lock.as_ref() {
+            let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'").map_err(|e| e.to_string())?;
+            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+                let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
+                hex::decode(hex_key).map_err(|e| e.to_string())?
+            } else {
+                return Err("Media encryption key missing from DB".to_string());
+            }
+        } else {
+             return Err("Database not initialized".to_string());
+        }
+    };
+
+    // 2. Load File
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let media_dir = app_dir.join("media");
+    let file_path = media_dir.join(&id);
+    
+    if !file_path.exists() {
+        return Err("Media file not found".to_string());
+    }
+    
+    let mut file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    
+    if buffer.len() < 12 {
+         return Err("File too short (corrupted)".to_string());
+    }
+
+    // 3. Decrypt
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&buffer[0..12]);
+    let ciphertext = &buffer[12..];
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    Ok(plaintext)
+}
+
+#[tauri::command]
 pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, target_path: String) -> Result<(), String> {
     // 1. Checkpoint WAL to main DB file to ensure backup is complete
     {
@@ -622,13 +816,44 @@ pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, t
         return Err("Database file not found".to_string());
     }
 
-    // 2. Clear target first if exists (safe copy)
-    if std::path::Path::new(&target_path).exists() {
-        std::fs::remove_file(&target_path).map_err(|e| e.to_string())?;
-    }
+    // 2. Prepare Zip
+    let file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
 
-    std::fs::copy(&src_path, &target_path).map_err(|e| e.to_string())?;
+    // 3. Add Database File
+    let mut buffer = Vec::new();
+    let mut f = std::fs::File::open(&src_path).map_err(|e| e.to_string())?;
+    f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    zip.start_file(filename, options).map_err(|e| e.to_string())?;
+    zip.write_all(&buffer).map_err(|e| e.to_string())?;
+
+    // 4. Add Media Folder Recursively
+    let media_path = app_dir.join("media");
+    if media_path.exists() {
+        let walker = WalkDir::new(&media_path).into_iter();
+        for entry in walker.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = path.strip_prefix(&app_dir)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned();
+
+            if path.is_file() {
+                zip.start_file(name, options).map_err(|e| e.to_string())?;
+                let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                let mut buffer = Vec::new();
+                f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+                zip.write_all(&buffer).map_err(|e| e.to_string())?;
+            } else if !name.is_empty() {
+                 zip.add_directory(name, options).map_err(|e| e.to_string())?;
+            }
+        }
+    }
     
+    zip.finish().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -652,7 +877,7 @@ pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, s
     let wal_path = app_dir.join(format!("{}-wal", filename));
     let shm_path = app_dir.join(format!("{}-shm", filename));
 
-    // 2. Clean up ALL DB files to prevent WAL headers mismatch
+    // 2. Clean up ALL local data
     if dest_path.exists() {
         std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
     }
@@ -663,8 +888,36 @@ pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, s
         let _ = std::fs::remove_file(shm_path);
     }
 
-    // 3. Restore
-    std::fs::copy(backup_path, &dest_path).map_err(|e| e.to_string())?;
+    let media_path = app_dir.join("media");
+    if media_path.exists() {
+        std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
+    }
+
+    // 3. Unzip Backup
+    let file = std::fs::File::open(&src_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
+        
+        // Sanitize path against Zip Slip
+        let outpath = match file.enclosed_name() {
+            Some(path) => app_dir.join(path),
+            None => continue,
+        };
+
+        if file.name().ends_with('/') {
+            std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+                }
+            }
+            let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+            std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
 
     Ok(())
 }

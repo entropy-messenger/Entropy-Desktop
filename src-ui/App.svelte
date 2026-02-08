@@ -45,11 +45,16 @@
 
   const handleLogin = async () => {
     if (!password) return;
+    
+    // Clear previous errors
+    userStore.update(s => ({ ...s, authError: null }));
+    
     isInitializing = true;
     try {
         await initApp(password);
     } catch (e: any) {
         console.error("Login component caught error:", e);
+        userStore.update(s => ({ ...s, authError: e.toString() }));
     } finally {
         isInitializing = false;
     }
@@ -100,10 +105,10 @@
             if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
                 const { save } = await import('@tauri-apps/plugin-dialog');
                 const path = await save({
-                    defaultPath: `entropy_backup_${Date.now()}.db`,
+                    defaultPath: `entropy_backup_${Date.now()}.entropy`,
                     filters: [{
-                        name: 'Entropy Database',
-                        extensions: ['db']
+                        name: 'Entropy Backup',
+                        extensions: ['entropy']
                     }]
                 });
 
@@ -130,8 +135,8 @@
                 const path = await open({
                     multiple: false,
                     filters: [{
-                        name: 'Entropy Database',
-                        extensions: ['db']
+                        name: 'Entropy Backup',
+                        extensions: ['entropy', 'zip']
                     }]
                 });
 

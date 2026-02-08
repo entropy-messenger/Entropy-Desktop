@@ -535,11 +535,37 @@
                             </div>
                         </div>
 
-                        <div class="pt-4 border-t border-gray-100">
+                        <div class="pt-4 border-t border-gray-100 space-y-3">
                              <div class="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-3 flex items-center space-x-1">
                                 <LucideShieldAlert size={12} />
                                 <span>Danger Zone</span>
                              </div>
+
+                            <!-- Panic Mode -->
+                            <div class="p-3 bg-red-50 border border-red-100 rounded-xl space-y-2">
+                                <div class="text-[10px] font-bold text-red-800 uppercase">Panic Mode</div>
+                                <p class="text-[10px] text-red-600 leading-snug">Set a fake password that, when entered at login, silently destroys all data.</p>
+                                <button 
+                                    onclick={async () => {
+                                        const p1 = prompt("Set a PANIC password (entering this at login will WIPE your account):");
+                                        if (!p1) return;
+                                        const p2 = prompt("Confirm PANIC password:");
+                                        if (p1 !== p2) { alert("Passwords do not match."); return; }
+                                        if (confirm(`Are you sure? Entering "${p1}" at login will permanently delete your database.`)) {
+                                            try {
+                                                await invoke('set_panic_password', { password: p1 });
+                                                alert("Panic password set active. Do NOT forget it.");
+                                            } catch (e) {
+                                                alert("Error: " + e);
+                                            }
+                                        }
+                                    }}
+                                    class="w-full py-2 bg-white border border-red-200 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition"
+                                >
+                                    Set Panic Password
+                                </button>
+                            </div>
+
                              <button 
                                 onclick={() => burnAccount('http://localhost:8080')}
                                 class="w-full py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold hover:bg-red-600 hover:text-white transition flex items-center justify-center space-x-2"

@@ -51,7 +51,10 @@ commands.allow = [
     "flush_outbox",
     "save_file",
     "export_database",
-    "import_database"
+    "import_database",
+    "set_panic_password",
+    "vault_save_media",
+    "vault_load_media"
 ]
 
 [[set]]
