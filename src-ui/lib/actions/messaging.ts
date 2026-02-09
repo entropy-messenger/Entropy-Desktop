@@ -226,12 +226,13 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
     addMessage(destId, optMsg);
 
     try {
+        const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, 'voice_note.wav', 'audio/wav');
+
         const contentObj = {
-            type: 'voice_note',
-            data: toBase64(uint8),
+            type: 'voice_note_v2',
             id: msgId,
-            fileName: 'voice_note.wav',
-            fileType: 'audio/wav',
+            bundle,
+            data: ciphertext,
             size: uint8.length
         };
 
@@ -313,10 +314,10 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
                 data: attachmentData
             };
             await attachmentStore.put(incomingMsgId, attachmentData);
-        } else if (parsed.type === 'file_v2') {
-            type = 'file';
+        } else if (parsed.type === 'file_v2' || parsed.type === 'voice_note_v2') {
+            type = parsed.type === 'file_v2' ? 'file' : 'voice_note';
             const size = parsed.size || (parsed.bundle && parsed.bundle.file_size) || 0;
-            content = `File: ${parsed.bundle.file_name}`;
+            content = type === 'file' ? `File: ${parsed.bundle.file_name}` : "Voice Note";
             attachment = {
                 fileName: parsed.bundle.file_name,
                 fileType: parsed.bundle.file_type,

@@ -1,7 +1,6 @@
 
 import { invoke } from '@tauri-apps/api/core';
-import { minePoW, toBase64 } from './crypto';
-import { toHex, fromHex } from './utils';
+import { minePoW, toBase64, fromBase64, toHex, fromHex } from './crypto';
 import { secureStore, secureLoad, vaultLoad, vaultSave } from './secure_storage';
 
 async function calculateIdentityHash(idKeyHex: string): Promise<string> {
@@ -158,15 +157,39 @@ export class SignalManager {
         }
     }
 
-    // Keep media and group functions same for now or update later
+    // Media encryption: AES-GCM + Signal
     async encryptMedia(data: Uint8Array, fileName: string, fileType: string): Promise<{ ciphertext: string, bundle: any }> {
-        // For media, we usually use a separate random key and encrypt that key via Signal
-        // For simplicity now, just returning hex as before but we should use real encryption
-        const hex = toHex(data);
+        // Generate a random 256-bit key for AES-GCM
+        const key = await crypto.subtle.generateKey(
+            { name: "AES-GCM", length: 256 },
+            true,
+            ["encrypt", "decrypt"]
+        );
+
+        // Generate a random 96-bit IV
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+
+        // Encrypt the data
+        const encryptedBuffer = await crypto.subtle.encrypt(
+            { name: "AES-GCM", iv },
+            key,
+            data as any
+        );
+
+        // Export the key to base64 for the Signal bundle
+        const exportedKey = await crypto.subtle.exportKey("raw", key);
+        const keyBase64 = toBase64(new Uint8Array(exportedKey));
+
+        // Combine IV + Ciphertext for transmission (hex)
+        const combined = new Uint8Array(iv.length + encryptedBuffer.byteLength);
+        combined.set(iv, 0);
+        combined.set(new Uint8Array(encryptedBuffer), iv.length);
+
         return {
-            ciphertext: hex,
+            ciphertext: toHex(combined),
             bundle: {
-                type: 'signal_media_stub',
+                type: 'signal_media_v2',
+                key: keyBase64,
                 file_name: fileName,
                 file_type: fileType,
                 file_size: data.length
@@ -175,8 +198,37 @@ export class SignalManager {
     }
 
     async decryptMedia(data: Uint8Array | string, bundle: any): Promise<Uint8Array> {
-        if (data instanceof Uint8Array) return data;
-        return fromHex(data);
+        if (!bundle || !bundle.key) {
+            if (data instanceof Uint8Array) return data;
+            return fromHex(data);
+        }
+
+        try {
+            const combined = data instanceof Uint8Array ? data : fromHex(data);
+            const keyBytes = fromBase64(bundle.key);
+
+            const iv = combined.slice(0, 12);
+            const encryptedData = combined.slice(12);
+
+            const key = await crypto.subtle.importKey(
+                "raw",
+                keyBytes as any,
+                "AES-GCM",
+                true,
+                ["decrypt"]
+            );
+
+            const decryptedBuffer = await crypto.subtle.decrypt(
+                { name: "AES-GCM", iv },
+                key,
+                encryptedData as any
+            );
+
+            return new Uint8Array(decryptedBuffer);
+        } catch (e) {
+            console.error("[SignalManager] Media decryption failed:", e);
+            throw e;
+        }
     }
 
     async verifySession(remoteHash: string, isVerified: boolean): Promise<void> {
