@@ -23,7 +23,12 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { playingVoiceNoteId } from '../lib/stores/audio';
+  import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   
+  /**
+   * Primary messaging interface for end-to-end encrypted conversations.
+   * Manages real-time input orchestration, native media recording, and message state rendering.
+   */
   let messageInput = $state("");
   let fileInput = $state<HTMLInputElement | null>(null);
   let messageSearchQuery = $state("");
@@ -97,7 +102,6 @@
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         previewUrl = null;
 
-        // Setup Visualizer listener
         if (volumeUnlisten) volumeUnlisten();
         volumeUnlisten = await listen<number>('recording-volume', (event) => {
             currentVolume = event.payload;
@@ -107,7 +111,7 @@
         recordingInterval = setInterval(() => { recordingSeconds++; }, 1000);
     } catch (e: any) { 
         console.error("Recording error:", e); 
-        alert("Microphone error: " + e);
+        addToast("Microphone error: " + e, 'error');
     }
   };
 
@@ -118,18 +122,17 @@
       
       const width = visualizerCanvas.width;
       const height = visualizerCanvas.height;
-      // Fade out effect
+
       ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
       ctx.fillRect(0, 0, width, height);
       
       const bars = 40;
       const barWidth = width / bars;
-      // Shift canvas to the left
+
       const imageData = ctx.getImageData(barWidth, 0, width - barWidth, height);
       ctx.putImageData(imageData, 0, 0);
       ctx.clearRect(width - barWidth, 0, barWidth, height);
 
-      // Draw new bar at the end
       const barHeight = Math.max(2, currentVolume * height * 4);
       ctx.fillStyle = '#ef4444';
       ctx.beginPath();
@@ -185,15 +188,15 @@
       return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const setDisappearing = () => {
+  const setDisappearing = async () => {
       if (!activeChat) return;
-      const val = prompt("Set disappearing messages timer (seconds, 0 to disable):", (activeChat.disappearingTimer || 0).toString());
+      const val = await showPrompt("Set disappearing messages timer (seconds, 0 to disable):", (activeChat.disappearingTimer || 0).toString(), "Disappearing Messages");
       if (val !== null) setDisappearingTimer(activeChat.peerHash, parseInt(val) || null);
   };
 
-  const handleSetLocalNickname = () => {
+  const handleSetLocalNickname = async () => {
       if (!activeChat) return;
-      const val = prompt("Set a local nickname for this contact:", activeChat.localNickname || activeChat.peerAlias || "");
+      const val = await showPrompt("Set a local nickname for this contact:", activeChat.localNickname || activeChat.peerAlias || "", "Local Nickname");
       if (val !== null) setLocalNickname(activeChat.peerHash, val.trim() || null);
   };
 
@@ -215,8 +218,8 @@
   const cancelSelection = () => { selectionMode = false; selectedIds = []; };
   
   const handleBulkStar = () => { if (activeChat) { bulkStar(activeChat.peerHash, selectedIds); cancelSelection(); } };
-  const handleBulkDelete = () => { 
-    if (activeChat && confirm(`Delete ${selectedIds.length} messages?`)) { 
+  const handleBulkDelete = async () => { 
+    if (activeChat && await showConfirm(`Delete ${selectedIds.length} messages?`, "Delete Messages")) { 
         bulkDelete(activeChat.peerHash, selectedIds); cancelSelection(); 
     } 
   };
@@ -239,11 +242,9 @@
   let lastTypingPeer: string | null = null;
 
   $effect(() => {
-      // Track input and chat changes
       const currentInput = messageInput;
       const currentPeer = activeChat?.peerHash;
       
-      // Handle chat switch
       if (lastTypingPeer && lastTypingPeer !== currentPeer) {
           if (isLocallyTyping) {
               sendTypingStatus(lastTypingPeer, false).catch(() => {});
@@ -404,7 +405,7 @@
                             </div>
                         {/if}
 
-                        <div class="flex flex-col {msg.isMine ? 'items-end' : 'items-start'} max-w-[65%]">
+                        <div class="flex flex-col {msg.isMine ? 'items-end' : 'items-start'} max-w-[65%] relative">
                             <div 
                                 class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden
                                     {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'p-2.5 px-4'}
@@ -456,11 +457,11 @@
                                         {:else}<LucideCheck size={12} class="text-gray-400" />{/if}
                                     {/if}
                                 </div>
+                            </div>
 
-                                <div class="absolute {msg.isMine ? '-left-12' : '-right-12'} top-0 bottom-0 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center space-y-1 transition-all duration-200">
-                                    <button onclick={() => setReplyingTo(msg)} class="p-1.5 hover:bg-white rounded-full text-gray-400 hover:text-blue-500 shadow-sm transition active:scale-90" title="Reply"><LucideReply size={14} /></button>
-                                    <button onclick={() => toggleStar(activeChat.peerHash, msg.id)} class="p-1.5 hover:bg-white rounded-full text-gray-400 hover:text-yellow-500 shadow-sm transition active:scale-90" title="Star"><LucideStar size={14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
-                                </div>
+                            <div class="absolute {msg.isMine ? '-left-8' : '-right-8'} top-0 bottom-0 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center space-y-1 transition-all duration-200 z-10">
+                                <button onclick={() => setReplyingTo(msg)} class="p-1.5 hover:bg-gray-100 bg-white/50 backdrop-blur-sm rounded-full text-gray-500 hover:text-blue-600 shadow-sm transition active:scale-90 border border-gray-100" title="Reply"><LucideReply size={14} /></button>
+                                <button onclick={() => toggleStar(activeChat.peerHash, msg.id)} class="p-1.5 hover:bg-gray-100 bg-white/50 backdrop-blur-sm rounded-full text-gray-500 hover:text-yellow-500 shadow-sm transition active:scale-90 border border-gray-100" title="Star"><LucideStar size={14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
                             </div>
                         </div>
                     </div>

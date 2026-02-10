@@ -6,6 +6,10 @@ import { network } from '../network';
 import { toHex } from '../utils';
 import type { Message } from '../types';
 
+/**
+ * Commits a message to the local store.
+ * Handles attachment indexing, deduplication, unread tracking, and system notifications.
+ */
 export const addMessage = (peerHash: string, msg: Message) => {
     if (msg.attachment?.data) attachmentStore.put(msg.id, msg.attachment.data).catch(e => { });
 
@@ -22,7 +26,6 @@ export const addMessage = (peerHash: string, msg: Message) => {
 
         if (!msg.isMine) {
             if (s.activeChatHash === peerHash) {
-                // If viewing, mark as read and send receipt
                 msg.status = 'read';
                 sendReceipt(peerHash, [msg.id], 'read');
             } else {
@@ -48,6 +51,9 @@ export const addMessage = (peerHash: string, msg: Message) => {
     });
 };
 
+/**
+ * Deletes multiple messages from the store and indexes.
+ */
 export const bulkDelete = (peerHash: string, msgIds: string[]) => {
     msgIds.forEach(id => attachmentStore.delete(id).catch(() => { }));
     userStore.update(s => {
@@ -60,6 +66,9 @@ export const bulkDelete = (peerHash: string, msgIds: string[]) => {
 
 export const deleteMessage = (peerHash: string, msgId: string) => bulkDelete(peerHash, [msgId]);
 
+/**
+ * Transmits an encrypted delivery or read receipt to a peer.
+ */
 export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'delivered' | 'read') => {
     const state = get(userStore);
     if (state.blockedHashes.includes(peerHash)) return;
@@ -72,19 +81,18 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
     } catch (e) { }
 };
 
+/**
+ * Decrypts a stored attachment and triggers a browser-level download for the host system.
+ */
 export const downloadAttachment = async (msgId: string, bundle: any) => {
     try {
-        console.debug("[Download] Starting for msgId:", msgId);
         const encrypted = await attachmentStore.get(msgId);
         if (!encrypted) {
-            console.error("[Download] Attachment not found in store for msgId:", msgId);
             throw new Error("Attachment not found locally");
         }
 
-        console.debug("[Download] Data retrieved, decrypting...");
         const decrypted = await signalManager.decryptMedia(encrypted, bundle);
 
-        console.debug("[Download] Creating blob and triggering click...");
         const blob = new Blob([decrypted as any], { type: bundle.file_type || 'application/octet-stream' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -94,12 +102,14 @@ export const downloadAttachment = async (msgId: string, bundle: any) => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        console.debug("[Download] Successfully triggered.");
     } catch (e) {
         console.error("[Download] Failed:", e);
     }
 };
 
+/**
+ * Updates the local state to flag an attachment as physically retrieved.
+ */
 export const markAsDownloaded = (chatId: string, msgId: string) => {
     userStore.update(s => {
         const chat = s.chats[chatId];

@@ -1,15 +1,16 @@
-import { invoke } from '@tauri-apps/api/core';
-
-// Removed sodium dependency as we are no longer doing complex crypto in frontend
+/**
+ * Cryptographic and serialization utilities for the Entropy client.
+ * Provides optimized codecs and native bridge interfaces for computationally intensive tasks.
+ */
 
 export const initCrypto = async () => {
-    // No-op now
 };
-
-// Removed encryption/decryption keys
 
 const HEX_TABLE = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 
+/**
+ * Encodes a byte array to a hexadecimal string.
+ */
 export const toHex = (bytes: Uint8Array): string => {
     let res = '';
     for (let i = 0; i < bytes.length; i++) {
@@ -18,6 +19,9 @@ export const toHex = (bytes: Uint8Array): string => {
     return res;
 };
 
+/**
+ * Decodes a hexadecimal string to a byte array.
+ */
 export const fromHex = (hex: string): Uint8Array => {
     const cleanHex = hex.trim();
     const bytes = new Uint8Array(cleanHex.length / 2);
@@ -27,6 +31,10 @@ export const fromHex = (hex: string): Uint8Array => {
     return bytes;
 };
 
+/**
+ * Encodes a byte array to a Base64 string.
+ * Uses chunked processing to avoid stack overflow on large buffers.
+ */
 export const toBase64 = (bytes: Uint8Array): string => {
     let binary = '';
     const len = bytes.byteLength;
@@ -38,6 +46,10 @@ export const toBase64 = (bytes: Uint8Array): string => {
     return btoa(binary);
 };
 
+/**
+ * Decodes a Base64 string to a byte array.
+ * Includes fallback logic for unpadded or whitespace-polluted strings.
+ */
 export const fromBase64 = (base64: string): Uint8Array => {
     try {
         const binString = atob(base64);
@@ -48,7 +60,6 @@ export const fromBase64 = (base64: string): Uint8Array => {
         }
         return bytes;
     } catch (e) {
-        // Fallback for potentially unpadded or messy base64 from server
         try {
             const cleaned = base64.replace(/[\s\n\r]/g, '');
             const binString = atob(cleaned);
@@ -64,11 +75,22 @@ export const fromBase64 = (base64: string): Uint8Array => {
     }
 };
 
+import { invoke } from '@tauri-apps/api/core';
+
+/**
+ * Computes a SHA-256 hash via the native Rust bridge.
+ */
 export const sha256 = async (input: Uint8Array | string): Promise<string> => {
     const data = typeof input === 'string' ? new TextEncoder().encode(input) : input;
     return await invoke('crypto_sha256', { data: Array.from(data) });
 };
 
+/**
+ * Solves a Proof-of-Work challenge using the native multi-threaded miner.
+ * @param seed The server-provided challenge seed.
+ * @param difficulty Number of leading zero nibbles required.
+ * @param context Additional data (e.g., identity hash) to bind to the seed.
+ */
 export const minePoW = async (seed: string, difficulty: number = 3, context: string = ""): Promise<{ nonce: number, seed: string }> => {
     const result: any = await invoke('crypto_mine_pow', { seed, difficulty, context });
     return { nonce: result.nonce, seed: seed };

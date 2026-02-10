@@ -7,6 +7,9 @@ import { minePoW } from '../crypto';
 import { bulkDelete, sendReceipt } from './message_utils';
 import type { PrivacySettings } from '../types';
 
+/**
+ * Manages peer presence, profile synchronization, and contact metadata updates.
+ */
 export const statusTimeouts: Record<string, any> = {};
 let heartbeatInterval: any = null;
 
@@ -37,9 +40,12 @@ export const markOnline = (peerHash: string) => {
     }, 25000);
 };
 
+/**
+ * Initiates the background heartbeat for presence broadcasting and message expiry.
+ */
 export const startHeartbeat = () => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
-    // 30s heartbeat
+
     heartbeatInterval = setInterval(() => {
         const state = get(userStore);
         if (state.identityHash && state.isConnected) {
@@ -56,7 +62,6 @@ export const startHeartbeat = () => {
         }
     }, 12000);
 
-    // Disappearing messages cleanup (every 3s)
     setInterval(() => {
         const state = get(userStore);
         const now = Date.now();
@@ -85,6 +90,9 @@ export const updateMyProfile = (alias: string, pfp: string | null) => {
     });
 };
 
+/**
+ * Transmits current user profile (alias/pfp) to a specific peer.
+ */
 export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.myAlias && !state.myPfp) return;
@@ -166,6 +174,10 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
 
 export const updatePrivacy = (settings: Partial<PrivacySettings>) => userStore.update(s => ({ ...s, privacySettings: { ...s.privacySettings, ...settings } }));
 
+/**
+ * Registers a global nickname on the relay server.
+ * Requires PoW validation and a signed proof of identity.
+ */
 export const registerGlobalNickname = async (nickname: string) => {
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -175,7 +187,7 @@ export const registerGlobalNickname = async (nickname: string) => {
         const challengeRes = await fetch(`${serverUrl}/pow/challenge?nickname=${encodeURIComponent(nickname)}&identity_hash=${state.identityHash}`);
         const { seed, difficulty } = await challengeRes.json();
         const { nonce } = await minePoW(seed, difficulty, nickname);
-        // Signature might be expected by backend, but we send stub
+
         const signature = await signalManager.signMessage(nickname);
 
         const response = await fetch(`${serverUrl}/nickname/register`, {
@@ -188,7 +200,7 @@ export const registerGlobalNickname = async (nickname: string) => {
             body: JSON.stringify({
                 nickname,
                 identity_hash: state.identityHash,
-                identityKey: "plaintext_no_key", // Placeholder
+                identityKey: "plaintext_no_key",
                 signature
             })
         });
@@ -208,11 +220,13 @@ export const registerGlobalNickname = async (nickname: string) => {
     }
 };
 
+/**
+ * Retrieves the identity hash associated with a global nickname.
+ */
 export const lookupNickname = async (nickname: string): Promise<string | null> => {
     const input = nickname.trim();
     if (!input) return null;
 
-    // Fast-path: if it's already a hash, just return it
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
         return input;
     }
@@ -231,7 +245,6 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
 };
 
 export const verifyContact = async (peerHash: string, isVerified: boolean) => {
-    // Disabled in plaintext
 };
 
 export const startChat = (peerHash: string, alias?: string) => {

@@ -13,10 +13,13 @@ import { addMessage, sendReceipt } from './message_utils';
 
 export { addMessage, bulkDelete, deleteMessage, downloadAttachment, sendReceipt } from './message_utils';
 
+/**
+ * Handles end-to-end encrypted messaging, media distribution, and fragment orchestration.
+ */
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
 export const typingTimeouts: Record<string, any> = {};
 
-const MEDIA_CHUNK_SIZE = 100 * 1024; // 100KB chunks
+const MEDIA_CHUNK_SIZE = 100 * 1024;
 const fragmentReassembly: Record<string, {
     total: number,
     received: number,
@@ -24,11 +27,16 @@ const fragmentReassembly: Record<string, {
     timestamp: number
 }> = {};
 
-// Helper to wrap plaintext content
+/**
+ * Wraps arbitrary content in a standard message payload container.
+ */
 const createPayload = (type: string, content: any, id: string, replyTo?: any) => {
     return { type, content, id, replyTo, timestamp: Date.now() };
 };
 
+/**
+ * Sends an end-to-end encrypted text message to a peer or group.
+ */
 export const sendMessage = async (destId: string, content: string) => {
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -50,10 +58,8 @@ export const sendMessage = async (destId: string, content: string) => {
         }
 
         const payload = { type: 'text_msg', content, id: msgId, replyTo: replyToData, linkPreview };
-        // "Encrypt" (wrap in plaintext container)
         const ciphertextObj = await signalManager.encrypt(destId, JSON.stringify(payload), state.relayUrl);
 
-        // Send binary (legacy path used by network layer for direct messages)
         network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
 
         const msg: Message = {
@@ -74,6 +80,9 @@ export const sendMessage = async (destId: string, content: string) => {
     }
 };
 
+/**
+ * Multicasts a message to group members using per-recipient Signal encryption.
+ */
 export const sendGroupMessage = async (groupId: string, content: string) => {
     const state = get(userStore);
     const group = state.chats[groupId];
@@ -102,7 +111,6 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
                 id: msgId,
                 replyTo: replyToData
             };
-            // Encrypt per member (Sealed Sender style)
             const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
             targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
         }
@@ -119,7 +127,7 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
         timestamp: Date.now(),
         senderHash: state.identityHash!,
         content,
-        type: 'text', // Changed from default to text
+        type: 'text',
         groupId,
         isMine: true,
         status: 'sent',
@@ -129,6 +137,9 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
     setReplyingTo(null);
 };
 
+/**
+ * Encrypts and transmits a file using AES-GCM-256 and Signal key encapsulation.
+ */
 export const sendFile = async (destId: string, file: File) => {
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -155,7 +166,6 @@ export const sendFile = async (destId: string, file: File) => {
         addMessage(destId, optMsg);
 
         try {
-            // Processing in background
             const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, file.name, file.type);
 
             const contentObj = {
@@ -180,7 +190,6 @@ export const sendFile = async (destId: string, file: File) => {
                 network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
             }
 
-            // Update status to sent
             userStore.update(s => {
                 if (s.chats[destId]) {
                     const m = s.chats[destId].messages.find(x => x.id === msgId);
@@ -202,6 +211,9 @@ export const sendFile = async (destId: string, file: File) => {
     reader.readAsArrayBuffer(file);
 };
 
+/**
+ * Packages and transmits an audio recording as an encrypted voice note.
+ */
 export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -211,7 +223,6 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
     const uint8 = new Uint8Array(buffer);
     const msgId = crypto.randomUUID();
 
-    // Optimistic UI: Add message immediately
     const optMsg: Message = {
         id: msgId,
         timestamp: Date.now(),
@@ -250,7 +261,6 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)), { id: msgId });
         }
 
-        // Update status to sent
         userStore.update(s => {
             if (s.chats[destId]) {
                 const m = s.chats[destId].messages.find(x => x.id === msgId);
@@ -270,7 +280,9 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
     }
 };
 
-// Process decrypted/plaintext payload
+/**
+ * Processes a decrypted payload, updating the local store and handling secondary effects (typing, presence, etc).
+ */
 const processPayload = async (senderHash: string, payloadStr: string, groupId?: string, msgId?: string, replyToIn?: any) => {
     const state = get(userStore);
     if (state.blockedHashes.includes(senderHash)) return;
@@ -349,7 +361,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
                         return { ...s, chats: { ...s.chats } };
                     });
                     delete typingTimeouts[senderHash];
-                }, 6000); // 6s safety timeout
+                }, 6000);
             }
             return;
         } else if (parsed.type === 'presence') {
@@ -381,7 +393,6 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             });
             return;
         } else if (parsed.type === 'receipt') {
-            // Receipt handling
             userStore.update(s => {
                 if (s.chats[senderHash]) {
                     const updatedChat = { ...s.chats[senderHash] };
@@ -398,9 +409,8 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             });
             return;
         }
-        // Removed call_log handling
     } catch (e) {
-        // Not JSON, assume plain text
+
     }
 
     const msg: Message = {
@@ -411,11 +421,14 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
     addMessage(actualGroupId || senderHash, msg);
 
     if (!actualGroupId) {
-        // Send delivered receipt
         sendReceipt(senderHash, [incomingMsgId], 'delivered');
     }
 };
 
+/**
+ * Entry point for all incoming network payloads.
+ * Handles binary header extraction, fragmentation reassembly, and Signal decryption.
+ */
 export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage, overrideSender?: string): Promise<void> => {
     try {
         const state = get(userStore);
@@ -429,7 +442,6 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             while (lastIndex > 0 && payload[lastIndex - 1] === 0) lastIndex--;
             const trimmedPayload = payload.slice(0, lastIndex);
 
-            // The server now prepends 64 bytes of sender identity hash to binary payloads
             if (trimmedPayload.length >= 64) {
                 const potentialHeader = new TextDecoder().decode(trimmedPayload.slice(0, 64));
                 if (/^[0-9a-f]{64}$/i.test(potentialHeader)) {
@@ -450,21 +462,18 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
 
         if (!incomingObj) return;
 
-        // Skip non-payload server messages
         const skipTypes = ['relay_success', 'delivery_status', 'auth_success', 'error', 'ping', 'pong', 'dummy_ack', 'dummy_pacing'];
         if (incomingObj.type && skipTypes.includes(incomingObj.type)) {
             return;
         }
 
         if (incomingObj.type === 'binary_payload' && incomingObj.data_hex) {
-            console.debug("[Messaging] Unwrapping binary_payload...");
             const decoded = fromHex(incomingObj.data_hex);
             return handleIncomingMessage(decoded, incomingObj.sender);
         }
 
         const finalSenderHash: string = overrideSender || senderHashPrefix || incomingObj.sender || "unknown";
 
-        // Handle generic fragments
         if (incomingObj.type === 'msg_fragment') {
             const fragId = incomingObj.fragmentId;
             if (!fragmentReassembly[fragId]) {
@@ -476,7 +485,7 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
                 };
             }
             const assembly = fragmentReassembly[fragId];
-            if (assembly.chunks[incomingObj.index]) return; // Skip duplicates
+            if (assembly.chunks[incomingObj.index]) return;
 
             assembly.chunks[incomingObj.index] = fromBase64(incomingObj.data);
             assembly.received++;
@@ -486,9 +495,8 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             }
 
             if (assembly.received === assembly.total) {
-                // Offload reassembly to prevent UI hang
                 setTimeout(() => {
-                    if (!fragmentReassembly[fragId]) return; // Already processed
+                    if (!fragmentReassembly[fragId]) return;
 
                     console.log(`[Messaging] Reassembling fragment ${fragId} (${assembly.total} chunks)...`);
                     let totalLen = 0;
@@ -517,17 +525,14 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
                 }, 0);
                 return;
             }
-            return; // Wait for more fragments
+            return;
         }
 
-        // Handle group messages V2
         if (incomingObj.type === 'group_message_v2') {
             await processPayload(incomingObj.sender, incomingObj.body, incomingObj.groupId, incomingObj.id, incomingObj.replyTo);
             return;
         }
 
-        // Handle direct messages
-        // Try to "decrypt" (unwrap plaintext)
         const decrypted = await signalManager.decrypt(finalSenderHash, incomingObj);
 
         if (decrypted) {

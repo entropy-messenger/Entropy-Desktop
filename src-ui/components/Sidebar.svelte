@@ -16,63 +16,66 @@
   } from 'lucide-svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { invoke } from '@tauri-apps/api/core';
-  import { save, open } from '@tauri-apps/plugin-dialog';
+  import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
+
+  /**
+   * Primary navigation and configuration hub.
+   * Orchestrates peer discovery, group lifecycle, and identity management.
+   */
 
   const exportVault = async () => {
-    // Immediate feedback to confirm click
-    alert("Starting export..."); 
-    console.log("Export button clicked");
+    addToast("Starting export...", 'info'); 
     try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+            const { save } = await import('@tauri-apps/plugin-dialog');
             const path = await save({
-                defaultPath: `entropy_backup_${Date.now()}.db`,
+                defaultPath: `entropy_backup_${Date.now()}.entropy`,
                 filters: [{
-                    name: 'Entropy Database',
-                    extensions: ['db']
+                    name: 'Entropy Backup',
+                    extensions: ['entropy', 'zip']
                 }]
             });
-            console.log("Save path selected:", path);
 
             if (path) {
                 await invoke('export_database', { targetPath: path });
-                alert("Backup exported successfully!");
+                addToast("Backup exported successfully!", 'success');
             } else {
-                alert("Export cancelled.");
+                addToast("Export cancelled.", 'info');
             }
         } else {
-            alert("Export not supported in web mode.");
+            addToast("Export not supported in web mode.", 'warning');
         }
     } catch (e) {
         console.error("Export failed:", e);
-        alert("Export failed: " + e);
+        addToast("Export failed: " + e, 'error');
     }
   };
 
   const importVault = async () => {
-    console.log("Import button clicked");
-    if (!confirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?")) return;
+    if (!await showConfirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?", "Restore Backup")) return;
 
     try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+            const { open } = await import('@tauri-apps/plugin-dialog');
             const path = await open({
                 multiple: false,
                 filters: [{
-                    name: 'Entropy Database',
-                    extensions: ['db']
+                    name: 'Entropy Backup',
+                    extensions: ['entropy', 'zip']
                 }]
             });
 
             if (path) {
                 await invoke('import_database', { srcPath: path });
-                alert("Backup restored! The app will now restart.");
-                window.location.reload();
+                addToast("Backup restored! The app will now reload.", 'success');
+                setTimeout(() => window.location.reload(), 2000);
             }
         } else {
-            alert("Import not supported in web mode.");
+            addToast("Import not supported in web mode.", 'warning');
         }
     } catch (e) {
         console.error("Import failed:", e);
-        alert("Import failed: " + e);
+        addToast("Import failed: " + e, 'error');
     }
   };
 
@@ -97,8 +100,11 @@
     startChat(hash);
   };
 
+  /**
+   * Initiates a new peer-to-peer conversation by resolving a 64-character hash or a global nickname.
+   */
   const createChatPrompt = async () => {
-    let input = prompt("Enter Peer ID Hash (64-char Hex) or Global Nickname:");
+    let input = await showPrompt("Enter Peer ID Hash (64-char Hex) or Global Nickname:", "", "New Chat");
     if (!input) return;
     input = input.trim();
 
@@ -109,7 +115,7 @@
         if (hash) {
             startChat(hash, input);
         } else {
-            alert("Could not find user with that hash or nickname.");
+            addToast("Could not find user with that hash or nickname.", 'error');
         }
     }
   };
@@ -149,7 +155,7 @@
           groupMembers = [...groupMembers, targetHash];
           memberInput = "";
       } else if (!targetHash) {
-          alert("Could not resolve nickname or hash.");
+          addToast("Could not resolve nickname or hash.", 'error');
       }
   };
 
@@ -195,8 +201,8 @@
       }
   };
 
-  const handleUpdateAlias = () => {
-      const next = prompt("Update your display name:", $userStore.myAlias || "");
+  const handleUpdateAlias = async () => {
+      const next = await showPrompt("Update your display name:", $userStore.myAlias || "", "Display Name");
       if (next !== null) {
           updateMyProfile(next.trim() || "Anonymous", $userStore.myPfp);
       }
@@ -397,13 +403,13 @@
                     <div class="w-full flex flex-col space-y-2">
                         <button 
                             onclick={async () => {
-                                const nick = prompt("Register a global nickname (min 3 chars):", $userStore.myAlias || "");
+                                const nick = await showPrompt("Register a global nickname (min 3 chars):", $userStore.myAlias || "", "Global Nickname");
                                 if (nick) {
                                     const res = await registerGlobalNickname(nick);
                                     if (res && res.success) {
-                                        alert("Nickname registered successfully!");
+                                        addToast("Nickname registered successfully!", 'success');
                                     } else {
-                                        alert("Registration failed: " + (res?.error || "Unknown"));
+                                        addToast("Registration failed: " + (res?.error || "Unknown"), 'error');
                                     }
                                 }
                             }}
@@ -416,7 +422,6 @@
                             <button 
                                 type="button"
                                 onclick={(e) => { 
-                                    console.log("Export clicked (inline)"); 
                                     exportVault(); 
                                 }}
                                 class="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-200 transition"
@@ -426,7 +431,6 @@
                             <button 
                                 type="button"
                                 onclick={(e) => { 
-                                    console.log("Import clicked (inline)"); 
                                     importVault(); 
                                 }}
                                 class="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-200 transition"
@@ -490,8 +494,8 @@
                              <div class="flex bg-gray-100 p-1 rounded-xl mt-3">
                                 <button onclick={() => updatePrivacy({ routingMode: 'direct' })} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'direct' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">DIRECT</button>
                                 <button onclick={() => updatePrivacy({ routingMode: 'tor' })} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'tor' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">TOR</button>
-                                <button onclick={() => {
-                                    const url = prompt("Enter SOCKS5 Proxy URL (e.g. socks5://127.0.0.1:1080):", $userStore.privacySettings.proxyUrl || "");
+                                <button onclick={async () => {
+                                    const url = await showPrompt("Enter SOCKS5 Proxy URL (e.g. socks5://127.0.0.1:1080):", $userStore.privacySettings.proxyUrl || "", "Custom Proxy");
                                     if (url) updatePrivacy({ routingMode: 'custom', proxyUrl: url });
                                 }} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'custom' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">CUSTOM</button>
                             </div>
@@ -510,7 +514,7 @@
                                         btn.disabled = true;
                                         const original = btn.innerText;
                                         btn.innerText = "REFRESHING...";
-                                        await refreshDecoys('http://localhost:8080');
+                                        await refreshDecoys($userStore.relayUrl);
                                         btn.innerText = "DONE!";
                                         setTimeout(() => { 
                                             btn.innerText = original; 
@@ -547,16 +551,16 @@
                                 <p class="text-[10px] text-red-600 leading-snug">Set a fake password that, when entered at login, silently destroys all data.</p>
                                 <button 
                                     onclick={async () => {
-                                        const p1 = prompt("Set a PANIC password (entering this at login will WIPE your account):");
+                                        const p1 = await showPrompt("Set a PANIC password (entering this at login will WIPE your account):", "", "Panic Password");
                                         if (!p1) return;
-                                        const p2 = prompt("Confirm PANIC password:");
-                                        if (p1 !== p2) { alert("Passwords do not match."); return; }
-                                        if (confirm(`Are you sure? Entering "${p1}" at login will permanently delete your database.`)) {
+                                        const p2 = await showPrompt("Confirm PANIC password:", "", "Confirm Panic Password");
+                                        if (p1 !== p2) { addToast("Passwords do not match.", 'error'); return; }
+                                        if (await showConfirm(`Are you sure? Entering "${p1}" at login will permanently delete your database.`, "Confirm Panic Activation")) {
                                             try {
                                                 await invoke('set_panic_password', { password: p1 });
-                                                alert("Panic password set active. Do NOT forget it.");
+                                                addToast("Panic password set active. Do NOT forget it.", 'success');
                                             } catch (e) {
-                                                alert("Error: " + e);
+                                                addToast("Error: " + e, 'error');
                                             }
                                         }
                                     }}
@@ -567,7 +571,7 @@
                             </div>
 
                              <button 
-                                onclick={() => burnAccount('http://localhost:8080')}
+                                onclick={() => burnAccount($userStore.relayUrl)}
                                 class="w-full py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-bold hover:bg-red-600 hover:text-white transition flex items-center justify-center space-x-2"
                              >
                                 <LucideTrash2 size={14} />

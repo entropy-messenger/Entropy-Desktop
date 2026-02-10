@@ -3,7 +3,10 @@ use rusqlite::{params, Connection};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use futures_util::{Stream, Sink, SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, Connector};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use tokio_rustls::TlsConnector;
+use std::sync::Arc;
 use sha2::{Sha256, Digest};
 use tokio_socks::tcp::Socks5Stream;
 use url::Url;
@@ -396,7 +399,7 @@ pub async fn connect_network(
             .await
             .map_err(|e| format!("Proxy connection failed: {}", e))?;
             
-        let (stream, _) = tokio_tungstenite::client_async(&url, socket)
+        let (stream, _) = tokio_tungstenite::client_async_tls(&url, socket)
             .await
             .map_err(|e| format!("WebSocket over proxy failed: {}", e))?;
             
@@ -577,8 +580,15 @@ pub async fn send_to_network(
                     }).map_err(|e: mpsc::error::SendError<PacedMessage>| e.to_string())?;
                 }
             } else {
+                let mut final_bytes = bytes;
+                // Add padding to binary messages to normalize size
+                if final_bytes.len() < PACKET_SIZE {
+                    let pad_len = PACKET_SIZE - final_bytes.len();
+                    final_bytes.extend(std::iter::repeat(0u8).take(pad_len)); // Use null bytes for binary padding
+                }
+
                 tx.send(PacedMessage {
-                    msg: Message::Binary(bytes.into()),
+                    msg: Message::Binary(final_bytes.into()),
                     is_media: true
                 }).map_err(|e: mpsc::error::SendError<PacedMessage>| e.to_string())?;
             }
@@ -660,19 +670,27 @@ pub async fn flush_outbox(
 
 #[tauri::command]
 pub fn nuclear_reset(app: tauri::AppHandle, state: State<'_, DbState>) -> Result<(), String> {
-    let mut conn = state.conn.lock().unwrap();
-    *conn = None;
-    // Release lock before filesystem ops
-    drop(conn);
+    // 1. Force close the connection and drop the lock
+    {
+        let mut conn = state.conn.lock().unwrap();
+        if let Some(c) = conn.take() {
+            // Attempt to close nicely, though take() drops it
+            let _ = c.close(); 
+        }
+        *conn = None;
+    }
 
+    // 2. Clear filesystem
     let filename = get_db_filename();
-    let app_dir = app.path().app_data_dir().unwrap();
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    
     let db_path = app_dir.join(&filename);
     let wal_path = app_dir.join(format!("{}-wal", filename));
     let shm_path = app_dir.join(format!("{}-shm", filename));
+    let media_dir = app_dir.join("media");
 
     if db_path.exists() {
-        std::fs::remove_file(db_path).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&db_path).map_err(|e| e.to_string())?;
     }
     if wal_path.exists() {
         let _ = std::fs::remove_file(wal_path);
@@ -680,6 +698,11 @@ pub fn nuclear_reset(app: tauri::AppHandle, state: State<'_, DbState>) -> Result
     if shm_path.exists() {
         let _ = std::fs::remove_file(shm_path);
     }
+    if media_dir.exists() {
+        let _ = std::fs::remove_dir_all(media_dir);
+    }
+
+    app.restart(); // Force restart to apply changes immediately
     Ok(())
 }
 
@@ -1165,5 +1188,16 @@ pub fn signal_decrypt(
         ).await.map_err(|e| e.to_string())?;
 
         String::from_utf8(ptext).map_err(|e| e.to_string())
+    })
+}
+#[tauri::command]
+pub fn signal_sign_message(state: State<'_, DbState>, message: String) -> Result<String, String> {
+    tauri::async_runtime::block_on(async move {
+        let store = SqliteSignalStore::new(&state);
+        let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+        let mut rng = StdRng::from_os_rng();
+        let sig = kp.private_key().calculate_signature(message.as_bytes(), &mut rng)
+            .map_err(|e| e.to_string())?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(sig))
     })
 }

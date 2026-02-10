@@ -1,7 +1,9 @@
-
 import { writable } from 'svelte/store';
 import type { Chat, Message, PrivacySettings } from '../types';
 
+/**
+ * Primary state manifest for the Entropy desktop client.
+ */
 export interface AppState {
     identityHash: string | null;
     myAlias: string | null;
@@ -17,6 +19,7 @@ export interface AppState {
     connectionStatus: 'disconnected' | 'connecting' | 'mining' | 'connected';
     authError: string | null;
     relayUrl: string;
+    decoyHashes: string[];
 }
 
 const initialState: AppState = {
@@ -34,12 +37,17 @@ const initialState: AppState = {
         lastSeen: 'everyone',
         profilePhoto: 'everyone',
         routingMode: 'direct',
-        proxyUrl: 'socks5://127.0.0.1:9050'
+        proxyUrl: 'socks5://127.0.0.1:9050',
+        decoyMode: true
     },
     sessionToken: null,
     connectionStatus: 'disconnected',
     authError: null,
-    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080'
+    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080',
+    decoyHashes: []
 };
 
+/**
+ * Global reactive store for the application state.
+ */
 export const userStore = writable<AppState>(initialState);

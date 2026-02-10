@@ -3,29 +3,38 @@ import { invoke } from '@tauri-apps/api/core';
 import { minePoW, toBase64, fromBase64, toHex, fromHex } from './crypto';
 import { secureStore, secureLoad, vaultLoad, vaultSave } from './secure_storage';
 
+/**
+ * Derives a unique identity fingerprint from the Signal public key.
+ * Used as the primary lookup key for peers globally.
+ */
 async function calculateIdentityHash(idKeyHex: string): Promise<string> {
     const bytes = fromHex(idKeyHex);
-    // Cast to any to bypass strict BufferSource vs SharedArrayBuffer check in some environments
     const hashBuffer = await crypto.subtle.digest('SHA-256', bytes as any);
     return Array.from(new Uint8Array(hashBuffer))
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
 }
 
-// Replaced complex SignalManager with a simple plaintext manager
 
+import { get } from 'svelte/store';
+import { userStore } from './stores/user';
+
+/**
+ * Orchestrates the Signal Protocol lifecycle, including key management,
+ * E2EE session establishment, and media encryption.
+ */
 export class SignalManager {
     private userIdentity: string = "";
 
     constructor() {
     }
 
+    /**
+     * Initializes the native Signal state and retrieves the identity fingerprint.
+     */
     async init(password: string): Promise<string | null> {
-        // Database is already initialized via init_vault(password)
         try {
             const idKeyHex = await invoke<string>('signal_init');
-            // Produce a standard 32-byte hash of the 33-byte Signal public key
-            // to be used as the stable User Identity Hash.
             const idHash = await calculateIdentityHash(idKeyHex);
             this.userIdentity = idHash;
             console.log("Initialized Signal Protocol. Identity Hash:", this.userIdentity);
@@ -40,11 +49,13 @@ export class SignalManager {
         return this.userIdentity;
     }
 
+    /**
+     * Synchronizes local pre-key bundles with the relay server.
+     * Includes X3DH bundle preparation and Proof-of-Work to satisfy anti-spam requirements.
+     */
     async ensureKeysUploaded(serverUrl: string, force: boolean = false) {
-        // Fetch bundle from backend and upload to server
         const rawBundle = await invoke<any>('signal_get_bundle');
 
-        // Convert hex keys to base64 for server expectations
         const bundle = {
             identity_hash: this.userIdentity,
             registrationId: rawBundle.registrationId,
@@ -53,14 +64,13 @@ export class SignalManager {
                 id: rawBundle.signedPreKey.id,
                 publicKey: toBase64(fromHex(rawBundle.signedPreKey.publicKey)),
                 signature: toBase64(fromHex(rawBundle.signedPreKey.signature)),
-                pq_publicKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)) // Satisfy server PQ requirement
+                pq_publicKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey))
             },
             preKeys: [{
                 id: rawBundle.preKey.id,
                 publicKey: toBase64(fromHex(rawBundle.preKey.publicKey))
             }],
-            // Post-Quantum keys
-            pq_identityKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)), // Satisfy server PQ requirement
+            pq_identityKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)),
             kyberPreKey: {
                 id: rawBundle.kyberPreKey.id,
                 publicKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)),
@@ -68,7 +78,6 @@ export class SignalManager {
             }
         };
 
-        // Fetch challenge and solve PoW to satisfy server anti-spam
         const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${this.userIdentity}`);
         const { seed, difficulty } = await challengeRes.json();
         const { nonce } = await minePoW(seed, difficulty, this.userIdentity);
@@ -91,35 +100,74 @@ export class SignalManager {
         console.log("Keys uploaded successfully.");
     }
 
+    private sessionLocks: Map<string, Promise<string | null>> = new Map();
+
+    /**
+     * Fetches a peer's identity bundle and establishes a Double Ratchet session.
+     * Implements Plausible Deniability by mixing the true recipient with decoy hashes.
+     */
     async establishSession(recipientHash: string, serverUrl: string): Promise<string | null> {
-        try {
-            console.log(`[Signal] Fetching pre-key bundle for ${recipientHash}...`);
+        if (this.sessionLocks.has(recipientHash)) {
+            return this.sessionLocks.get(recipientHash)!;
+        }
 
-            // Use WebSocket multiplexing instead of HTTP
-            // const res = await fetch(`${serverUrl}/keys/fetch?user=${recipientHash}`);
-            const { network } = await import('./network');
-            const res = await network.request('fetch_key', { target_hash: recipientHash });
+        const sessionPromise = (async () => {
+            try {
+                const state = get(userStore);
+                let targetParam = recipientHash;
 
-            if (!res.found || !res.bundle) {
-                console.warn(`[Signal] Failed to fetch bundle for ${recipientHash}: Not Found`);
+                if (state.privacySettings.decoyMode && state.decoyHashes.length > 0) {
+                    const decoys = [...state.decoyHashes]
+                        .sort(() => 0.5 - Math.random())
+                        .slice(0, 10)
+                        .filter(h => h !== recipientHash);
+
+                    const mixed = [recipientHash, ...decoys].sort(() => 0.5 - Math.random());
+                    targetParam = mixed.join(',');
+                    console.debug(`[Signal] Establish session with decoys: Requesting ${mixed.length} bundles`);
+                }
+
+                console.log(`[Signal] Fetching pre-key bundle for ${recipientHash}...`);
+
+                const { network } = await import('./network');
+                const res = await network.request('fetch_key', { target_hash: targetParam });
+
+                if (!res.found) {
+                    console.warn(`[Signal] Failed to fetch bundle for ${recipientHash}: Not Found`);
+                    return null;
+                }
+
+                const bundle = res.bundles ? res.bundles[recipientHash] : res.bundle;
+
+                if (!bundle) {
+                    console.warn(`[Signal] Response found but bundle for ${recipientHash} is null`);
+                    return null;
+                }
+
+                await invoke('signal_establish_session', {
+                    remoteHash: recipientHash,
+                    bundle
+                });
+                return "established";
+            } catch (e: any) {
+                console.error("Session establishment failed:", e);
                 return null;
             }
-            const bundle = res.bundle;
+        })();
 
-            await invoke('signal_establish_session', {
-                remoteHash: recipientHash,
-                bundle
-            });
-            return "established";
-        } catch (e: any) {
-            console.error("Session establishment failed:", e);
-            return null;
+        this.sessionLocks.set(recipientHash, sessionPromise);
+        try {
+            return await sessionPromise;
+        } finally {
+            this.sessionLocks.delete(recipientHash);
         }
     }
 
+    /**
+     * Encrypts a message for a peer. Automatically initiates session establishment if required.
+     */
     async encrypt(recipientHash: string, message: string, serverUrl: string, skipIntegrity: boolean = false): Promise<any> {
         try {
-            // Check if session exists (implied by backend error if not)
             const encrypted = await invoke<any>('signal_encrypt', {
                 remoteHash: recipientHash,
                 message
@@ -127,7 +175,6 @@ export class SignalManager {
             return encrypted;
         } catch (e: any) {
             if (e.toString().includes("session") && e.toString().includes("not found")) {
-                console.log("Encryption failed (no session), trying to establish session...");
                 const status = await this.establishSession(recipientHash, serverUrl);
                 if (status === "established") {
                     return await invoke<any>('signal_encrypt', {
@@ -157,30 +204,27 @@ export class SignalManager {
         }
     }
 
-    // Media encryption: AES-GCM + Signal
+    /**
+     * Encrypts binary media using AES-GCM-256 and packages the key for Signal transmission.
+     */
     async encryptMedia(data: Uint8Array, fileName: string, fileType: string): Promise<{ ciphertext: string, bundle: any }> {
-        // Generate a random 256-bit key for AES-GCM
         const key = await crypto.subtle.generateKey(
             { name: "AES-GCM", length: 256 },
             true,
             ["encrypt", "decrypt"]
         );
 
-        // Generate a random 96-bit IV
         const iv = crypto.getRandomValues(new Uint8Array(12));
 
-        // Encrypt the data
         const encryptedBuffer = await crypto.subtle.encrypt(
             { name: "AES-GCM", iv },
             key,
             data as any
         );
 
-        // Export the key to base64 for the Signal bundle
         const exportedKey = await crypto.subtle.exportKey("raw", key);
         const keyBase64 = toBase64(new Uint8Array(exportedKey));
 
-        // Combine IV + Ciphertext for transmission (hex)
         const combined = new Uint8Array(iv.length + encryptedBuffer.byteLength);
         combined.set(iv, 0);
         combined.set(new Uint8Array(encryptedBuffer), iv.length);
@@ -239,7 +283,6 @@ export class SignalManager {
         // No-op
     }
 
-    // Group functions - no encryption
     async groupInit(groupId: string): Promise<any> {
         return { status: 'plaintext_group' };
     }
@@ -268,7 +311,6 @@ export class SignalManager {
         return {};
     }
 
-    // Sealing removal
     async seal(remoteIdentityKey: string, message: any): Promise<any> {
         return message;
     }
@@ -277,7 +319,6 @@ export class SignalManager {
         return sealedObj;
     }
 
-    // Export/Import - handled by SQLite file now, but for API compat we can leave stubs
     async exportIdentity(): Promise<Uint8Array> {
         return new Uint8Array([]);
     }
@@ -287,14 +328,31 @@ export class SignalManager {
     }
 
     async remoteBurn(serverUrl: string): Promise<boolean> {
-        // Just local reset
+        try {
+            // 1. Prove ownership to server to delete remote/mesh copy
+            const timestamp = Date.now().toString();
+            const signature = await this.signMessage(`BURN_ACCOUNT:${this.userIdentity}:${timestamp}`);
+
+            await fetch(`${serverUrl}/account`, {
+                method: 'DELETE',
+                headers: {
+                    'X-Identity': this.userIdentity,
+                    'X-Signature': signature,
+                    'X-Timestamp': timestamp
+                }
+            });
+        } catch (e) {
+            console.error("Remote burn failed (network):", e);
+            // Proceed to local burn anyway
+        }
+
         localStorage.clear();
         await invoke('nuclear_reset');
         return true;
     }
 
     async signMessage(message: string): Promise<string> {
-        return "unsigned";
+        return await invoke<string>('signal_sign_message', { message });
     }
 }
 

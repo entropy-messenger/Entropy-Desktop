@@ -12,12 +12,23 @@
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
   import { hasVault } from './lib/secure_storage';
   import { signalManager } from './lib/signal_manager';
+  
+  /**
+   * Main application entry point.
+   * Manages the high-level application state, identity bootstrapping, and global UI overlays.
+   */
+  import Toast from './components/Toast.svelte';
+  import Modal from './components/Modal.svelte';
+  import { addToast, showConfirm } from './lib/stores/ui';
 
   let password = $state("");
   let isInitializing = $state(true);
   let hasExistingIdentity = $state(false);
 
 
+  /**
+   * Orchestrates OS-level notification permissions required for incoming message alerts.
+   */
   const checkNotificationPermission = async () => {
     let permission = await isPermissionGranted();
     if (!permission) {
@@ -26,9 +37,8 @@
   };
 
   onMount(async () => {
-    
     if (window.__TAURI_INTERNALS__) {
-        await new Promise(r => setTimeout(r, 100)); // Wait for Tauri injection
+        await new Promise(r => setTimeout(r, 100));
     }
     
     isInitializing = false;
@@ -46,7 +56,6 @@
   const handleLogin = async () => {
     if (!password) return;
     
-    // Clear previous errors
     userStore.update(s => ({ ...s, authError: null }));
     
     isInitializing = true;
@@ -67,7 +76,7 @@
         await createIdentity(password);
         network.connect();
     } catch (e: any) {
-        alert("Creation failed: " + (e.message || e));
+        addToast("Creation failed: " + (e.message || e), 'error');
     } finally {
         isInitializing = false;
     }
@@ -78,28 +87,38 @@
       e.preventDefault();
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-      if (import.meta.env.DEV) return;
-      if (
-          e.key === 'F12' ||
-          (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C'))
-      ) {
-          e.preventDefault();
-      }
-  }
+    function handleKeydown(e: KeyboardEvent) {
+        
+        if (
+            e.key === 'F12' ||
+            (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C'))
+        ) {
+            // Let dev tools open in dev mode? 
+            if (!import.meta.env.DEV) e.preventDefault();
+        }
 
+        if (e.key === 'Escape') {
+            userStore.update(s => ({ ...s, activeChatHash: null }));
+        }
+    }
+
+    /**
+     * Executes a destructive account wipe across both local storage and the native database.
+     */
     async function handleNuclearReset() {
-        if (!confirm("This will PERMANENTLY delete your vault and all messages. Are you sure?")) return;
+        if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Nuclear Reset")) return;
         try {
             await invoke('nuclear_reset');
             localStorage.clear();
             window.location.reload();
         } catch (e) {
-            alert("Reset failed: " + e);
+            addToast("Reset failed: " + e, 'error');
         }
     }
 
-    // New Full Vault Export (for backup)
+    /**
+     * Serializes the current vault to a file on the host filesystem.
+     */
     async function handleExportVault() {
          try {
             if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -114,20 +133,22 @@
 
                 if (path) {
                     await invoke('export_database', { targetPath: path });
-                    alert("Backup exported successfully!");
+                    addToast("Backup exported successfully!", 'success');
                 }
             } else {
-                alert("Export not supported in web mode.");
+                addToast("Export not supported in web mode.", 'warning');
             }
         } catch (e) {
             console.error("Export failed:", e);
-            alert("Export failed: " + e);
+            addToast("Export failed: " + e, 'error');
         }
     }
 
-    // New Full Vault Import (for restore)
+    /**
+     * Restores the application state from an external backup file.
+     */
     async function handleImportVault() {
-        if (!confirm("WARNING: Importing a backup will OVERWRITE any current data on this device. Continue?")) return;
+        if (!await showConfirm("WARNING: Importing a backup will OVERWRITE any current data on this device. Continue?", "Restore Backup")) return;
 
         try {
             if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -142,15 +163,15 @@
 
                 if (path) {
                     await invoke('import_database', { srcPath: path });
-                    alert("Backup restored! The app will now reload.");
-                    window.location.reload();
+                    addToast("Backup restored! The app will now reload.", 'success');
+                    setTimeout(() => window.location.reload(), 2000);
                 }
             } else {
-                alert("Import not supported in web mode.");
+                addToast("Import not supported in web mode.", 'warning');
             }
         } catch (e) {
             console.error("Import failed:", e);
-            alert("Import failed: " + e);
+            addToast("Import failed: " + e, 'error');
         }
     }
 </script>
@@ -297,6 +318,8 @@
         </div>
     {/if}
 
+    <Toast />
+    <Modal />
 </main>
 
 <style>

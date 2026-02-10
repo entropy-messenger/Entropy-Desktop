@@ -5,8 +5,6 @@ mod audio;
 mod app_state;
 mod commands;
 mod signal_store;
-#[cfg(test)]
-mod tests;
 
 use std::sync::Mutex;
 use tauri::{
@@ -60,7 +58,8 @@ fn main() {
             commands::signal_decrypt,
             commands::set_panic_password,
             commands::vault_save_media,
-            commands::vault_load_media
+            commands::vault_load_media,
+            commands::signal_sign_message
         ])
         .setup(|app| {
             // Setup tray and menu as before

@@ -40,13 +40,8 @@ export class SignalStore {
     }
 
     async isBlankSlate(): Promise<boolean> {
-        
-        const legacyId = await vaultLoad('signal_identity_key');
         const rustId = await vaultLoad('protocol_identity');
-
-        const legacyExists = legacyId !== null && legacyId !== 'null';
         const rustExists = rustId !== null && rustId !== 'null';
-
-        return !legacyExists && !rustExists;
+        return !rustExists;
     }
 }

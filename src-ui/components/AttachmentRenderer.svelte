@@ -40,8 +40,8 @@
                     blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
                     console.debug("[Attachment] Created blob URL:", blobUrl);
                 } else {
-                    blobUrl = URL.createObjectURL(new Blob([data as any], {type: msg.attachment.fileType}));
-                    console.debug("[Attachment] Created legacy blob URL:", blobUrl);
+                    console.warn("[Attachment] Unencrypted attachment ignored.");
+                    error = true;
                 }
             } else {
                 console.warn("[Attachment] Not found in attachmentStore:", msg.id);
@@ -72,7 +72,7 @@
                     if (msg.attachment.isV2 && msg.attachment.bundle) {
                         bytes = await signalManager.decryptMedia(data, msg.attachment.bundle);
                     } else {
-                        bytes = data;
+                        throw new Error("Legacy attachment download not supported");
                     }
                 }
             }

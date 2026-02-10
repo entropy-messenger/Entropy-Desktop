@@ -54,7 +54,8 @@ commands.allow = [
     "import_database",
     "set_panic_password",
     "vault_save_media",
-    "vault_load_media"
+    "vault_load_media",
+    "signal_sign_message"
 ]
 
 [[set]]

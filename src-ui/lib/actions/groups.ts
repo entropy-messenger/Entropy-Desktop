@@ -3,6 +3,9 @@ import { userStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
 
+/**
+ * Orchestrates group lifecycle, membership distribution, and invite signaling.
+ */
 export const createGroup = async (name: string, members: string[]) => {
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -26,6 +29,9 @@ export const createGroup = async (name: string, members: string[]) => {
     }
 };
 
+/**
+ * Extends an existing group by adding new members and synchronizing the membership list.
+ */
 export const addToGroup = async (groupId: string, newMembers: string[]) => {
     const state = get(userStore);
     const chat = state.chats[groupId];

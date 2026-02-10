@@ -1,4 +1,10 @@
 
+/**
+ * Extracts and metadata from a URL within a text string to generate a preview object.
+ */
+/**
+ * Common cryptographic and UI utilities.
+ */
 export const parseLinkPreview = async (text: string): Promise<any> => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     const match = text.match(urlRegex);

@@ -3,19 +3,24 @@ import { get } from 'svelte/store';
 import { userStore } from '../stores/user';
 import { invoke } from '@tauri-apps/api/core';
 import { signalManager } from '../signal_manager';
+import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
 import { minePoW, initCrypto } from '../crypto';
 import { statusTimeouts, setOnlineStatus, startHeartbeat, broadcastProfile } from './contacts';
 import { initVault, vaultLoad, vaultSave } from '../secure_storage';
 import type { Chat } from '../types';
 
+/**
+ * Handles application-level authentication, identity lifecycle, and vault persistence.
+ */
 let isAuthInProgress = false;
 
+/**
+ * Initializes the application by unlocking the encrypted vault and starting key managers.
+ */
 export const initApp = async (password: string) => {
     userStore.update(s => ({ ...s, authError: null }));
     await initCrypto();
-
-    // No salt or secureLoad used. Straight to vault init.
     try {
         await initVault(password);
     } catch (e: any) {
@@ -26,7 +31,6 @@ export const initApp = async (password: string) => {
 
     let idHash: string | null = null;
     try {
-        // Init signal manager (identity generation/loading)
         idHash = await signalManager.init(password);
     } catch (e) {
         console.error("Signal init failed:", e);
@@ -54,7 +58,7 @@ export const initApp = async (password: string) => {
                 myPfp = vault.myPfp || null;
                 sessionToken = vault.sessionToken || null;
             } catch (e) {
-                userStore.update(s => ({ ...s, authError: "Corrupted vault data." }));
+                userStore.update(s => ({ ...s, authError: "Corrupted vault metadata." }));
                 return;
             }
         }
@@ -64,19 +68,19 @@ export const initApp = async (password: string) => {
         startHeartbeat();
 
         const serverUrl = get(userStore).relayUrl;
-        // Keys upload is no-op in manager but safe to call
         try { await signalManager.ensureKeysUploaded(serverUrl); } catch (e) { }
     } else {
         userStore.update(s => ({ ...s, authError: "Identity not found. please create one." }));
     }
 };
 
+/**
+ * Generates a new cryptographic identity and initializes a fresh encrypted vault.
+ */
 export const createIdentity = async (password: string) => {
     try {
-        console.debug("Starting identity creation...");
-        await initCrypto(); // just loads wasm if needed
+        await initCrypto();
         await initVault(password);
-        console.debug("Vault initialized.");
     } catch (e: any) {
         console.error("Vault initialization failed:", e);
         throw new Error(`Local vault setup failed: ${e.message || e}`);
@@ -84,7 +88,6 @@ export const createIdentity = async (password: string) => {
 
     let idHash;
     try {
-        console.debug("Initializing Signal manager...");
         idHash = await signalManager.init(password);
         console.debug("Identity generated:", idHash);
     } catch (e: any) {
@@ -103,6 +106,10 @@ export const createIdentity = async (password: string) => {
     }
 };
 
+/**
+ * Authenticates the local identity with the relay server.
+ * Uses persistent session tokens if available, falling back to SHA-256 Proof-of-Work mining.
+ */
 export const authenticate = async (identityHash: string) => {
     if (isAuthInProgress) return;
     isAuthInProgress = true;
@@ -127,7 +134,6 @@ export const authenticate = async (identityHash: string) => {
             const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${identityHash}`);
             const { seed, difficulty } = await challengeRes.json();
 
-            // Mining PoW for anti-spam/auth
             const pow = await minePoW(seed, difficulty, identityHash);
 
             network.sendJSON({
@@ -135,9 +141,6 @@ export const authenticate = async (identityHash: string) => {
                 payload: { identity_hash: identityHash, seed: pow.seed, nonce: pow.nonce }
             });
         }
-
-        // Post-auth catchup (online status, etc.) should be triggered 
-        // by the auth_success message in NetworkLayer, not here by timeout.
     } catch (e) {
         console.error("Authentication failed:", e);
     } finally {
@@ -146,12 +149,66 @@ export const authenticate = async (identityHash: string) => {
 };
 
 export const refreshDecoys = async (serverUrl: string) => {
-    // No-op
+    try {
+        const state = get(userStore);
+        if (state.isConnected) {
+            const data = await network.request('fetch_key_random', { count: 20 });
+            if (data && data.hashes) {
+                userStore.update(s => ({ ...s, decoyHashes: data.hashes }));
+            }
+        } else {
+            const response = await fetch(`${serverUrl}/keys/random?count=20`);
+            if (response.ok) {
+                const data = await response.json();
+                userStore.update(s => ({ ...s, decoyHashes: data.hashes }));
+            }
+        }
+    } catch (e) {
+        console.error("Failed to refresh decoys:", e);
+    }
 };
 
+/**
+ * Permanently purges the local vault and sends a signed burn request to the relay.
+ * Requires solving a high-difficulty PoW to authorize the network-wide erasure.
+ */
 export const burnAccount = async (serverUrl: string) => {
-    if (confirm("DANGER: This will permanently purge your local data. Are you sure?")) {
-        // Only local wipe
+    if (await showConfirm("DANGER: This will permanently purge your account from the network and your local data. This cannot be undone. Are you sure?", "Nuclear Burn")) {
+        const state = get(userStore);
+        if (state.identityHash) {
+            try {
+                const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${state.identityHash}`);
+                const { seed, difficulty } = await challengeRes.json();
+
+                const { nonce } = await minePoW(seed, 5, state.identityHash);
+
+                const signature = await signalManager.signMessage("BURN:" + state.identityHash);
+
+                const response = await fetch(`${serverUrl}/account/burn`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-PoW-Seed': seed,
+                        'X-PoW-Nonce': nonce.toString()
+                    },
+                    body: JSON.stringify({
+                        identity_hash: state.identityHash,
+                        identityKey: "plaintext_no_key",
+                        signature
+                    })
+                });
+
+                if (response.ok) {
+                    console.log("Network account burn successful.");
+                } else {
+                    console.error("Network account burn failed:", await response.text());
+                }
+            } catch (e) {
+                console.error("Failed to burn network account:", e);
+                if (!await showConfirm("Relay burn failed. Wipe local data anyway?", "Relay Error")) return;
+            }
+        }
+
         localStorage.clear();
         await invoke('nuclear_reset');
         window.location.reload();
@@ -159,6 +216,9 @@ export const burnAccount = async (serverUrl: string) => {
 };
 
 
+/**
+ * Exports the encrypted database file to the host system.
+ */
 export const exportVault = async () => {
     try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -173,19 +233,22 @@ export const exportVault = async () => {
 
             if (path) {
                 await invoke('export_database', { targetPath: path });
-                alert("Backup exported successfully!");
+                addToast("Backup exported successfully!", 'success');
             }
         } else {
-            alert("Export not supported in web mode.");
+            addToast("Export not supported in web mode.", 'warning');
         }
     } catch (e) {
         console.error("Export failed:", e);
-        alert("Export failed: " + e);
+        addToast("Export failed: " + e, 'error');
     }
 };
 
+/**
+ * Imports an encrypted backup, overwriting the current local state.
+ */
 export const importVault = async () => {
-    if (!confirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?")) return;
+    if (!await showConfirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?", "Restore Backup")) return;
 
     try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -200,14 +263,14 @@ export const importVault = async () => {
 
             if (path) {
                 await invoke('import_database', { srcPath: path });
-                alert("Backup restored! The app will now restart.");
-                window.location.reload();
+                addToast("Backup restored! The app will now reload.", 'success');
+                setTimeout(() => window.location.reload(), 2000);
             }
         } else {
-            alert("Import not supported in web mode.");
+            addToast("Import not supported in web mode.", 'warning');
         }
     } catch (e) {
         console.error("Import failed:", e);
-        alert("Import failed: " + e);
+        addToast("Import failed: " + e, 'error');
     }
 };

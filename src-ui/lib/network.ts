@@ -6,6 +6,10 @@ import { userStore } from './stores/user';
 import * as logicStore from './store';
 import type { ServerMessage } from './types';
 
+/**
+ * Handles communication with the underlying Rust network node via Tauri's bridge.
+ * Manage WebSocket lifecycle, message multiplexing, and binary/JSON serialization.
+ */
 export class NetworkLayer {
     private url: string = "";
     private retryCount = 0;
@@ -13,6 +17,8 @@ export class NetworkLayer {
     private isAuthenticated = false;
     private isConnected = false;
     private lastActivity = Date.now();
+
+    /** Tracking table for asynchronous request-response cycles over the socket */
     private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
 
     constructor() {
@@ -33,6 +39,10 @@ export class NetworkLayer {
 
     private connectingPromise: Promise<void> | null = null;
 
+    /**
+     * Establishes a connection to the relay server.
+     * Integrates routing mode preferences (Tor/Proxy) into the bridge command.
+     */
     async connect() {
         if (this.isConnected) return;
         if (this.connectingPromise) return this.connectingPromise;
@@ -43,10 +53,13 @@ export class NetworkLayer {
 
                 let proxyUrl = undefined;
                 const state = get(userStore) as any;
+
                 if (state.privacySettings.routingMode !== 'direct') {
                     proxyUrl = state.privacySettings.proxyUrl;
                     if (state.privacySettings.routingMode === 'tor') {
                         proxyUrl = 'socks5://127.0.0.1:9050';
+                    } else if (state.privacySettings.proxyUrl && !state.privacySettings.proxyUrl.includes('://')) {
+                        proxyUrl = `socks5://${state.privacySettings.proxyUrl}`;
                     }
                 }
 
@@ -136,18 +149,16 @@ export class NetworkLayer {
     private async onJsonMessage(msg: any) {
         this.lastActivity = Date.now();
 
-        // Handle Request-Response pattern
         if (msg.req_id && this.pendingRequests.has(msg.req_id)) {
-            const { resolve, timeout } = this.pendingRequests.get(msg.req_id)!;
+            const { resolve, reject, timeout } = this.pendingRequests.get(msg.req_id)!;
             clearTimeout(timeout);
             this.pendingRequests.delete(msg.req_id);
+
             if (msg.error) {
-                // Reject if response contains error
-                // Find promise reject function? No, I stored reject.
-                // Ah, the map stores { resolve, reject, ... }
-                // Let's get reject too.
+                reject(new Error(msg.message || "Request failed"));
+            } else {
+                resolve(msg);
             }
-            resolve(msg); // Resolve with the full message
             return;
         }
 
@@ -164,7 +175,6 @@ export class NetworkLayer {
                 connectionStatus: 'connected'
             }));
 
-            // If server says our keys are missing, upload them now
             if (msg.keys_missing) {
                 const serverUrl = get(userStore).relayUrl;
                 import('./signal_manager').then(({ signalManager }) => {
@@ -172,7 +182,6 @@ export class NetworkLayer {
                 });
             }
 
-            // Once authenticated, flush any messages waiting in the persistent outbox
             invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
 
             const state = get(userStore) as any;
@@ -182,6 +191,12 @@ export class NetworkLayer {
                     logicStore.broadcastProfile(peerHash);
                 }
             });
+
+            const current = get(userStore) as any;
+            if (current.privacySettings.decoyMode) {
+                logicStore.refreshDecoys(current.relayUrl).catch(() => { });
+            }
+
             return;
         }
 
@@ -237,11 +252,8 @@ export class NetworkLayer {
         packet.set(data, 64);
 
         try {
-            // High performance binary transfer: pass Uint8Array directly to Tauri
             invoke('send_to_network', { msg: null, data: packet, isBinary: true, metadata }).catch(e => {
-                if (e.toString().includes("queued")) {
-                    console.debug("[Network] Binary queued in persistent outbox");
-                } else {
+                if (!e.toString().includes("queued")) {
                     console.warn("[Network] Binary background send failed:", e);
                 }
             });
@@ -269,9 +281,11 @@ export class NetworkLayer {
         });
     }
 
+    /**
+     * Executes a JSON request and waits for a specific response via req_id.
+     */
     request(type: string, payload: any, timeoutMs = 10000): Promise<any> {
         return new Promise((resolve, reject) => {
-            // Generate a simple unique ID
             const reqId = Date.now().toString(36) + Math.random().toString(36).substr(2);
 
             const timeout = setTimeout(() => {
