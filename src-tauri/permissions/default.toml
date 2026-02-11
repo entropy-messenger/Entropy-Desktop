@@ -56,7 +56,10 @@ commands.allow = [
     "set_panic_password",
     "vault_save_media",
     "vault_load_media",
-    "signal_sign_message"
+    "signal_sign_message",
+    "signal_get_peer_identity",
+    "signal_set_peer_trust",
+    "signal_get_own_identity"
 ]
 
 [[set]]

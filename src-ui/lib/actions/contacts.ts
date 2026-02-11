@@ -112,7 +112,28 @@ export const setOnlineStatus = async (peerIdentityHash: string, isOnline: boolea
 export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned }; return { ...s, chats: { ...s.chats } }; });
 export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived }; return { ...s, chats: { ...s.chats } }; });
 export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted }; return { ...s, chats: { ...s.chats } }; });
-export const toggleVerification = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isVerified: !s.chats[peerHash].isVerified }; return { ...s, chats: { ...s.chats } }; });
+export const toggleVerification = async (peerHash: string, verified?: boolean) => {
+    const state = get(userStore);
+    const chat = state.chats[peerHash];
+    if (!chat || chat.isGroup) return;
+
+    const nextStatus = verified !== undefined ? verified : !chat.isVerified;
+
+    try {
+        // 1. Update Native Trust Store (Persistent Database)
+        await signalManager.verifySession(peerHash, nextStatus);
+
+        // 2. Update Local Store
+        userStore.update(s => {
+            if (s.chats[peerHash]) {
+                s.chats[peerHash] = { ...s.chats[peerHash], isVerified: nextStatus };
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    } catch (e) {
+        console.error("Failed to update verification status:", e);
+    }
+};
 export const toggleStar = (peerHash: string, msgId: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
         s.chats[peerHash] = {

@@ -3,10 +3,7 @@ use rusqlite::{params, Connection};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use futures_util::{Stream, Sink, SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message, Connector};
-use tokio_rustls::rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
-use tokio_rustls::TlsConnector;
-use std::sync::Arc;
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use sha2::{Sha256, Digest};
 use tokio_socks::tcp::Socks5Stream;
 use url::Url;
@@ -25,9 +22,7 @@ use libsignal_protocol::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use std::fs;
-use std::io::{Read, Write, Cursor};
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 use aes_gcm::{
@@ -154,7 +149,6 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
                  let _ = std::fs::remove_file(&attempts_file);
                  println!("[!] Panic password triggered. Wiping and restarting...");
                  app.restart();
-                 return Ok(());
             }
         }
     } else {
@@ -168,7 +162,6 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
              let _ = std::fs::remove_file(&attempts_file);
              println!("[!] Default panic triggered. Wiping and restarting...");
              app.restart();
-             return Ok(());
         }
     }
 
@@ -182,13 +175,12 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
           let _ = std::fs::remove_file(&attempts_file);
           println!("[!] Max attempts reached. Wiping and restarting...");
           app.restart();
-          return Err("Maximum login attempts exceeded. Data wiped. Restarting...".to_string());
     }
 
     let conn_res = Connection::open_with_flags(&db_path, flags);
     
     // If connection opens, try to set key and query. If fail, increment attempts.
-    let mut conn = match conn_res {
+    let conn = match conn_res {
         Ok(c) => c,
         Err(e) => return Err(e.to_string()),
     };
@@ -318,7 +310,6 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
 #[tauri::command]
 pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(), String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    // Hash password before storing
     let mut hasher = Sha256::new();
     hasher.update(password);
     let hash = hex::encode(hasher.finalize());
@@ -622,10 +613,9 @@ pub async fn send_to_network(
                 }
             } else {
                 let mut final_bytes = bytes;
-                // Add padding to binary messages to normalize size
                 if final_bytes.len() < PACKET_SIZE {
                     let pad_len = PACKET_SIZE - final_bytes.len();
-                    final_bytes.extend(std::iter::repeat(0u8).take(pad_len)); // Use null bytes for binary padding
+                    final_bytes.extend(std::iter::repeat(0u8).take(pad_len)); 
                 }
 
                 tx.send(PacedMessage {
@@ -711,17 +701,14 @@ pub async fn flush_outbox(
 
 #[tauri::command]
 pub fn nuclear_reset(app: tauri::AppHandle, state: State<'_, DbState>) -> Result<(), String> {
-    // 1. Force close the connection and drop the lock
     {
         let mut conn = state.conn.lock().unwrap();
         if let Some(c) = conn.take() {
-            // Attempt to close nicely, though take() drops it
             let _ = c.close(); 
         }
         *conn = None;
     }
 
-    // 2. Clear filesystem
     let filename = get_db_filename();
     let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     
@@ -743,19 +730,21 @@ pub fn nuclear_reset(app: tauri::AppHandle, state: State<'_, DbState>) -> Result
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    // Force restart to ensure clean slate. 
     println!("[!] Nuclear reset initiated. Restarting application...");
     app.restart(); 
-    Ok(())
 }
 
 #[tauri::command]
 pub async fn save_file(app: tauri::AppHandle, data: Vec<u8>, filename: String) -> Result<(), String> {
     use std::io::Write;
     
-    // Use tauri's path resolver to get downloads folder
     let download_dir = app.path().download_dir().unwrap_or_else(|_| std::env::temp_dir());
-    let target_path = download_dir.join(&filename);
+    
+    let safe_filename = std::path::Path::new(&filename)
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("download"));
+    
+    let target_path = download_dir.join(safe_filename);
     
     println!("[*] Saving file to: {:?}", target_path);
     
@@ -1246,3 +1235,52 @@ pub fn signal_sign_message(state: State<'_, DbState>, message: String) -> Result
         Ok(base64::engine::general_purpose::STANDARD.encode(sig))
     })
 }
+
+#[tauri::command]
+pub async fn signal_get_peer_identity(state: tauri::State<'_, DbState>, address: String) -> Result<Option<(Vec<u8>, i32)>, String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    // address is "peer_hash:1"
+    let mut stmt = conn.prepare("SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1")
+        .map_err(|e| e.to_string())?;
+    
+    let mut rows = stmt.query(params![address])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let pub_key: Vec<u8> = row.get(0).map_err(|e| e.to_string())?;
+        let trust: i32 = row.get(1).map_err(|e| e.to_string())?;
+        Ok(Some((pub_key, trust)))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn signal_set_peer_trust(state: tauri::State<'_, DbState>, address: String, trust_level: i32) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
+        params![trust_level, address],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn signal_get_own_identity(state: tauri::State<'_, DbState>) -> Result<Vec<u8>, String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    let pub_key: Vec<u8> = conn.query_row(
+        "SELECT public_key FROM signal_identity LIMIT 1",
+        [],
+        |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+
+    Ok(pub_key)
+}
+

@@ -296,8 +296,58 @@ export class SignalManager {
         }
     }
 
+    /**
+     * Generates a numeric "Safety Number" (Fingerprint) for a peer.
+     * Combines both identity public keys and hashes them into a scannable format.
+     */
+    async getFingerprint(remoteHash: string): Promise<{ digits: string, isVerified: boolean } | null> {
+        try {
+            const ownIdBytes = await invoke<Uint8Array | number[]>('signal_get_own_identity');
+            const peerData = await invoke<[Uint8Array | number[], number] | null>('signal_get_peer_identity', {
+                address: `${remoteHash}:1`
+            });
+
+            if (!peerData) return null;
+
+            const [peerIdBytes, trustLevel] = peerData;
+
+            const ownArr = new Uint8Array(ownIdBytes);
+            const peerArr = new Uint8Array(peerIdBytes);
+
+            let combined: Uint8Array;
+            const ownHash = await this.getUserId();
+            if (remoteHash < ownHash) {
+                combined = new Uint8Array([...peerArr, ...ownArr]);
+            } else {
+                combined = new Uint8Array([...ownArr, ...peerArr]);
+            }
+
+            const hashBuffer = await crypto.subtle.digest('SHA-256', combined as any);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+
+            // Take bytes and convert to blocks of 5 digits
+            let digits = "";
+            for (let i = 0; i < 12; i++) {
+                const chunk = hashArray.slice(i * 2, (i * 2) + 2);
+                const val = (chunk[0] << 8) | chunk[1];
+                digits += (val % 100000).toString().padStart(5, '0') + (i === 5 ? '\n' : ' ');
+            }
+
+            return {
+                digits: digits.trim(),
+                isVerified: trustLevel === 1
+            };
+        } catch (e) {
+            console.error("Failed to generate fingerprint:", e);
+            return null;
+        }
+    }
+
     async verifySession(remoteHash: string, isVerified: boolean): Promise<void> {
-        // No-op
+        await invoke('signal_set_peer_trust', {
+            address: `${remoteHash}:1`,
+            trustLevel: isVerified ? 1 : 0
+        });
     }
 
     async replenishPreKeys(serverUrl: string): Promise<void> {

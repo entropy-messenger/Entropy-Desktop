@@ -61,7 +61,10 @@ fn main() {
             commands::set_panic_password,
             commands::vault_save_media,
             commands::vault_load_media,
-            commands::signal_sign_message
+            commands::signal_sign_message,
+            commands::signal_get_peer_identity,
+            commands::signal_set_peer_trust,
+            commands::signal_get_own_identity
         ])
         .setup(|app| {
             // Setup tray and menu as before

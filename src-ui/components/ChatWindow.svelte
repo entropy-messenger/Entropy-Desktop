@@ -55,6 +55,30 @@
   let volumeUnlisten: (() => void) | null = null;
   let currentVolume = $state(0);
   let viewingImage = $state<string | null>(null);
+  let safetyNumber = $state<{ digits: string; isVerified: boolean } | null>(null);
+  let loadingSafetyNumber = $state(false);
+
+  async function loadSafetyNumber() {
+    if (!activeChat || activeChat.isGroup) {
+        safetyNumber = null;
+        return;
+    }
+    loadingSafetyNumber = true;
+    try {
+        const result = await signalManager.getFingerprint(activeChat.peerHash);
+        safetyNumber = result;
+    } catch (e) {
+        console.error("Error loading safety number:", e);
+    } finally {
+        loadingSafetyNumber = false;
+    }
+  }
+
+  $effect(() => {
+    if (showGallery && activeChat && !activeChat.isGroup) {
+        loadSafetyNumber();
+    }
+  });
 
   $effect(() => {
     if (messageInput !== undefined && messageInputEl) {
@@ -640,13 +664,77 @@
                             {#if activeChat.pfp}<img src={activeChat.pfp} alt="" class="w-full h-full object-cover rounded-3xl" />{:else}{(activeChat.localNickname || activeChat.peerAlias || '?')[0].toUpperCase()}{/if}
                         </div>
                         <div class="text-center">
-                            <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerAlias || 'Peer'}</h3>
+                            <div class="flex items-center justify-center space-x-2">
+                                <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerAlias || 'Peer'}</h3>
+                                {#if !activeChat.isGroup && activeChat.isVerified}
+                                    <LucideShieldCheck size={18} class="text-entropy-accent" />
+                                {/if}
+                            </div>
                             {#if activeChat.localNickname && activeChat.peerAlias}
                                 <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Alias: {activeChat.peerAlias}</p>
                             {/if}
                             <p class="text-[11px] font-mono text-entropy-text-secondary break-all opacity-80">{activeChat.peerHash}</p>
                         </div>
                     </div>
+
+                    {#if !activeChat.isGroup}
+                        <div class="space-y-4 pt-2">
+                             <div class="flex items-center justify-between">
+                                <h4 class="text-[10px] font-black text-entropy-text-dim uppercase tracking-[0.1em]">Identity Verification</h4>
+                                 {#if activeChat.isVerified}
+                                    <div class="flex items-center space-x-1 text-entropy-accent animate-in fade-in zoom-in duration-300">
+                                        <LucideShieldCheck size={12} />
+                                        <span class="text-[9px] font-black uppercase">Verified</span>
+                                    </div>
+                                {:else}
+                                    <div class="flex items-center space-x-1 text-red-500/80">
+                                        <LucideShieldAlert size={12} />
+                                        <span class="text-[9px] font-black uppercase">Unverified</span>
+                                    </div>
+                                {/if}
+                             </div>
+
+                             <div class="bg-entropy-surface-light p-4 rounded-2xl border border-white/5 space-y-3">
+                                {#if loadingSafetyNumber}
+                                    <div class="flex flex-col items-center py-4 space-y-2">
+                                        <LucideLoader size={20} class="animate-spin text-entropy-primary" />
+                                        <span class="text-[10px] text-entropy-text-dim uppercase font-bold tracking-widest">Generating Fingerprint...</span>
+                                    </div>
+                                {:else if safetyNumber}
+                                    <div class="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[11px] text-entropy-text-primary text-center opacity-90 leading-relaxed bg-black/5 dark:bg-white/5 p-3 rounded-xl border border-white/5">
+                                        {#each safetyNumber.digits.split('\n') as line}
+                                            {#each line.split(' ') as part}
+                                                <div class="tracking-widest">{part}</div>
+                                            {/each}
+                                        {/each}
+                                    </div>
+
+                                    <div class="pt-2">
+                                        <button 
+                                            onclick={async () => {
+                                                const verified = !activeChat!.isVerified;
+                                                await toggleVerification(activeChat!.peerHash, verified);
+                                                // Sync local safetyNumber state to prevent flicker before store update propagates
+                                                if (safetyNumber) safetyNumber.isVerified = verified;
+                                                addToast(verified ? "Session Verified" : "Verification Removed", verified ? 'success' : 'info');
+                                            }}
+                                            class="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-[0.98] shadow-lg
+                                            {activeChat.isVerified 
+                                                ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20' 
+                                                : 'bg-entropy-accent text-white hover:bg-entropy-accent/90 shadow-entropy-accent/20'}"
+                                        >
+                                            {activeChat.isVerified ? 'Remove Verification' : 'Verify Identity'}
+                                        </button>
+                                        <p class="text-[9px] text-entropy-text-dim text-center mt-3 leading-relaxed px-2">
+                                            Verify the safety number above with this contact via another secure channel.
+                                        </p>
+                                    </div>
+                                {:else}
+                                    <div class="text-[10px] text-center text-red-500/80 font-bold py-2">Encryption session not established.</div>
+                                {/if}
+                             </div>
+                        </div>
+                    {/if}
                     
                     {#if activeChat.isGroup}
                         <div class="space-y-2">
