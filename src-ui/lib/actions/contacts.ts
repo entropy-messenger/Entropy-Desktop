@@ -50,7 +50,7 @@ export const startHeartbeat = () => {
         const state = get(userStore);
         if (state.identityHash && state.isConnected) {
             Object.keys(state.chats).forEach(peerHash => {
-                if (!state.chats[peerHash].isGroup && state.privacySettings.lastSeen === 'everyone') {
+                if (!state.chats[peerHash].isGroup && state.privacySettings.lastSeen === 'everyone' && state.privacySettings.readReceipts) {
                     setOnlineStatus(peerHash, true);
                 }
             });
@@ -113,6 +113,7 @@ export const broadcastProfile = async (peerHash: string) => {
 export const sendTypingStatus = async (peerIdentityHash: string, isTyping: boolean) => {
     const state = get(userStore);
     if (state.chats[peerIdentityHash]?.isGroup || state.blockedHashes.includes(peerIdentityHash)) return;
+    if (!state.privacySettings.readReceipts) return;
 
     const contentObj = { type: 'typing', isTyping };
     const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
@@ -121,7 +122,7 @@ export const sendTypingStatus = async (peerIdentityHash: string, isTyping: boole
 
 export const setOnlineStatus = async (peerIdentityHash: string, isOnline: boolean) => {
     const state = get(userStore);
-    if (state.blockedHashes.includes(peerIdentityHash)) return;
+    if (state.blockedHashes.includes(peerIdentityHash) || !state.privacySettings.readReceipts) return;
     const contentObj = { type: 'presence', isOnline };
     const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
     network.sendVolatile(peerIdentityHash, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
@@ -183,36 +184,28 @@ export const registerGlobalNickname = async (nickname: string) => {
     if (!state.identityHash) return;
 
     try {
-        const serverUrl = get(userStore).relayUrl;
-        const challengeRes = await fetch(`${serverUrl}/pow/challenge?nickname=${encodeURIComponent(nickname)}&identity_hash=${state.identityHash}`);
-        const { seed, difficulty } = await challengeRes.json();
+        // Fetch challenge via WebSocket
+        const challenge = await network.request('pow_challenge', { nickname, identity_hash: state.identityHash });
+        const { seed, difficulty } = challenge;
         const { nonce } = await minePoW(seed, difficulty, nickname);
 
         const signature = await signalManager.signMessage(nickname);
 
-        const response = await fetch(`${serverUrl}/nickname/register`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-PoW-Seed': seed,
-                'X-PoW-Nonce': nonce.toString()
-            },
-            body: JSON.stringify({
-                nickname,
-                identity_hash: state.identityHash,
-                identityKey: "plaintext_no_key",
-                signature
-            })
+        const response = await network.request('nickname_register', {
+            nickname,
+            identity_hash: state.identityHash,
+            signature,
+            seed,
+            nonce
         });
 
-        const result = await response.json();
-        if (result.status === 'success') {
+        if (response.status === 'success') {
             console.log("Global nickname registered:", nickname);
             userStore.update(s => ({ ...s, myAlias: nickname }));
             return { success: true };
         } else {
-            console.error("Nickname registration failed:", result.error);
-            return { success: false, error: result.error };
+            console.error("Nickname registration failed:", response.error);
+            return { success: false, error: response.error };
         }
     } catch (e) {
         console.error("Nickname registration error:", e);
@@ -232,11 +225,9 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
     }
 
     try {
-        const serverUrl = get(userStore).relayUrl;
-        const response = await fetch(`${serverUrl}/nickname/lookup?name=${encodeURIComponent(input)}`);
-        if (response.status === 200) {
-            const data = await response.json();
-            return data[nickname] || data.identity_hash || null;
+        const data = await network.request('nickname_lookup', { name: input });
+        if (data && !data.error) {
+            return data.identity_hash || null;
         }
         return null;
     } catch (e) {

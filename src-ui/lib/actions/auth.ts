@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { signalManager } from '../signal_manager';
 import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
-import { minePoW, initCrypto } from '../crypto';
+import { minePoW, initCrypto, toBase64, fromHex } from '../crypto';
 import { statusTimeouts, setOnlineStatus, startHeartbeat, broadcastProfile } from './contacts';
 import { initVault, vaultLoad, vaultSave } from '../secure_storage';
 import type { Chat } from '../types';
@@ -129,10 +129,12 @@ export const authenticate = async (identityHash: string) => {
                 }
             });
         } else {
-            console.debug("No session token. Starting PoW mining...");
+            console.debug("No session token. Starting PoW mining via WebSocket...");
             userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
-            const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${identityHash}`);
-            const { seed, difficulty } = await challengeRes.json();
+
+            // Fetch challenge via normalized WebSocket instead of HTTP
+            const challenge = await network.request('pow_challenge', { identity_hash: identityHash });
+            const { seed, difficulty } = challenge;
 
             const pow = await minePoW(seed, difficulty, identityHash);
 
@@ -154,12 +156,7 @@ export const refreshDecoys = async (serverUrl: string) => {
         if (state.isConnected) {
             const data = await network.request('fetch_key_random', { count: 20 });
             if (data && data.hashes) {
-                userStore.update(s => ({ ...s, decoyHashes: data.hashes }));
-            }
-        } else {
-            const response = await fetch(`${serverUrl}/keys/random?count=20`);
-            if (response.ok) {
-                const data = await response.json();
+                console.log(`[Privacy] Refreshed decoy pool: ${data.hashes.length} entries`);
                 userStore.update(s => ({ ...s, decoyHashes: data.hashes }));
             }
         }
@@ -177,43 +174,52 @@ export const burnAccount = async (serverUrl: string) => {
         const state = get(userStore);
         if (state.identityHash) {
             try {
-                const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${state.identityHash}`);
-                const { seed, difficulty } = await challengeRes.json();
+                addToast("Authenticating burn request...", 'info');
 
-                const { nonce } = await minePoW(seed, 5, state.identityHash);
+                // Get challenge via WebSocket
+                const challenge = await network.request('pow_challenge', { identity_hash: state.identityHash, intent: 'burn' });
+                const { seed, difficulty } = challenge;
 
-                const signature = await signalManager.signMessage("BURN:" + state.identityHash);
+                // 1. Solve PoW
+                const { nonce } = await minePoW(seed, 4, state.identityHash);
 
-                const response = await fetch(`${serverUrl}/account/burn`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-PoW-Seed': seed,
-                        'X-PoW-Nonce': nonce.toString()
-                    },
-                    body: JSON.stringify({
-                        identity_hash: state.identityHash,
-                        identityKey: "plaintext_no_key",
-                        signature
-                    })
+                // 2. Sign the canonical string "BURN_ACCOUNT:<hash>" (consistent with server)
+                const signature = await signalManager.signMessage("BURN_ACCOUNT:" + state.identityHash);
+
+                // 3. Send burn request via WebSocket
+                const response = await network.request('account_burn', {
+                    identity_hash: state.identityHash,
+                    signature,
+                    seed,
+                    nonce
                 });
 
-                if (response.ok) {
+                if (response.status === 'success') {
                     console.log("Network account burn successful.");
+                    addToast("Server account deleted.", 'success');
                 } else {
-                    console.error("Network account burn failed:", await response.text());
+                    console.error("Network account burn failed:", response.error);
+                    addToast("Server deletion failed: " + response.error, 'error');
+                    if (!await showConfirm("Server-side deletion failed. Wipe local data and restart anyway?", "Relay Error")) return;
                 }
             } catch (e) {
                 console.error("Failed to burn network account:", e);
-                if (!await showConfirm("Relay burn failed. Wipe local data anyway?", "Relay Error")) return;
+                if (!await showConfirm("Relay burn failed (Network Error). Wipe local data anyway?", "Relay Error")) return;
             }
         }
-
-        localStorage.clear();
-        await invoke('nuclear_reset');
-        window.location.reload();
     }
-};
+
+    try {
+        localStorage.clear();
+        addToast("Local data wiped. Restarting Entropy...", 'info');
+        await new Promise(r => setTimeout(r, 2000));
+        await invoke('nuclear_reset');
+    } catch (err) {
+        console.error("Local wipe/restart failed:", err);
+        addToast("Critical: Local reset failed - " + err, 'error');
+    }
+}
+
 
 
 /**

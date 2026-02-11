@@ -152,8 +152,8 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
                  let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
                  let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
                  let _ = std::fs::remove_file(&attempts_file);
-                 // Reset panic file to avoid accidental double-nuke or to reset state? 
-                 // Actually better to keep it or delete it? Let's keep it so the password still "works" as a trigger.
+                 println!("[!] Panic password triggered. Wiping and restarting...");
+                 app.restart();
                  return Ok(());
             }
         }
@@ -166,6 +166,8 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
              let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
              let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
              let _ = std::fs::remove_file(&attempts_file);
+             println!("[!] Default panic triggered. Wiping and restarting...");
+             app.restart();
              return Ok(());
         }
     }
@@ -177,8 +179,10 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
          let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
          let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
          let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
-         let _ = std::fs::remove_file(&attempts_file);
-         return Err("Maximum login attempts exceeded. Data wiped.".to_string());
+          let _ = std::fs::remove_file(&attempts_file);
+          println!("[!] Max attempts reached. Wiping and restarting...");
+          app.restart();
+          return Err("Maximum login attempts exceeded. Data wiped. Restarting...".to_string());
     }
 
     let conn_res = Connection::open_with_flags(&db_path, flags);
@@ -702,7 +706,9 @@ pub fn nuclear_reset(app: tauri::AppHandle, state: State<'_, DbState>) -> Result
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    app.restart(); // Force restart to apply changes immediately
+    // Force restart to ensure clean slate. 
+    println!("[!] Nuclear reset initiated. Restarting application...");
+    app.restart(); 
     Ok(())
 }
 
@@ -1195,9 +1201,11 @@ pub fn signal_sign_message(state: State<'_, DbState>, message: String) -> Result
     tauri::async_runtime::block_on(async move {
         let store = SqliteSignalStore::new(&state);
         let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
-        let mut rng = StdRng::from_os_rng();
+        
+        let mut rng = rand::rngs::StdRng::from_os_rng();
         let sig = kp.private_key().calculate_signature(message.as_bytes(), &mut rng)
             .map_err(|e| e.to_string())?;
+        
         Ok(base64::engine::general_purpose::STANDARD.encode(sig))
     })
 }

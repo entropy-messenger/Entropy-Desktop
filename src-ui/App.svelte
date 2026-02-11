@@ -108,10 +108,13 @@
     async function handleNuclearReset() {
         if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Nuclear Reset")) return;
         try {
-            await invoke('nuclear_reset');
             localStorage.clear();
-            window.location.reload();
+            addToast("Vault wiped. Restarting Entropy...", 'info');
+            // Allow toast to render
+            await new Promise(r => setTimeout(r, 2000));
+            await invoke('nuclear_reset');
         } catch (e) {
+            console.error("Reset failed:", e);
             addToast("Reset failed: " + e, 'error');
         }
     }

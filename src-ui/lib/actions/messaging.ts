@@ -339,6 +339,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             };
             await attachmentStore.put(incomingMsgId, fromHex(parsed.data));
         } else if (parsed.type === 'typing') {
+            if (!state.privacySettings.readReceipts) return;
             if (typingTimeouts[senderHash]) clearTimeout(typingTimeouts[senderHash]);
 
             userStore.update(s => {
@@ -365,6 +366,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             }
             return;
         } else if (parsed.type === 'presence') {
+            if (!state.privacySettings.readReceipts) return;
             if (parsed.isOnline) {
                 markOnline(senderHash);
                 if (!state.chats[senderHash]?.pfp) broadcastProfile(senderHash);

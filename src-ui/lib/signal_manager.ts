@@ -56,6 +56,14 @@ export class SignalManager {
     async ensureKeysUploaded(serverUrl: string, force: boolean = false) {
         const rawBundle = await invoke<any>('signal_get_bundle');
 
+        if (!this.userIdentity && rawBundle.identityKey) {
+            this.userIdentity = await calculateIdentityHash(rawBundle.identityKey);
+        }
+
+        if (!this.userIdentity) {
+            throw new Error("Cannot upload keys: No identity hash available");
+        }
+
         const bundle = {
             identity_hash: this.userIdentity,
             registrationId: rawBundle.registrationId,
@@ -78,24 +86,23 @@ export class SignalManager {
             }
         };
 
-        const challengeRes = await fetch(`${serverUrl}/pow/challenge?identity_hash=${this.userIdentity}`);
-        const { seed, difficulty } = await challengeRes.json();
+        const { network } = await import('./network');
+
+        // Fetch challenge via WebSocket
+        const challenge = await network.request('pow_challenge', { identity_hash: this.userIdentity });
+        const { seed, difficulty } = challenge;
         const { nonce } = await minePoW(seed, difficulty, this.userIdentity);
 
-        const res = await fetch(`${serverUrl}/keys/upload`, {
-            method: 'POST',
-            body: JSON.stringify(bundle),
-            headers: {
-                'Content-Type': 'application/json',
-                'X-PoW-Seed': seed,
-                'X-PoW-Nonce': nonce.toString()
-            }
+        // Upload keys via WebSocket
+        const res = await network.request('keys_upload', {
+            ...bundle,
+            seed,
+            nonce
         });
 
-        if (!res.ok) {
-            const err = await res.text();
-            console.error("Key upload failed:", res.status, err);
-            throw new Error(`Critical: Key upload failed: ${err}`);
+        if (res.status !== 'success') {
+            console.error("Key upload failed:", res.error);
+            throw new Error(`Critical: Key upload failed: ${res.error}`);
         }
         console.log("Keys uploaded successfully.");
     }
