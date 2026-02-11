@@ -17,6 +17,7 @@
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { invoke } from '@tauri-apps/api/core';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
+  import { network } from '../lib/network';
 
   /**
    * Primary navigation and configuration hub.
@@ -492,11 +493,14 @@
                             </h3>
                             <p class="text-xs text-gray-500 leading-relaxed">Route your traffic to hide your IP address. (Tor requires a local Tor instance on port 9050).</p>
                              <div class="flex bg-gray-100 p-1 rounded-xl mt-3">
-                                <button onclick={() => updatePrivacy({ routingMode: 'direct' })} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'direct' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">DIRECT</button>
-                                <button onclick={() => updatePrivacy({ routingMode: 'tor' })} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'tor' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">TOR</button>
+                                <button onclick={() => { updatePrivacy({ routingMode: 'direct' }); network.reconnect(); }} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'direct' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">DIRECT</button>
+                                <button onclick={() => { updatePrivacy({ routingMode: 'tor' }); network.reconnect(); }} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'tor' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">TOR</button>
                                 <button onclick={async () => {
                                     const url = await showPrompt("Enter SOCKS5 Proxy URL (e.g. socks5://127.0.0.1:1080):", $userStore.privacySettings.proxyUrl || "", "Custom Proxy");
-                                    if (url) updatePrivacy({ routingMode: 'custom', proxyUrl: url });
+                                    if (url) {
+                                        updatePrivacy({ routingMode: 'custom', proxyUrl: url });
+                                        network.reconnect();
+                                    }
                                 }} class="flex-1 py-1.5 text-[9px] font-bold rounded-lg transition {$userStore.privacySettings.routingMode === 'custom' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}">CUSTOM</button>
                             </div>
                         </div>
@@ -535,7 +539,7 @@
                             <img src="/logo.png" alt="logo" class="w-8 h-8 object-contain shrink-0 opacity-40 ml-[-4px]" />
                             <div>
                                 <div class="text-[11px] font-bold text-blue-900 uppercase tracking-widest mb-1">E2E Integrity</div>
-                                <p class="text-[10px] text-blue-700 leading-snug">All privacy signals are encrypted. Even routing configurations are only used locally to establish the secure tunnel.</p>
+                                <p class="text-[10px] text-blue-700 leading-snug">All privacy signals are encrypted.</p>
                             </div>
                         </div>
 

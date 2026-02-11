@@ -383,6 +383,22 @@ pub fn vault_delete(state: State<'_, DbState>, key: String) -> Result<(), String
 }
 
 #[tauri::command]
+pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
+    let mut sender_lock = state.sender.lock().unwrap();
+    *sender_lock = None;
+    
+    let mut cancel_lock = state.cancel.lock().unwrap();
+    if let Some(token) = cancel_lock.take() {
+        token.cancel();
+    }
+    
+    let mut queue_lock = state.queue.lock().unwrap();
+    queue_lock.clear();
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn connect_network(
     app: tauri::AppHandle, 
     state: State<'_, NetworkState>, 
@@ -392,6 +408,16 @@ pub async fn connect_network(
     let target_url = Url::parse(&url).map_err(|e| e.to_string())?;
     let host = target_url.host_str().ok_or("Invalid host")?;
     let port = target_url.port_or_known_default().ok_or("Invalid port")?;
+
+    let token = {
+        let mut cancel_lock = state.cancel.lock().unwrap();
+        if let Some(t) = cancel_lock.take() {
+            t.cancel();
+        }
+        let t = tokio_util::sync::CancellationToken::new();
+        *cancel_lock = Some(t.clone());
+        t
+    };
 
     let (mut write, mut read) = if let Some(p_url) = proxy_url {
         let proxy_uri = Url::parse(&p_url).map_err(|e| format!("Invalid proxy URL: {}", e))?;
@@ -430,10 +456,15 @@ pub async fn connect_network(
     
     // Paced Write Loop (Traffic Normalization)
     let app_handle = app.clone();
+    let write_token = token.clone();
     
     tokio::spawn(async move {
         let state = app_handle.state::<NetworkState>();
         loop {
+            if write_token.is_cancelled() {
+                break;
+            }
+
             // Priority 1: Check for real messages to send
             let next_msg = {
                 let mut q = state.queue.lock().unwrap();
@@ -494,25 +525,31 @@ pub async fn connect_network(
     
     // Read loop
     let app_handle = app.clone();
+    let read_token = token;
     tokio::spawn(async move {
-        while let Some(res) = read.next().await {
-            match res {
-                Ok(msg) => {
-                    match msg {
-                        Message::Text(text) => {
-                            let _ = app_handle.emit("network-msg", text.to_string());
-                        }
-                        Message::Binary(bin) => {
-                            let _ = app_handle.emit("network-bin", bin.to_vec());
-                        }
-                        Message::Close(_) => {
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                Err(_) => {
+        loop {
+            tokio::select! {
+                _ = read_token.cancelled() => {
                     break;
+                }
+                res = read.next() => {
+                    match res {
+                        Some(Ok(msg)) => {
+                            match msg {
+                                Message::Text(text) => {
+                                    let _ = app_handle.emit("network-msg", text.to_string());
+                                }
+                                Message::Binary(bin) => {
+                                    let _ = app_handle.emit("network-bin", bin.to_vec());
+                                }
+                                Message::Close(_) => {
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => break,
+                    }
                 }
             }
         }

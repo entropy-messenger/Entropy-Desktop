@@ -39,6 +39,7 @@ commands.allow = [
     "protocol_group_decrypt",
     "protocol_process_group_distribution",
     "connect_network",
+    "disconnect_network",
     "send_to_network",
     "protocol_export_vault",
     "protocol_import_vault",

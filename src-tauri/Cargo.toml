@@ -39,6 +39,7 @@ tar = "0.4.44"
 flate2 = "1.1.9"
 aes-gcm = "0.10"
 tokio-rustls = "0.26.4"
+tokio-util = "0.7.18"
 
 [features]
 default = ["custom-protocol"]

@@ -26,6 +26,7 @@ fn main() {
         .manage(NetworkState {
             queue: Mutex::new(std::collections::VecDeque::new()),
             sender: Mutex::new(None),
+            cancel: Mutex::new(None),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -39,6 +40,7 @@ fn main() {
             commands::vault_load,
             commands::crypto_sha256,
             commands::connect_network,
+            commands::disconnect_network,
             commands::send_to_network,
             commands::flush_outbox,
             commands::nuclear_reset,

@@ -17,6 +17,7 @@ export class NetworkLayer {
     private isAuthenticated = false;
     private isConnected = false;
     private lastActivity = Date.now();
+    private isManualDisconnect = false;
 
     /** Tracking table for asynchronous request-response cycles over the socket */
     private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
@@ -67,8 +68,15 @@ export class NetworkLayer {
                 await invoke('connect_network', { url: this.url, proxyUrl });
                 this.isConnected = true;
                 this.onConnect();
-            } catch (e) {
-                console.error("Native connection failed:", e);
+            } catch (e: any) {
+                const errorStr = e.toString();
+                console.error("Native connection failed:", errorStr);
+
+                if (errorStr.includes("Proxy connection failed")) {
+                    const { addToast } = await import('./stores/ui');
+                    addToast("Privacy routing failed. Is Tor/Proxy running?", 'error');
+                }
+
                 this.retry();
             } finally {
                 this.connectingPromise = null;
@@ -76,6 +84,38 @@ export class NetworkLayer {
         })();
 
         return this.connectingPromise;
+    }
+
+    /**
+     * Forcefully terminates the active connection and clears background tasks.
+     */
+    async disconnect() {
+        console.log("[Network] Manual disconnect requested.");
+        this.isManualDisconnect = true;
+        try {
+            await invoke('disconnect_network');
+        } catch (e) {
+            console.error("[Network] Native disconnect failed:", e);
+        }
+
+        this.isConnected = false;
+        this.isAuthenticated = false;
+
+        userStore.update(s => ({
+            ...s,
+            isConnected: false,
+            connectionStatus: 'disconnected'
+        }));
+    }
+
+    /**
+     * Cycles the connection to apply new routing/proxy settings.
+     */
+    async reconnect() {
+        await this.disconnect();
+        // Shift context to allow native cleanup
+        await new Promise(r => setTimeout(r, 600));
+        return this.connect();
     }
 
     private stabilityTimer: any = null;
@@ -99,6 +139,15 @@ export class NetworkLayer {
 
     private onDisconnect() {
         console.log('Native network layer disconnected');
+
+        if (this.isManualDisconnect) {
+            console.log("[Network] Ignoring disconnect event due to manual cycle.");
+            this.isManualDisconnect = false;
+            this.isConnected = false;
+            this.isAuthenticated = false;
+            userStore.update(s => ({ ...s, isConnected: false, connectionStatus: 'disconnected' }));
+            return;
+        }
 
         if (this.stabilityTimer) {
             clearTimeout(this.stabilityTimer);
@@ -305,11 +354,6 @@ export class NetworkLayer {
         });
     }
 
-    disconnect() {
-        this.isConnected = false;
-        this.isAuthenticated = false;
-        userStore.update(s => ({ ...s, isConnected: false, connectionStatus: 'disconnected' }));
-    }
 }
 
 export const network = new NetworkLayer();
