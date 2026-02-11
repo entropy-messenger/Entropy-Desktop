@@ -4,7 +4,7 @@
   import { 
     sendMessage, sendFile, sendVoiceNote, 
     sendTypingStatus, setLocalNickname, toggleStar, 
-    setReplyingTo,
+    setReplyingTo, leaveGroup, addToGroup,
     bulkDelete, bulkStar, toggleBlock, toggleVerification 
   } from '../lib/store';
   import { signalManager } from '../lib/signal_manager';
@@ -406,9 +406,13 @@
                                     <button onclick={() => {handleSetLocalNickname(); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideEdit2 size={16} /> <span>Set Nickname</span></button>
                                     <button onclick={() => {selectionMode = true; showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideCheckIcon size={16} /> <span>Select Messages</span></button>
                                     <div class="h-px bg-entropy-border my-1"></div>
-                                    {#if !activeChat.isGroup}
-                                        <button onclick={() => {toggleBlock(activeChat.peerHash); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-500/10 flex items-center space-x-3">
-                                            <LucideBan size={16} /> <span>{$userStore.blockedHashes.includes(activeChat.peerHash) ? 'Unblock Contact' : 'Block Contact'}</span>
+                                    {#if activeChat.isGroup}
+                                        <button onclick={async () => { if (await showConfirm("Are you sure you want to leave this group?", "Leave Group")) { leaveGroup(activeChat!.peerHash); showOptions = false; } }} class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-500/10 flex items-center space-x-3">
+                                            <LucideTrash2 size={16} /> <span>Leave Group</span>
+                                        </button>
+                                    {:else}
+                                        <button onclick={() => {toggleBlock(activeChat!.peerHash); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-500/10 flex items-center space-x-3">
+                                            <LucideBan size={16} /> <span>{$userStore.blockedHashes.includes(activeChat!.peerHash) ? 'Unblock Contact' : 'Block Contact'}</span>
                                         </button>
                                     {/if}
                                 </div>
@@ -454,6 +458,14 @@
             <div bind:this={scrollContainer} class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar chat-bg">
 
                 {#each activeChat.messages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase())) as msg (msg.id)}
+                    {#if msg.type === 'system'}
+                        <div class="flex justify-center my-4">
+                            <div class="bg-entropy-surface-light px-4 py-1.5 rounded-full border border-entropy-border/5 flex items-center space-x-2 shadow-sm">
+                                <LucideInfo size={12} class="text-entropy-primary" />
+                                <span class="text-[11px] font-bold text-entropy-text-dim uppercase tracking-widest">{msg.content}</span>
+                            </div>
+                        </div>
+                    {:else}
                     <div id="msg-{msg.id}" class="flex {msg.isMine ? 'justify-end' : 'justify-start'} group items-center relative z-10">
                         {#if selectionMode}
                             <div class="mr-4 order-first">
@@ -528,7 +540,8 @@
                             {/if}
                         </div>
                     </div>
-            {/each}
+                    {/if}
+                {/each}
             </div>
             
             {#if replyingTo}
@@ -645,6 +658,37 @@
                                 </button>
                             </div>
                         </div>
+
+                        <div class="space-y-2">
+                             <div class="flex justify-between items-center">
+                                <h4 class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest">Members ({activeChat.members?.length || 0})</h4>
+                                <button onclick={async () => {
+                                    let input = await showPrompt("Enter Peer Hash, Nickname, or link:", "", "Add Member");
+                                    if (input) {
+                                        input = input.trim().replace(/^entropy:\/\//, '');
+                                        if (input.length === 64) {
+                                            addToGroup(activeChat!.peerHash, [input]);
+                                            addToast("Invitation sent!", 'success');
+                                        } else {
+                                            addToast("Please provide a full 64-char ID for now.", 'info');
+                                        }
+                                    }
+                                }} class="text-[10px] font-black text-entropy-primary hover:underline uppercase">Add Member</button>
+                             </div>
+                             <div class="space-y-1 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                                {#each activeChat.members || [] as member}
+                                    <div class="flex items-center space-x-2 bg-entropy-surface-light p-2 rounded-lg">
+                                        <div class="w-5 h-5 rounded-md bg-entropy-primary/20 flex items-center justify-center text-[8px] font-bold text-entropy-primary">
+                                            {member.slice(0, 2).toUpperCase()}
+                                        </div>
+                                        <span class="text-[10px] font-mono text-entropy-text-secondary truncate flex-1">{member.slice(0, 16)}...</span>
+                                        {#if member === $userStore.identityHash}
+                                            <span class="text-[8px] font-black bg-entropy-primary/10 text-entropy-primary px-1 rounded">YOU</span>
+                                        {/if}
+                                    </div>
+                                {/each}
+                             </div>
+                        </div>
                     {/if}
 
                     <div class="space-y-4">
@@ -689,6 +733,18 @@
                             </div>
                         {/if}
                     </div>
+
+                    {#if activeChat.isGroup}
+                        <div class="pt-4 border-t border-entropy-border/10">
+                            <button 
+                                onclick={async () => { if (await showConfirm("Are you sure you want to leave this group? All history will be deleted.", "Leave Group")) { leaveGroup(activeChat!.peerHash); showGallery = false; } }}
+                                class="w-full flex items-center justify-center space-x-2 p-3 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500/20 font-bold text-xs transition active:scale-[0.98]"
+                            >
+                                <LucideTrash2 size={16} />
+                                <span>Leave Group</span>
+                            </button>
+                        </div>
+                    {/if}
                 </div>
             </div>
         {/if}

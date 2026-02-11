@@ -305,10 +305,82 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
         if (parsed.type === 'group_invite' || parsed.type === 'group_invite_v2') {
             userStore.update(s => {
                 if (!s.chats[parsed.groupId]) {
-                    s.chats[parsed.groupId] = { peerHash: parsed.groupId, peerAlias: parsed.name, messages: [], unreadCount: 1, isGroup: true, members: parsed.members };
+                    s.chats[parsed.groupId] = {
+                        peerHash: parsed.groupId,
+                        peerAlias: parsed.name,
+                        messages: [],
+                        unreadCount: 0,
+                        isGroup: true,
+                        members: parsed.members
+                    };
                 }
                 return s;
             });
+
+            const inviterAlias = state.chats[senderHash]?.localNickname || state.chats[senderHash]?.peerAlias || senderHash.slice(0, 8);
+            const inviteMsg: Message = {
+                id: incomingMsgId,
+                timestamp: Date.now(),
+                senderHash: senderHash,
+                senderAlias: inviterAlias,
+                content: `${inviterAlias} invited you to the group "${parsed.name}"`,
+                type: 'system',
+                groupId: parsed.groupId,
+                isMine: false,
+                status: 'delivered'
+            };
+            addMessage(parsed.groupId, inviteMsg);
+            return;
+        }
+
+        if (parsed.type === 'group_leave') {
+            const gid = parsed.groupId;
+            const leaver = parsed.sender || senderHash;
+            userStore.update(s => {
+                const chat = s.chats[gid];
+                if (chat && chat.isGroup && chat.members) {
+                    chat.members = chat.members.filter(m => m !== leaver);
+                    s.chats[gid] = { ...chat };
+                }
+                return { ...s, chats: { ...s.chats } };
+            });
+
+            const leaveMsg: Message = {
+                id: incomingMsgId,
+                timestamp: Date.now(),
+                senderHash: leaver,
+                senderAlias: state.chats[leaver]?.peerAlias || leaver.slice(0, 8),
+                content: `${state.chats[leaver]?.peerAlias || leaver.slice(0, 8)} left the group`,
+                type: 'system',
+                groupId: gid,
+                isMine: false,
+                status: 'delivered'
+            };
+            addMessage(gid, leaveMsg);
+            return;
+        }
+
+        if (parsed.type === 'group_update') {
+            const gid = parsed.groupId;
+            userStore.update(s => {
+                if (s.chats[gid]) {
+                    s.chats[gid].members = parsed.members;
+                }
+                return { ...s, chats: { ...s.chats } };
+            });
+
+            const updateMsg: Message = {
+                id: incomingMsgId,
+                timestamp: Date.now(),
+                senderHash: senderHash,
+                senderAlias: 'System',
+                content: `Group membership updated`,
+                type: 'system',
+                groupId: gid,
+                isMine: false,
+                status: 'delivered'
+            };
+            addMessage(gid, updateMsg);
             return;
         }
 

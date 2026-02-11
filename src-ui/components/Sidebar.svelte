@@ -126,9 +126,9 @@
    * Initiates a new peer-to-peer conversation by resolving a 64-character hash or a global nickname.
    */
   const createChatPrompt = async () => {
-    let input = await showPrompt("Enter Peer ID Hash (64-char Hex) or Global Nickname:", "", "New Chat");
+    let input = await showPrompt("Enter Peer ID Hash, Global Nickname, or entropy:// link:", "", "New Chat");
     if (!input) return;
-    input = input.trim();
+    input = input.trim().replace(/^entropy:\/\//, '');
 
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
         startChat(input);

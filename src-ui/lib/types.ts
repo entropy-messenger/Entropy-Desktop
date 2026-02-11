@@ -17,7 +17,7 @@ export interface Message {
     senderHash: string;
     senderAlias?: string;
     content: string;
-    type: 'text' | 'voice_note' | 'file' | 'signaling';
+    type: 'text' | 'voice_note' | 'file' | 'signaling' | 'system';
     attachment?: {
         url?: string;
         fileName?: string;

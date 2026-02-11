@@ -196,13 +196,27 @@ export class SignalManager {
     }
 
     async decrypt(senderHash: string, ciphertext: any): Promise<any> {
-        if (!ciphertext || typeof ciphertext !== 'object' || ciphertext.type === undefined || !ciphertext.body) {
+        if (!ciphertext || typeof ciphertext !== 'object' || !ciphertext.body) {
             return null;
         }
+
+        // Handle server-side wrapping for group messages
+        let signalMsg = ciphertext;
+        if (ciphertext.type === 'sealed_message' && ciphertext.msg_type !== undefined) {
+            signalMsg = {
+                ...ciphertext,
+                type: ciphertext.msg_type
+            };
+        }
+
+        if (signalMsg.type === undefined) {
+            return null;
+        }
+
         try {
             const plaintext = await invoke<string>('signal_decrypt', {
                 remoteHash: senderHash,
-                msgObj: ciphertext
+                msgObj: signalMsg
             });
             return JSON.parse(plaintext);
         } catch (e) {
