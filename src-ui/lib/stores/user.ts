@@ -38,7 +38,8 @@ const initialState: AppState = {
         profilePhoto: 'everyone',
         routingMode: 'direct',
         proxyUrl: 'socks5://127.0.0.1:9050',
-        decoyMode: true
+        decoyMode: true,
+        theme: 'dark'
     },
     sessionToken: null,
     connectionStatus: 'disconnected',

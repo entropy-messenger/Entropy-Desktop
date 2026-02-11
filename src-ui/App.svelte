@@ -7,11 +7,20 @@
   import Sidebar from './components/Sidebar.svelte';
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
-  import { LucideWifiOff, LucideShieldCheck, LucideLock, LucideFingerprint } from 'lucide-svelte';
+  import { LucideWifiOff, LucideShieldCheck, LucideLock, LucideFingerprint, LucideEye, LucideEyeOff } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
   import { hasVault } from './lib/secure_storage';
   import { signalManager } from './lib/signal_manager';
+  
+  $effect(() => {
+    const isDark = $userStore.privacySettings.theme === 'dark';
+    if (isDark) {
+      document.documentElement.classList.add('theme-dark');
+    } else {
+      document.documentElement.classList.remove('theme-dark');
+    }
+  });
   
   /**
    * Main application entry point.
@@ -22,8 +31,11 @@
   import { addToast, showConfirm } from './lib/stores/ui';
 
   let password = $state("");
+  let confirmPassword = $state("");
+  let showPassword = $state(false);
   let isInitializing = $state(true);
   let hasExistingIdentity = $state(false);
+  let showStarredMessages = $state(false);
 
 
   /**
@@ -181,73 +193,117 @@
 
 <svelte:window oncontextmenu={handleContextMenu} onkeydown={handleKeydown} />
 
-<main class="h-screen w-screen bg-gray-50 overflow-hidden flex flex-col font-sans antialiased text-gray-900 select-none">
+<main class="h-screen w-screen bg-entropy-bg overflow-hidden flex flex-col font-sans antialiased text-entropy-text-primary select-none">
     
     {#if !$userStore.identityHash}
         
-        <div class="flex-1 flex items-center justify-center bg-[#f8fafc] relative overflow-hidden">
+        <div class="flex-1 flex items-center justify-center bg-entropy-bg relative overflow-hidden">
             
             <div class="absolute inset-0 pointer-events-none">
-                <div class="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-blue-400/10 blur-[150px] rounded-full animate-pulse"></div>
-                <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-indigo-400/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
-                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30%] h-[30%] bg-purple-400/5 blur-[100px] rounded-full"></div>
+                <div class="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-entropy-primary/10 blur-[150px] rounded-full animate-pulse"></div>
+                <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-entropy-accent/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
+                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30%] h-[30%] bg-entropy-primary/5 blur-[100px] rounded-full"></div>
             </div>
 
-            <div class="bg-white/80 backdrop-blur-xl rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.1)] w-[440px] text-center overflow-hidden animate-in zoom-in-95 duration-700 border border-white relative z-10">
+            <div class="bg-entropy-surface/80 backdrop-blur-xl rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.5)] w-[440px] text-center overflow-hidden animate-in zoom-in-95 duration-700 relative z-10">
                 <TitleBar />
                 <div class="p-12 space-y-10">
                     <div class="relative inline-block">
-                        <div class="w-20 h-20 bg-white rounded-2xl shadow-xl flex items-center justify-center mx-auto transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border-2 border-gray-50">
+                        <div class="w-20 h-20 bg-entropy-surface rounded-2xl shadow-xl flex items-center justify-center mx-auto transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group">
                             <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain transition-transform duration-500 group-hover:scale-110" />
                         </div>
-                        <div class="absolute -top-1.5 -right-1.5 bg-blue-600 text-white p-1.5 rounded-xl shadow-lg border border-white">
+                        <div class="absolute -top-1.5 -right-1.5 bg-entropy-primary text-white p-1.5 rounded-xl shadow-lg">
                             <LucideShieldCheck size={14} />
                         </div>
                     </div>
                     
                     <div class="space-y-3">
-                        <h1 class="text-4xl font-[900] text-gray-900 tracking-tighter">Entropy</h1>
-                        <p class="text-gray-500 text-sm leading-relaxed max-w-[280px] mx-auto font-medium">
-                            {hasExistingIdentity 
-                                ? 'Welcome back.' 
-                                : 'Decentralized P2P Messaging. Create your identity.'}
+                        <h1 class="text-4xl font-black text-entropy-text-primary tracking-tight">Entropy</h1>
+                        <p class="text-entropy-text-secondary text-sm leading-relaxed max-w-[280px] mx-auto font-medium opacity-80">
+                            {hasExistingIdentity ? 'Welcome back.' : 'Secure messaging. No sign-up required.'}
                         </p>
                     </div>
                     
                     <div class="space-y-6 text-left">
                         <div class="space-y-2.5">
                             <div class="flex justify-between items-center px-1">
-                                <label for="vault-password" class="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Login</label>
+                                <label for="vault-password" class="text-[11px] font-bold text-entropy-text-dim uppercase tracking-wider pl-1">Login</label>
                                 {#if hasExistingIdentity}
-                                    <span class="text-[10px] font-bold text-blue-600 uppercase tracking-tight">Identity Found</span>
+                                    <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">Identity Found</span>
                                 {/if}
                             </div>
                             
                             {#if $userStore.authError}
-                                <div class="p-4 bg-red-50 border border-red-100/50 rounded-2xl text-[11px] font-bold text-red-600 animate-in fade-in slide-in-from-top-2 flex items-center space-x-2">
+                                <div class="p-4 bg-red-500/10 rounded-2xl text-[11px] font-bold text-red-500 animate-in fade-in slide-in-from-top-2 flex items-center space-x-2">
                                     <div class="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></div>
                                     <span>{$userStore.authError}</span>
                                 </div>
                             {/if}
 
                             <div class="relative group">
-                                <div class="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-blue-500 transition-colors">
+                                <div class="absolute left-5 top-1/2 -translate-y-1/2 text-entropy-text-dim group-focus-within:text-entropy-primary transition-colors">
                                     <LucideLock size={18} />
                                 </div>
                                 <input 
                                     id="vault-password"
-                                    type="password" 
+                                    type={showPassword ? 'text' : 'password'}
                                     bind:value={password}
                                     placeholder="Enter password..." 
-                                    class="w-full pl-14 pr-6 py-5 bg-gray-50/50 rounded-[1.5rem] border-2 border-transparent focus:border-blue-500/20 focus:bg-white focus:ring-4 focus:ring-blue-500/5 transition-all text-lg font-mono tracking-[0.4em] outline-none {$userStore.authError ? 'border-red-500/20' : ''}"
-                                    onkeydown={(e) => e.key === 'Enter' && handleLogin()}
+                                    class="w-full pl-14 pr-14 py-5 bg-entropy-surface-light/50 rounded-[1.5rem] focus:bg-entropy-surface focus:ring-4 focus:ring-entropy-primary/5 transition-all text-lg font-mono tracking-wider outline-none text-entropy-text-primary"
+                                    onkeydown={(e) => e.key === 'Enter' && (hasExistingIdentity ? handleLogin() : null)}
                                 />
+                                <button 
+                                    type="button"
+                                    onclick={() => showPassword = !showPassword}
+                                    class="absolute right-5 top-1/2 -translate-y-1/2 text-entropy-text-dim hover:text-entropy-primary transition-colors"
+                                    aria-label="Toggle password visibility"
+                                >
+                                    {#if showPassword}
+                                        <LucideEyeOff size={18} />
+                                    {:else}
+                                        <LucideEye size={18} />
+                                    {/if}
+                                </button>
                             </div>
+                            
+                            {#if !hasExistingIdentity}
+                                <div class="relative group">
+                                    <div class="absolute left-5 top-1/2 -translate-y-1/2 text-entropy-text-dim group-focus-within:text-entropy-primary transition-colors">
+                                        <LucideLock size={18} />
+                                    </div>
+                                    <input 
+                                        id="confirm-password"
+                                        type={showPassword ? 'text' : 'password'}
+                                        bind:value={confirmPassword}
+                                        placeholder="Confirm password..." 
+                                        class="w-full pl-14 pr-14 py-5 bg-entropy-surface-light/50 rounded-[1.5rem] focus:bg-entropy-surface focus:ring-4 focus:ring-entropy-primary/5 transition-all text-lg font-mono tracking-wider outline-none text-entropy-text-primary"
+                                        onkeydown={(e) => e.key === 'Enter' && handleCreate()}
+                                    />
+                                    <button 
+                                        type="button"
+                                        onclick={() => showPassword = !showPassword}
+                                        class="absolute right-5 top-1/2 -translate-y-1/2 text-entropy-text-dim hover:text-entropy-primary transition-colors"
+                                        aria-label="Toggle password visibility"
+                                    >
+                                        {#if showPassword}
+                                            <LucideEyeOff size={18} />
+                                        {:else}
+                                            <LucideEye size={18} />
+                                        {/if}
+                                    </button>
+                                </div>
+                                
+                                {#if password && confirmPassword && password !== confirmPassword}
+                                    <div class="p-3 bg-yellow-500/10 rounded-xl text-[10px] font-bold text-yellow-600 animate-in fade-in slide-in-from-top-2">
+                                        Passwords don't match
+                                    </div>
+                                {/if}
+                            {/if}
                         </div>
 
                         {#if hasExistingIdentity}
                             <button 
-                                class="w-full py-5 bg-blue-600 text-white rounded-[1.5rem] font-black text-sm uppercase tracking-widest hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
+                                class="w-full py-5 bg-entropy-primary text-white rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-entropy-primary-dim transition-all shadow-xl shadow-entropy-primary/10 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
                                 onclick={handleLogin}
                                 disabled={isInitializing || !password}
                                 aria-label="Unlock Identity"
@@ -262,13 +318,13 @@
                             </button>
                         {:else}
                             <button 
-                                class="w-full py-5 bg-gray-900 text-white rounded-[1.5rem] font-black text-sm uppercase tracking-widest hover:bg-black transition-all shadow-2xl active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
+                                class="w-full py-5 bg-white text-entropy-bg rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-white/90 transition-all shadow-2xl active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
                                 onclick={handleCreate}
-                                disabled={isInitializing || !password}
+                                disabled={isInitializing || !password || !confirmPassword || password !== confirmPassword}
                                 aria-label="Create Identity"
                             >
                                 {#if isInitializing}
-                                    <div class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                    <div class="w-5 h-5 border-2 border-entropy-bg/30 border-t-entropy-bg rounded-full animate-spin"></div>
                                     <span>Creating...</span>
                                 {:else}
                                     <LucideShieldCheck size={20} class="group-hover:scale-110 transition-transform" />
@@ -278,28 +334,27 @@
                         {/if}
                     </div>
 
-                    <div class="pt-2 space-y-4">
-                        <p class="text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] italic">Decentralized Architecture</p>
+                    <div class="pt-2">
                         
-                        <div class="flex items-center justify-center space-x-4 pt-4">
+                        <div class="flex items-center justify-center space-x-6">
                             {#if hasExistingIdentity}
                                 <button 
                                     onclick={handleExportVault}
-                                    class="text-[10px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-600 transition-colors"
+                                    class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider hover:text-entropy-primary-dim transition-colors"
                                 >
-                                    Backup Vault
+                                    Backup
                                 </button>
                             {/if}
                             <button 
                                 onclick={handleImportVault}
-                                class="text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:text-indigo-600 transition-colors"
+                                    class="text-[10px] font-bold text-entropy-accent uppercase tracking-wider hover:text-entropy-accent/80 transition-colors"
                             >
-                                Import Backup
+                                Restore
                             </button>
                             {#if import.meta.env.DEV || $userStore.authError}
                                 <button 
                                     onclick={handleNuclearReset}
-                                    class="text-[10px] font-black text-red-300 uppercase tracking-widest hover:text-red-500 transition-colors"
+                                    class="text-[10px] font-bold text-red-500 uppercase tracking-wider hover:text-red-600 transition-colors"
                                 >
                                     Wipe
                                 </button>
@@ -312,10 +367,10 @@
     {:else}
         
         <TitleBar />
-        <div class="flex flex-row flex-1 overflow-hidden bg-white">
-            <Sidebar />
+        <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
+            <Sidebar bind:showStarredMessages />
             <div class="flex-1 relative flex flex-col min-w-0">
-                <ChatWindow />
+                <ChatWindow {showStarredMessages} onCloseStarred={() => showStarredMessages = false} />
             
             </div>
         </div>

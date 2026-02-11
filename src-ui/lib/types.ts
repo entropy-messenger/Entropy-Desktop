@@ -50,6 +50,7 @@ export interface PrivacySettings {
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
     decoyMode?: boolean;
+    theme?: 'light' | 'dark';
 }
 
 /**
@@ -70,7 +71,6 @@ export interface Chat {
     isArchived?: boolean;
     isMuted?: boolean;
     isVerified?: boolean;
-    disappearingTimer?: number;
     localNickname?: string;
     inviteCode?: string;
 }

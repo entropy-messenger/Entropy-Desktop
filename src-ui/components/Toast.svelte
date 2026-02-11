@@ -10,7 +10,7 @@
         <div 
             in:fly={{ x: 50, duration: 300 }}
             out:fly={{ x: 50, duration: 200 }}
-            class="pointer-events-auto bg-white/90 backdrop-blur-xl border border-white shadow-[0_10px_30px_-5px_rgba(0,0,0,0.1)] rounded-2xl p-4 flex items-start space-x-3 group relative overflow-hidden"
+            class="pointer-events-auto bg-entropy-surface/90 backdrop-blur-xl shadow-[0_10px_30px_-5px_rgba(0,0,0,0.3)] rounded-2xl p-4 flex items-start space-x-3 group relative overflow-hidden"
         >
             <div class="mt-0.5">
                 {#if toast.type === 'success'}
@@ -20,17 +20,17 @@
                 {:else if toast.type === 'warning'}
                     <LucideAlertTriangle size={18} class="text-amber-500" />
                 {:else}
-                    <LucideInfo size={18} class="text-blue-500" />
+                    <LucideInfo size={18} class="text-entropy-primary" />
                 {/if}
             </div>
             
             <div class="flex-1 pr-4">
-                <p class="text-xs font-bold text-gray-800 leading-snug">{toast.message}</p>
+                <p class="text-xs font-semibold text-entropy-text-primary leading-snug">{toast.message}</p>
             </div>
 
             <button 
                 onclick={() => removeToast(toast.id)}
-                class="text-gray-300 hover:text-gray-500 transition-colors"
+                class="text-entropy-text-dim hover:text-entropy-text-primary transition-colors"
                 aria-label="Close"
             >
                 <LucideX size={14} />
@@ -41,9 +41,9 @@
                 <div 
                     class="absolute bottom-0 left-0 h-1 bg-current opacity-10"
                     style="width: 100%; animation: shrink {toast.duration}ms linear forwards; color: {
-                        toast.type === 'success' ? '#22c55e' : 
+                        toast.type === 'success' ? '#10b981' : 
                         toast.type === 'error' ? '#ef4444' : 
-                        toast.type === 'warning' ? '#f59e0b' : '#3b82f6'
+                        toast.type === 'warning' ? '#f59e0b' : '#8b5cf6'
                     }"
                 ></div>
             {/if}

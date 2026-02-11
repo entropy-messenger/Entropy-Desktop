@@ -61,25 +61,6 @@ export const startHeartbeat = () => {
             });
         }
     }, 12000);
-
-    setInterval(() => {
-        const state = get(userStore);
-        const now = Date.now();
-
-        Object.keys(state.chats).forEach(h => {
-            const chat = state.chats[h];
-            if (chat.disappearingTimer && chat.disappearingTimer > 0) {
-                const expiryTime = chat.disappearingTimer * 1000;
-                const expiredIds = chat.messages
-                    .filter(m => !m.isStarred && (now - m.timestamp) >= expiryTime)
-                    .map(m => m.id);
-
-                if (expiredIds.length > 0) {
-                    bulkDelete(h, expiredIds);
-                }
-            }
-        });
-    }, 3000);
 };
 
 export const updateMyProfile = (alias: string, pfp: string | null) => {
@@ -128,33 +109,31 @@ export const setOnlineStatus = async (peerIdentityHash: string, isOnline: boolea
     network.sendVolatile(peerIdentityHash, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
 };
 
-export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isPinned = !s.chats[peerHash].isPinned; return { ...s, chats: { ...s.chats } }; });
-export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isArchived = !s.chats[peerHash].isArchived; return { ...s, chats: { ...s.chats } }; });
-export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isMuted = !s.chats[peerHash].isMuted; return { ...s, chats: { ...s.chats } }; });
-export const toggleVerification = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isVerified = !s.chats[peerHash].isVerified; return { ...s, chats: { ...s.chats } }; });
+export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned }; return { ...s, chats: { ...s.chats } }; });
+export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived }; return { ...s, chats: { ...s.chats } }; });
+export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted }; return { ...s, chats: { ...s.chats } }; });
+export const toggleVerification = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isVerified: !s.chats[peerHash].isVerified }; return { ...s, chats: { ...s.chats } }; });
 export const toggleStar = (peerHash: string, msgId: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
-        const msg = s.chats[peerHash].messages.find(m => m.id === msgId);
-        if (msg) msg.isStarred = !msg.isStarred;
+        s.chats[peerHash] = {
+            ...s.chats[peerHash],
+            messages: s.chats[peerHash].messages.map(m =>
+                m.id === msgId ? { ...m, isStarred: !m.isStarred } : m
+            )
+        };
     }
     return { ...s, chats: { ...s.chats } };
 });
-export const setDisappearingTimer = async (peerHash: string, seconds: number | null) => {
-    userStore.update(s => {
-        if (s.chats[peerHash]) s.chats[peerHash].disappearingTimer = seconds || undefined;
-        return { ...s, chats: { ...s.chats } };
-    });
 
-    const syncMsg = { type: 'disappearing_sync', seconds };
-    try {
-        const ciphertext = await signalManager.encrypt(peerHash, JSON.stringify(syncMsg), get(userStore).relayUrl, true);
-        network.sendBinary(peerHash, new TextEncoder().encode(JSON.stringify(ciphertext)));
-    } catch (e) { }
-};
 
 export const setLocalNickname = (peerHash: string, nickname: string | null) => {
     userStore.update(s => {
-        if (s.chats[peerHash]) s.chats[peerHash].localNickname = nickname || undefined;
+        if (s.chats[peerHash]) {
+            s.chats[peerHash] = {
+                ...s.chats[peerHash],
+                localNickname: nickname || undefined
+            };
+        }
         return { ...s, chats: { ...s.chats } };
     });
 };

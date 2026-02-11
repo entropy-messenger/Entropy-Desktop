@@ -122,31 +122,31 @@
     {#if blobUrl}
         <VoiceNotePlayer src={blobUrl} id={msg.id} isMine={msg.isMine} />
     {:else if loading}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-black/5 rounded-2xl">
-            <LucideLoader size={16} class="animate-spin text-gray-400" />
-            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Loading Voice Note...</span>
+        <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-surface-light rounded-2xl border border-white/5">
+            <LucideLoader size={16} class="animate-spin text-entropy-primary" />
+            <span class="text-[10px] font-bold text-entropy-text-primary uppercase tracking-widest">Loading Voice Note...</span>
         </div>
     {:else if msg.status === 'sending'}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-blue-50/50 rounded-2xl animate-pulse">
-            <LucideLoader size={16} class="animate-spin text-blue-400" />
-            <span class="text-[10px] font-black text-blue-400 uppercase tracking-widest">Sending...</span>
+        <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-2xl animate-pulse">
+            <LucideLoader size={16} class="animate-spin text-entropy-primary" />
+            <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">Sending...</span>
         </div>
     {:else}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-red-50 rounded-2xl">
-            <LucideMic size={16} class="text-red-400" />
-            <span class="text-[10px] font-bold text-red-400 uppercase tracking-widest">Error loading audio</span>
+        <div class="flex items-center space-x-2 py-2 px-4 bg-red-500/10 rounded-2xl">
+            <LucideMic size={16} class="text-red-500" />
+            <span class="text-[10px] font-bold text-red-500 uppercase tracking-widest">Error loading audio</span>
         </div>
     {/if}
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2">
         {#if msg.attachment.fileType?.startsWith('image/') && blobUrl}
-            <div class="relative group max-w-sm rounded-lg overflow-hidden border border-black/10 shadow-sm bg-gray-100">
+            <div class="relative group max-w-sm rounded-lg overflow-hidden shadow-sm bg-entropy-surface-light">
                 <img 
                     src={blobUrl} 
                     alt={msg.attachment.fileName} 
                     class="max-h-64 object-contain mx-auto"
                 />
-                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
                     <button 
                         onclick={manualDownload}
                         class="p-2 bg-white rounded-full text-black hover:scale-110 transition shadow-lg disabled:opacity-80 disabled:cursor-wait"
@@ -154,7 +154,7 @@
                         disabled={isDownloading || downloadSuccess}
                     >
                         {#if isDownloading}
-                            <LucideLoader size={20} class="animate-spin text-blue-500" />
+                            <LucideLoader size={20} class="animate-spin text-entropy-primary" />
                         {:else if downloadSuccess}
                             <LucideCheck size={20} class="text-green-500" />
                         {:else}
@@ -165,13 +165,13 @@
             </div>
         {/if}
 
-        <div class="flex items-center space-x-3 bg-white/40 backdrop-blur-sm p-3 rounded-2xl border border-black/5 shadow-sm group/file hover:bg-white/60 transition-colors">
-            <div class="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600 shrink-0">
+        <div class="flex items-center space-x-3 bg-entropy-surface/40 backdrop-blur-sm p-3 rounded-2xl shadow-sm group/file hover:bg-entropy-surface/60 transition-colors">
+            <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0">
                 <LucidePaperclip size={20} />
             </div>
             <div class="flex-1 min-w-0">
-                <div class="text-[11px] font-black truncate text-gray-800 uppercase tracking-tight">{msg.attachment.fileName}</div>
-                <div class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+                <div class="text-[12px] font-bold truncate text-entropy-text-primary tracking-tight">{msg.attachment.fileName}</div>
+                <div class="text-[10px] font-medium text-entropy-text-dim uppercase tracking-wider">
                     {(msg.attachment.size || 0) / 1024 > 1024 
                         ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
                         : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
@@ -180,7 +180,7 @@
             {#if blobUrl}
                 <button 
                     onclick={manualDownload}
-                    class="w-8 h-8 rounded-lg {downloadSuccess ? 'bg-green-500' : 'bg-blue-600'} text-white flex items-center justify-center hover:bg-opacity-90 transition shadow-md active:scale-95 disabled:opacity-70 disabled:cursor-wait"
+                    class="w-8 h-8 rounded-lg {downloadSuccess ? 'bg-entropy-accent' : 'bg-entropy-primary'} text-white flex items-center justify-center hover:bg-opacity-90 transition shadow-md active:scale-95 disabled:opacity-70 disabled:cursor-wait"
                     title={downloadSuccess ? 'Downloaded' : 'Download File'}
                     disabled={isDownloading || downloadSuccess}
                 >
@@ -194,14 +194,14 @@
                 </button>
             {:else if loading}
                 <div class="w-8 h-8 flex items-center justify-center">
-                    <LucideLoader size={16} class="animate-spin text-blue-500" />
+                    <LucideLoader size={16} class="animate-spin text-entropy-primary" />
                 </div>
             {:else if msg.status === 'sending'}
                 <div class="w-8 h-8 flex items-center justify-center">
-                    <LucideLoader size={16} class="animate-spin text-blue-500" />
+                    <LucideLoader size={16} class="animate-spin text-entropy-primary" />
                 </div>
             {:else}
-                <button onclick={loadAttachment} class="w-8 h-8 rounded-lg bg-red-50 text-red-500 flex items-center justify-center hover:bg-red-100 italic transition font-black text-[9px]">!</button>
+                <button onclick={loadAttachment} class="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 italic transition font-black text-[9px]">!</button>
             {/if}
         </div>
     </div>
