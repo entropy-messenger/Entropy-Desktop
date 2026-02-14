@@ -100,7 +100,6 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
     }
 
     try {
-        const targets = [];
         for (const member of group.members!) {
             if (member === state.identityHash) continue;
             const payload = {
@@ -112,11 +111,7 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
                 replyTo: replyToData
             };
             const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
-            targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
-        }
-
-        if (targets.length > 0) {
-            network.sendJSON({ type: 'group_multicast', targets });
+            network.sendBinary(member, new TextEncoder().encode(JSON.stringify(wrapped)));
         }
     } catch (e) {
         console.error("Group Send Failed:", e);
@@ -177,14 +172,12 @@ export const sendFile = async (destId: string, file: File) => {
             };
 
             if (chat?.isGroup) {
-                const targets = [];
                 for (const member of chat.members!) {
                     if (member === state.identityHash) continue;
                     const payload = { ...contentObj, groupId: destId };
                     const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
-                    targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
+                    network.sendBinary(member, new TextEncoder().encode(JSON.stringify(wrapped)));
                 }
-                network.sendJSON({ type: 'group_multicast', targets });
             } else {
                 const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj), state.relayUrl);
                 network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
@@ -248,14 +241,12 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
         };
 
         if (chat?.isGroup) {
-            const targets = [];
             for (const member of chat.members!) {
                 if (member === state.identityHash) continue;
                 const payload = { ...contentObj, groupId: destId };
                 const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
-                targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
+                network.sendBinary(member, new TextEncoder().encode(JSON.stringify(wrapped)));
             }
-            network.sendJSON({ type: 'group_multicast', targets });
         } else {
             const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj), state.relayUrl);
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)), { id: msgId });
