@@ -1,4 +1,12 @@
 
+/**
+ * Extracts and metadata from a URL within a text string to generate a preview object.
+ */
+/**
+ * Common cryptographic and UI utilities.
+ */
+import { network } from './network';
+
 export const parseLinkPreview = async (text: string): Promise<any> => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     const match = text.match(urlRegex);
@@ -6,16 +14,22 @@ export const parseLinkPreview = async (text: string): Promise<any> => {
 
     const url = match[0];
     try {
-        const response = await fetch(url, { mode: 'no-cors' });
+        console.debug(`[Privacy] Requesting proxied link preview for ${url}`);
+        const response = await network.request('link_preview', { url });
 
-        return {
-            url,
-            title: url.replace(/https?:\/\/(www\.)?/, '').split('/')[0],
-            siteName: new URL(url).hostname
-        };
+        if (response && !response.error) {
+            return {
+                url,
+                title: response.title || url.replace(/https?:\/\/(www\.)?/, '').split('/')[0],
+                description: response.description,
+                image: response.image,
+                siteName: response.siteName || new URL(url).hostname
+            };
+        }
     } catch (e) {
-        return { url, title: url, siteName: new URL(url).hostname };
+        console.warn("Proxied link preview failed:", e);
     }
+    return { url, title: url, siteName: new URL(url).hostname };
 };
 
 import { toHex as fastToHex, fromHex as fastFromHex } from './crypto';

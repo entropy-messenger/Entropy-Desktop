@@ -19,6 +19,7 @@ pub struct PacedMessage {
 pub struct NetworkState {
     pub queue: Mutex<VecDeque<PacedMessage>>,
     pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>, 
+    pub cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 pub struct AudioState {

@@ -7,6 +7,9 @@ import { minePoW } from '../crypto';
 import { bulkDelete, sendReceipt } from './message_utils';
 import type { PrivacySettings } from '../types';
 
+/**
+ * Manages peer presence, profile synchronization, and contact metadata updates.
+ */
 export const statusTimeouts: Record<string, any> = {};
 let heartbeatInterval: any = null;
 
@@ -37,14 +40,17 @@ export const markOnline = (peerHash: string) => {
     }, 25000);
 };
 
+/**
+ * Initiates the background heartbeat for presence broadcasting and message expiry.
+ */
 export const startHeartbeat = () => {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
-    // 30s heartbeat
+
     heartbeatInterval = setInterval(() => {
         const state = get(userStore);
         if (state.identityHash && state.isConnected) {
             Object.keys(state.chats).forEach(peerHash => {
-                if (!state.chats[peerHash].isGroup && state.privacySettings.lastSeen === 'everyone') {
+                if (!state.chats[peerHash].isGroup && state.privacySettings.lastSeen === 'everyone' && state.privacySettings.readReceipts) {
                     setOnlineStatus(peerHash, true);
                 }
             });
@@ -55,26 +61,6 @@ export const startHeartbeat = () => {
             });
         }
     }, 12000);
-
-    // Disappearing messages cleanup (every 3s)
-    setInterval(() => {
-        const state = get(userStore);
-        const now = Date.now();
-
-        Object.keys(state.chats).forEach(h => {
-            const chat = state.chats[h];
-            if (chat.disappearingTimer && chat.disappearingTimer > 0) {
-                const expiryTime = chat.disappearingTimer * 1000;
-                const expiredIds = chat.messages
-                    .filter(m => !m.isStarred && (now - m.timestamp) >= expiryTime)
-                    .map(m => m.id);
-
-                if (expiredIds.length > 0) {
-                    bulkDelete(h, expiredIds);
-                }
-            }
-        });
-    }, 3000);
 };
 
 export const updateMyProfile = (alias: string, pfp: string | null) => {
@@ -85,6 +71,9 @@ export const updateMyProfile = (alias: string, pfp: string | null) => {
     });
 };
 
+/**
+ * Transmits current user profile (alias/pfp) to a specific peer.
+ */
 export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.myAlias && !state.myPfp) return;
@@ -105,6 +94,7 @@ export const broadcastProfile = async (peerHash: string) => {
 export const sendTypingStatus = async (peerIdentityHash: string, isTyping: boolean) => {
     const state = get(userStore);
     if (state.chats[peerIdentityHash]?.isGroup || state.blockedHashes.includes(peerIdentityHash)) return;
+    if (!state.privacySettings.readReceipts) return;
 
     const contentObj = { type: 'typing', isTyping };
     const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
@@ -113,39 +103,58 @@ export const sendTypingStatus = async (peerIdentityHash: string, isTyping: boole
 
 export const setOnlineStatus = async (peerIdentityHash: string, isOnline: boolean) => {
     const state = get(userStore);
-    if (state.blockedHashes.includes(peerIdentityHash)) return;
+    if (state.blockedHashes.includes(peerIdentityHash) || !state.privacySettings.readReceipts) return;
     const contentObj = { type: 'presence', isOnline };
     const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
     network.sendVolatile(peerIdentityHash, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
 };
 
-export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isPinned = !s.chats[peerHash].isPinned; return { ...s, chats: { ...s.chats } }; });
-export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isArchived = !s.chats[peerHash].isArchived; return { ...s, chats: { ...s.chats } }; });
-export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isMuted = !s.chats[peerHash].isMuted; return { ...s, chats: { ...s.chats } }; });
-export const toggleVerification = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].isVerified = !s.chats[peerHash].isVerified; return { ...s, chats: { ...s.chats } }; });
+export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned }; return { ...s, chats: { ...s.chats } }; });
+export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived }; return { ...s, chats: { ...s.chats } }; });
+export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted }; return { ...s, chats: { ...s.chats } }; });
+export const toggleVerification = async (peerHash: string, verified?: boolean) => {
+    const state = get(userStore);
+    const chat = state.chats[peerHash];
+    if (!chat || chat.isGroup) return;
+
+    const nextStatus = verified !== undefined ? verified : !chat.isVerified;
+
+    try {
+        // 1. Update Native Trust Store (Persistent Database)
+        await signalManager.verifySession(peerHash, nextStatus);
+
+        // 2. Update Local Store
+        userStore.update(s => {
+            if (s.chats[peerHash]) {
+                s.chats[peerHash] = { ...s.chats[peerHash], isVerified: nextStatus };
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    } catch (e) {
+        console.error("Failed to update verification status:", e);
+    }
+};
 export const toggleStar = (peerHash: string, msgId: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
-        const msg = s.chats[peerHash].messages.find(m => m.id === msgId);
-        if (msg) msg.isStarred = !msg.isStarred;
+        s.chats[peerHash] = {
+            ...s.chats[peerHash],
+            messages: s.chats[peerHash].messages.map(m =>
+                m.id === msgId ? { ...m, isStarred: !m.isStarred } : m
+            )
+        };
     }
     return { ...s, chats: { ...s.chats } };
 });
-export const setDisappearingTimer = async (peerHash: string, seconds: number | null) => {
-    userStore.update(s => {
-        if (s.chats[peerHash]) s.chats[peerHash].disappearingTimer = seconds || undefined;
-        return { ...s, chats: { ...s.chats } };
-    });
 
-    const syncMsg = { type: 'disappearing_sync', seconds };
-    try {
-        const ciphertext = await signalManager.encrypt(peerHash, JSON.stringify(syncMsg), get(userStore).relayUrl, true);
-        network.sendBinary(peerHash, new TextEncoder().encode(JSON.stringify(ciphertext)));
-    } catch (e) { }
-};
 
 export const setLocalNickname = (peerHash: string, nickname: string | null) => {
     userStore.update(s => {
-        if (s.chats[peerHash]) s.chats[peerHash].localNickname = nickname || undefined;
+        if (s.chats[peerHash]) {
+            s.chats[peerHash] = {
+                ...s.chats[peerHash],
+                localNickname: nickname || undefined
+            };
+        }
         return { ...s, chats: { ...s.chats } };
     });
 };
@@ -166,41 +175,37 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
 
 export const updatePrivacy = (settings: Partial<PrivacySettings>) => userStore.update(s => ({ ...s, privacySettings: { ...s.privacySettings, ...settings } }));
 
+/**
+ * Registers a global nickname on the relay server.
+ * Requires PoW validation and a signed proof of identity.
+ */
 export const registerGlobalNickname = async (nickname: string) => {
     const state = get(userStore);
     if (!state.identityHash) return;
 
     try {
-        const serverUrl = get(userStore).relayUrl;
-        const challengeRes = await fetch(`${serverUrl}/pow/challenge?nickname=${encodeURIComponent(nickname)}&identity_hash=${state.identityHash}`);
-        const { seed, difficulty } = await challengeRes.json();
+        // Fetch challenge via WebSocket
+        const challenge = await network.request('pow_challenge', { nickname, identity_hash: state.identityHash });
+        const { seed, difficulty } = challenge;
         const { nonce } = await minePoW(seed, difficulty, nickname);
-        // Signature might be expected by backend, but we send stub
+
         const signature = await signalManager.signMessage(nickname);
 
-        const response = await fetch(`${serverUrl}/nickname/register`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-PoW-Seed': seed,
-                'X-PoW-Nonce': nonce.toString()
-            },
-            body: JSON.stringify({
-                nickname,
-                identity_hash: state.identityHash,
-                identityKey: "plaintext_no_key", // Placeholder
-                signature
-            })
+        const response = await network.request('nickname_register', {
+            nickname,
+            identity_hash: state.identityHash,
+            signature,
+            seed,
+            nonce
         });
 
-        const result = await response.json();
-        if (result.status === 'success') {
+        if (response.status === 'success') {
             console.log("Global nickname registered:", nickname);
             userStore.update(s => ({ ...s, myAlias: nickname }));
             return { success: true };
         } else {
-            console.error("Nickname registration failed:", result.error);
-            return { success: false, error: result.error };
+            console.error("Nickname registration failed:", response.error);
+            return { success: false, error: response.error };
         }
     } catch (e) {
         console.error("Nickname registration error:", e);
@@ -208,13 +213,21 @@ export const registerGlobalNickname = async (nickname: string) => {
     }
 };
 
+/**
+ * Retrieves the identity hash associated with a global nickname.
+ */
 export const lookupNickname = async (nickname: string): Promise<string | null> => {
+    const input = nickname.trim();
+    if (!input) return null;
+
+    if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
+        return input;
+    }
+
     try {
-        const serverUrl = get(userStore).relayUrl;
-        const response = await fetch(`${serverUrl}/nickname/lookup?name=${encodeURIComponent(nickname)}`);
-        if (response.status === 200) {
-            const data = await response.json();
-            return data[nickname] || data.identity_hash || null;
+        const data = await network.request('nickname_lookup', { name: input });
+        if (data && !data.error) {
+            return data.identity_hash || null;
         }
         return null;
     } catch (e) {
@@ -223,7 +236,6 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
 };
 
 export const verifyContact = async (peerHash: string, isVerified: boolean) => {
-    // Disabled in plaintext
 };
 
 export const startChat = (peerHash: string, alias?: string) => {
@@ -247,8 +259,8 @@ export const startChat = (peerHash: string, alias?: string) => {
             }
         });
 
+        s.chats[peerHash].unreadCount = 0;
         if (unreadIds.length > 0) {
-            s.chats[peerHash].unreadCount = 0;
             sendReceipt(peerHash, unreadIds, 'read');
         }
 

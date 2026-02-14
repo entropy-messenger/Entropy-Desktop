@@ -7,10 +7,40 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+
+  /* Light Mode (High Contrast) - RGB Channels */
+  --entropy-bg: 248 250 252;
+  --entropy-surface: 255 255 255;
+  --entropy-surface-light: 241 245 249;
+  --entropy-primary: 124 58 237;
+  --entropy-primary-dim: 109 40 217;
+  --entropy-accent: 8 145 178;
+  --entropy-text-primary: 15 23 42;
+  --entropy-text-secondary: 51 65 85;
+  --entropy-text-dim: 100 116 139;
+  --entropy-border: transparent;
+  --entropy-border-bright: transparent;
+  --entropy-scrollbar: 0 0 0;
+}
+
+.theme-dark {
+  /* Dark Mode (Improved Contrast) - RGB Channels */
+  --entropy-bg: 10 10 12;
+  --entropy-surface: 18 18 22;
+  --entropy-surface-light: 28 28 34;
+  --entropy-primary: 139 92 246;
+  --entropy-primary-dim: 124 58 237;
+  --entropy-accent: 34 211 238;
+  --entropy-text-primary: 255 255 255;
+  --entropy-text-secondary: 203 213 225;
+  --entropy-text-dim: 148 163 184;
+  --entropy-border: transparent;
+  --entropy-border-bright: transparent;
+  --entropy-scrollbar: 255 255 255;
 }
 
 body {
-  @apply bg-[#f8fafc] text-slate-900 overflow-hidden select-none;
+  @apply bg-entropy-bg text-entropy-text-primary overflow-hidden select-none transition-colors duration-300;
   margin: 0;
   padding: 0;
   height: 100vh;
@@ -28,27 +58,47 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgb(var(--entropy-scrollbar) / 0.15);
   border-radius: 10px;
-  border: 1px solid transparent;
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(255, 255, 255, 0.2);
 }
 
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }
 
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .animate-fade-in {
   animation: fade-in 0.3s ease-out forwards;
+}
+
+.chat-bg {
+  background-color: rgb(var(--entropy-bg));
+  background-image:
+    radial-gradient(circle at 2px 2px, rgb(var(--entropy-border-bright) / 0.05) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+.glass {
+  @apply bg-entropy-surface/60 backdrop-blur-xl;
+}
+
+.premium-shadow {
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5),
+    0 0 20px 0 rgba(139, 92, 246, 0.05);
 }

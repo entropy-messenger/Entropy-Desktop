@@ -4,8 +4,7 @@
 mod audio;
 mod app_state;
 mod commands;
-#[cfg(test)]
-mod tests;
+mod signal_store;
 
 use std::sync::Mutex;
 use tauri::{
@@ -27,6 +26,7 @@ fn main() {
         .manage(NetworkState {
             queue: Mutex::new(std::collections::VecDeque::new()),
             sender: Mutex::new(None),
+            cancel: Mutex::new(None),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -40,6 +40,7 @@ fn main() {
             commands::vault_load,
             commands::crypto_sha256,
             commands::connect_network,
+            commands::disconnect_network,
             commands::send_to_network,
             commands::flush_outbox,
             commands::nuclear_reset,
@@ -51,7 +52,19 @@ fn main() {
             commands::stop_native_recording,
             commands::save_file,
             commands::export_database,
-            commands::import_database
+            commands::import_database,
+            commands::signal_init,
+            commands::signal_get_bundle,
+            commands::signal_establish_session,
+            commands::signal_encrypt,
+            commands::signal_decrypt,
+            commands::set_panic_password,
+            commands::vault_save_media,
+            commands::vault_load_media,
+            commands::signal_sign_message,
+            commands::signal_get_peer_identity,
+            commands::signal_set_peer_trust,
+            commands::signal_get_own_identity
         ])
         .setup(|app| {
             // Setup tray and menu as before

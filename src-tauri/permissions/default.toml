@@ -16,10 +16,12 @@ commands.allow = [
     "crypto_encrypt",
     "crypto_decrypt",
     "crypto_mine_pow",
-    "protocol_init",
-    "protocol_establish_session",
-    "protocol_encrypt",
-    "protocol_decrypt",
+    "protocol_sign",
+    "signal_init",
+    "signal_get_bundle",
+    "signal_establish_session",
+    "signal_encrypt",
+    "signal_decrypt",
     "protocol_get_safety_number",
     "protocol_encrypt_media",
     "protocol_decrypt_media",
@@ -37,8 +39,8 @@ commands.allow = [
     "protocol_group_decrypt",
     "protocol_process_group_distribution",
     "connect_network",
+    "disconnect_network",
     "send_to_network",
-    "protocol_sign",
     "protocol_export_vault",
     "protocol_import_vault",
     "protocol_save_vault_to_path",
@@ -50,7 +52,14 @@ commands.allow = [
     "flush_outbox",
     "save_file",
     "export_database",
-    "import_database"
+    "import_database",
+    "set_panic_password",
+    "vault_save_media",
+    "vault_load_media",
+    "signal_sign_message",
+    "signal_get_peer_identity",
+    "signal_set_peer_trust",
+    "signal_get_own_identity"
 ]
 
 [[set]]

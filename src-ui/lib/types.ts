@@ -7,19 +7,24 @@ export interface LinkPreview {
     image?: string;
 }
 
+/**
+ * Represents an individual message in a conversation.
+ * Handles both plain text and encrypted media attachments.
+ */
 export interface Message {
     id: string;
     timestamp: number;
     senderHash: string;
     senderAlias?: string;
     content: string;
-    type: 'text' | 'voice_note' | 'file' | 'signaling';
+    type: 'text' | 'voice_note' | 'file' | 'signaling' | 'system';
     attachment?: {
         url?: string;
         fileName?: string;
         fileType?: string;
         size?: number;
         data?: Uint8Array;
+        isDownloaded?: boolean;
     };
     groupId?: string;
     isMine: boolean;
@@ -35,14 +40,22 @@ export interface Message {
     linkPreview?: LinkPreview;
 }
 
+/**
+ * Security and visibility configurations for the local identity.
+ */
 export interface PrivacySettings {
     readReceipts: boolean;
     lastSeen: 'everyone' | 'nobody';
     profilePhoto: 'everyone' | 'nobody';
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
+    decoyMode?: boolean;
+    theme?: 'light' | 'dark';
 }
 
+/**
+ * Represents a conversation thread with a single peer or a group.
+ */
 export interface Chat {
     peerHash: string;
     peerAlias?: string;
@@ -58,7 +71,6 @@ export interface Chat {
     isArchived?: boolean;
     isMuted?: boolean;
     isVerified?: boolean;
-    disappearingTimer?: number;
     localNickname?: string;
     inviteCode?: string;
 }

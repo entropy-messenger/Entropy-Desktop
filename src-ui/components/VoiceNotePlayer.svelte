@@ -1,4 +1,3 @@
-
 <script lang="ts">
   import { LucidePlay, LucidePause, LucideMic } from 'lucide-svelte';
   import { onMount } from 'svelte';
@@ -13,7 +12,7 @@
   let duration = $state(0);
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
-  const speeds = [0.5, 1, 1.5, 2];
+  const speeds = [1, 1.5, 2];
 
   async function generateWaveform() {
     if (!src) return;
@@ -24,7 +23,7 @@
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       
       const rawData = audioBuffer.getChannelData(0);
-      const samples = 40; // Fewer bars for smaller UI
+      const samples = 45; // Slightly fewer bars for better spacing
       const blockSize = Math.floor(rawData.length / samples);
       const result = [];
       
@@ -38,10 +37,11 @@
       }
       
       const max = Math.max(...result);
-      waveformData = result.map(n => n / max);
+      waveformData = result.map(n => Math.max(0.1, n / max)); // Reduced min height to fix 'solid block' look
       drawWaveform();
     } catch (e) {
       console.error("Waveform generation failed:", e);
+      waveformData = Array(45).fill(0.2);
     }
   }
 
@@ -52,28 +52,30 @@
 
     const width = canvasEl.width;
     const height = canvasEl.height;
-    const padding = 2;
+    const padding = 2.5; // Increased gap for distinction
     const barWidth = (width / waveformData.length) - padding;
     
     ctx.clearRect(0, 0, width, height);
     
     waveformData.forEach((val, i) => {
       const x = i * (barWidth + padding);
-      const barHeight = Math.max(2, val * height * 0.7);
+      const barHeight = val * height * 0.7;
       const y = (height - barHeight) / 2;
       
       const progress = currentTime / (duration || 1);
       const isPlayed = (i / waveformData.length) < progress;
       
+      // COLORS:
+      // If Mine: Bubble is Purple, so use White/Transparent White
+      // If Peer: Bubble is Light/Gray, so use Purple/Transparent Purple
       if (isPlayed) {
-        ctx.fillStyle = isMine ? '#0a0a0a' : '#2563eb';
+        ctx.fillStyle = isMine ? '#ffffff' : '#8b5cf6';
       } else {
-        ctx.fillStyle = isMine ? 'rgba(0,0,0,0.1)' : 'rgba(37, 99, 235, 0.15)';
+        ctx.fillStyle = isMine ? 'rgba(255, 255, 255, 0.4)' : 'rgba(139, 92, 246, 0.35)';
       }
       
-      const radius = 1;
       ctx.beginPath();
-      ctx.roundRect(x, y, barWidth, barHeight, radius);
+      ctx.roundRect(x, y, barWidth, barHeight, 1.5);
       ctx.fill();
     });
   }
@@ -91,14 +93,10 @@
     }
   }
 
-  // Effect to handle exclusive playback using reactive store value
   $effect(() => {
       const currentId = $playingVoiceNoteId;
-      // If something else is playing or nothing is playing (global stop), pause this one
       if (currentId !== id && isPlaying) {
-          if (audioEl) {
-              audioEl.pause();
-          }
+          if (audioEl) audioEl.pause();
           isPlaying = false;
       }
   });
@@ -126,7 +124,7 @@
     if (!canvasEl || !audioEl) return;
     const rect = canvasEl.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const progress = x / rect.width;
+    const progress = Math.max(0, Math.min(1, x / rect.width));
     audioEl.currentTime = progress * (duration || 0);
     currentTime = audioEl.currentTime;
     drawWaveform();
@@ -151,21 +149,21 @@
   });
 </script>
 
-<div class="flex items-center space-x-2 py-1 px-1 min-w-[220px] select-none rounded-xl transition-all {isPlaying ? 'bg-white/10 ring-1 ring-inset ring-white/5' : ''}">
+<div class="flex items-center space-x-3 py-1 px-1.5 min-w-[240px] select-none rounded-[1rem] transition-all {isPlaying ? 'bg-black/5' : ''}">
   <button 
     onclick={togglePlay}
-    class="w-9 h-9 shrink-0 rounded-full flex items-center justify-center transition-all {isMine ? 'bg-black text-black bg-opacity-10 hover:bg-opacity-20' : 'bg-blue-500 text-blue-500 bg-opacity-10 hover:bg-opacity-20'}"
+    class="w-10 h-10 shrink-0 rounded-full flex items-center justify-center transition-all {isMine ? 'bg-white text-entropy-primary hover:bg-white/90' : 'bg-entropy-primary text-white hover:bg-entropy-primary-dim'}"
   >
     {#if isPlaying}
-      <LucidePause size={18} fill="currentColor" />
+      <LucidePause size={20} fill="currentColor" />
     {:else}
-      <LucidePlay size={18} fill="currentColor" class="translate-x-0.5" />
+      <LucidePlay size={20} fill="currentColor" class="translate-x-0.5" />
     {/if}
   </button>
 
   <div class="flex-1 space-y-0.5 min-w-0">
       <div 
-        class="relative h-7 w-full cursor-pointer flex items-center" 
+        class="relative h-8 w-full cursor-pointer flex items-center" 
         onclick={handleSeek}
         onkeypress={(e) => e.key === 'Enter' && togglePlay()}
         role="button"
@@ -173,27 +171,26 @@
       >
           <canvas 
             bind:this={canvasEl} 
-            width="160" 
+            width="180" 
             height="32" 
-            class="w-full h-full"
+            class="w-full h-full opacity-90"
           ></canvas>
       </div>
       <div class="flex justify-between items-center px-0.5">
-          <div class="flex items-center space-x-1.5 overflow-hidden">
-              <span class="text-[9px] font-bold opacity-50 {isMine ? 'text-black' : 'text-blue-600'} whitespace-nowrap">
-                  {formatTime(isPlaying ? currentTime : duration)}
-              </span>
-          </div>
-          <LucideMic size={10} class="opacity-30 {isPlaying ? 'text-blue-500 opacity-100' : ''}" />
+           <span class="text-[10px] font-bold {isMine ? 'text-white/80' : 'text-entropy-primary/80'} tabular-nums">
+               {formatTime(isPlaying ? currentTime : duration)}
+           </span>
+           <div class="flex items-center space-x-2">
+               <button 
+                   onclick={toggleSpeed}
+                   class="text-[9px] font-black uppercase tracking-widest {isMine ? 'text-white/60' : 'text-entropy-primary/60'} hover:opacity-100 transition-opacity"
+               >
+                   {playbackSpeed}x
+               </button>
+               <LucideMic size={11} class="{isMine ? 'text-white/40' : 'text-entropy-primary/40'}" />
+           </div>
       </div>
   </div>
-
-  <button 
-    onclick={toggleSpeed}
-    class="shrink-0 px-1.5 py-1 rounded-md text-[9px] font-black transition-colors {isMine ? 'bg-black/10 hover:bg-black/20 text-black' : 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-600'}"
-  >
-    {playbackSpeed}x
-  </button>
 
   <audio 
     bind:this={audioEl} 

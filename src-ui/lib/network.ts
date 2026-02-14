@@ -6,6 +6,10 @@ import { userStore } from './stores/user';
 import * as logicStore from './store';
 import type { ServerMessage } from './types';
 
+/**
+ * Handles communication with the underlying Rust network node via Tauri's bridge.
+ * Manage WebSocket lifecycle, message multiplexing, and binary/JSON serialization.
+ */
 export class NetworkLayer {
     private url: string = "";
     private retryCount = 0;
@@ -13,6 +17,10 @@ export class NetworkLayer {
     private isAuthenticated = false;
     private isConnected = false;
     private lastActivity = Date.now();
+    private isManualDisconnect = false;
+
+    /** Tracking table for asynchronous request-response cycles over the socket */
+    private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
 
     constructor() {
         listen('network-msg', (event) => {
@@ -32,6 +40,10 @@ export class NetworkLayer {
 
     private connectingPromise: Promise<void> | null = null;
 
+    /**
+     * Establishes a connection to the relay server.
+     * Integrates routing mode preferences (Tor/Proxy) into the bridge command.
+     */
     async connect() {
         if (this.isConnected) return;
         if (this.connectingPromise) return this.connectingPromise;
@@ -42,10 +54,13 @@ export class NetworkLayer {
 
                 let proxyUrl = undefined;
                 const state = get(userStore) as any;
+
                 if (state.privacySettings.routingMode !== 'direct') {
                     proxyUrl = state.privacySettings.proxyUrl;
                     if (state.privacySettings.routingMode === 'tor') {
                         proxyUrl = 'socks5://127.0.0.1:9050';
+                    } else if (state.privacySettings.proxyUrl && !state.privacySettings.proxyUrl.includes('://')) {
+                        proxyUrl = `socks5://${state.privacySettings.proxyUrl}`;
                     }
                 }
 
@@ -53,8 +68,15 @@ export class NetworkLayer {
                 await invoke('connect_network', { url: this.url, proxyUrl });
                 this.isConnected = true;
                 this.onConnect();
-            } catch (e) {
-                console.error("Native connection failed:", e);
+            } catch (e: any) {
+                const errorStr = e.toString();
+                console.error("Native connection failed:", errorStr);
+
+                if (errorStr.includes("Proxy connection failed")) {
+                    const { addToast } = await import('./stores/ui');
+                    addToast("Privacy routing failed. Is Tor/Proxy running?", 'error');
+                }
+
                 this.retry();
             } finally {
                 this.connectingPromise = null;
@@ -62,6 +84,38 @@ export class NetworkLayer {
         })();
 
         return this.connectingPromise;
+    }
+
+    /**
+     * Forcefully terminates the active connection and clears background tasks.
+     */
+    async disconnect() {
+        console.log("[Network] Manual disconnect requested.");
+        this.isManualDisconnect = true;
+        try {
+            await invoke('disconnect_network');
+        } catch (e) {
+            console.error("[Network] Native disconnect failed:", e);
+        }
+
+        this.isConnected = false;
+        this.isAuthenticated = false;
+
+        userStore.update(s => ({
+            ...s,
+            isConnected: false,
+            connectionStatus: 'disconnected'
+        }));
+    }
+
+    /**
+     * Cycles the connection to apply new routing/proxy settings.
+     */
+    async reconnect() {
+        await this.disconnect();
+        // Shift context to allow native cleanup
+        await new Promise(r => setTimeout(r, 600));
+        return this.connect();
     }
 
     private stabilityTimer: any = null;
@@ -85,6 +139,15 @@ export class NetworkLayer {
 
     private onDisconnect() {
         console.log('Native network layer disconnected');
+
+        if (this.isManualDisconnect) {
+            console.log("[Network] Ignoring disconnect event due to manual cycle.");
+            this.isManualDisconnect = false;
+            this.isConnected = false;
+            this.isAuthenticated = false;
+            userStore.update(s => ({ ...s, isConnected: false, connectionStatus: 'disconnected' }));
+            return;
+        }
 
         if (this.stabilityTimer) {
             clearTimeout(this.stabilityTimer);
@@ -134,6 +197,20 @@ export class NetworkLayer {
 
     private async onJsonMessage(msg: any) {
         this.lastActivity = Date.now();
+
+        if (msg.req_id && this.pendingRequests.has(msg.req_id)) {
+            const { resolve, reject, timeout } = this.pendingRequests.get(msg.req_id)!;
+            clearTimeout(timeout);
+            this.pendingRequests.delete(msg.req_id);
+
+            if (msg.error) {
+                reject(new Error(msg.message || "Request failed"));
+            } else {
+                resolve(msg);
+            }
+            return;
+        }
+
         console.debug("[Network] Received JSON:", msg.type, msg);
         if (msg.type === 'auth_success') {
             const token = msg.session_token;
@@ -147,7 +224,13 @@ export class NetworkLayer {
                 connectionStatus: 'connected'
             }));
 
-            // Once authenticated, flush any messages waiting in the persistent outbox
+            if (msg.keys_missing) {
+                const serverUrl = get(userStore).relayUrl;
+                import('./signal_manager').then(({ signalManager }) => {
+                    signalManager.ensureKeysUploaded(serverUrl).catch(e => console.error("Auto key upload failed:", e));
+                });
+            }
+
             invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
 
             const state = get(userStore) as any;
@@ -157,6 +240,12 @@ export class NetworkLayer {
                     logicStore.broadcastProfile(peerHash);
                 }
             });
+
+            const current = get(userStore) as any;
+            if (current.privacySettings.decoyMode) {
+                logicStore.refreshDecoys(current.relayUrl).catch(() => { });
+            }
+
             return;
         }
 
@@ -174,6 +263,10 @@ export class NetworkLayer {
             return;
         }
 
+        if (msg.type === 'relay_success' || msg.type === 'delivery_status') {
+            return;
+        }
+
         if (msg.type === 'queued_message') {
             await logicStore.handleIncomingMessage(msg.payload);
             return;
@@ -185,7 +278,7 @@ export class NetworkLayer {
     sendJSON(data: any) {
         try {
             let msg = JSON.stringify(data);
-            invoke('send_to_network', { msg, isBinary: false, metadata: data }).catch(e => {
+            invoke('send_to_network', { msg, data: null, isBinary: false, metadata: data }).catch(e => {
                 if (e.toString().includes("queued")) {
                     console.debug("[Network] Message queued in persistent outbox");
                 } else {
@@ -207,13 +300,9 @@ export class NetworkLayer {
         packet.set(hashBytes, 0);
         packet.set(data, 64);
 
-        const hex = Array.from(packet).map(b => b.toString(16).padStart(2, '0')).join('');
-
         try {
-            invoke('send_to_network', { msg: hex, isBinary: true, metadata }).catch(e => {
-                if (e.toString().includes("queued")) {
-                    console.debug("[Network] Binary queued in persistent outbox");
-                } else {
+            invoke('send_to_network', { msg: null, data: packet, isBinary: true, metadata }).catch(e => {
+                if (!e.toString().includes("queued")) {
                     console.warn("[Network] Binary background send failed:", e);
                 }
             });
@@ -241,11 +330,30 @@ export class NetworkLayer {
         });
     }
 
-    disconnect() {
-        this.isConnected = false;
-        this.isAuthenticated = false;
-        userStore.update(s => ({ ...s, isConnected: false, connectionStatus: 'disconnected' }));
+    /**
+     * Executes a JSON request and waits for a specific response via req_id.
+     */
+    request(type: string, payload: any, timeoutMs = 10000): Promise<any> {
+        return new Promise((resolve, reject) => {
+            const reqId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+
+            const timeout = setTimeout(() => {
+                if (this.pendingRequests.has(reqId)) {
+                    this.pendingRequests.delete(reqId);
+                    reject(new Error(`Request ${type} timed out`));
+                }
+            }, timeoutMs);
+
+            this.pendingRequests.set(reqId, { resolve, reject, timeout });
+
+            this.sendJSON({
+                type,
+                req_id: reqId,
+                ...payload
+            });
+        });
     }
+
 }
 
 export const network = new NetworkLayer();
