@@ -6,7 +6,7 @@ import { signalManager } from '../signal_manager';
 import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
 import { minePoW, initCrypto, toBase64, fromHex } from '../crypto';
-import { statusTimeouts, setOnlineStatus, startHeartbeat, broadcastProfile } from './contacts';
+import { statusTimeouts, startHeartbeat, broadcastProfile } from './contacts';
 import { initVault, vaultLoad, vaultSave } from '../secure_storage';
 import type { Chat } from '../types';
 
@@ -150,20 +150,6 @@ export const authenticate = async (identityHash: string) => {
     }
 };
 
-export const refreshDecoys = async (serverUrl: string) => {
-    try {
-        const state = get(userStore);
-        if (state.isConnected) {
-            const data = await network.request('fetch_key_random', { count: 20 });
-            if (data && data.hashes) {
-                console.log(`[Privacy] Refreshed decoy pool: ${data.hashes.length} entries`);
-                userStore.update(s => ({ ...s, decoyHashes: data.hashes }));
-            }
-        }
-    } catch (e) {
-        console.error("Failed to refresh decoys:", e);
-    }
-};
 
 /**
  * Permanently purges the local vault and sends a signed burn request to the relay.

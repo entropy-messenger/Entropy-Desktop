@@ -19,7 +19,6 @@ export interface AppState {
     connectionStatus: 'disconnected' | 'connecting' | 'mining' | 'connected';
     authError: string | null;
     relayUrl: string;
-    decoyHashes: string[];
 }
 
 const initialState: AppState = {
@@ -38,14 +37,12 @@ const initialState: AppState = {
         profilePhoto: 'everyone',
         routingMode: 'direct',
         proxyUrl: 'socks5://127.0.0.1:9050',
-        decoyMode: true,
         theme: 'dark'
     },
     sessionToken: null,
     connectionStatus: 'disconnected',
     authError: null,
-    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080',
-    decoyHashes: []
+    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080'
 };
 
 /**

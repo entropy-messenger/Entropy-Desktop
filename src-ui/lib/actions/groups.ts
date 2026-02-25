@@ -23,7 +23,7 @@ export const createGroup = async (name: string, members: string[]) => {
 
     for (const member of members) {
         try {
-            const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite), get(userStore).relayUrl, true);
+            const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite));
             network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
         } catch (e) { }
     }
@@ -53,7 +53,7 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
     // Invite new members
     for (const member of newMembers) {
         try {
-            const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite), get(userStore).relayUrl, true);
+            const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite));
             network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
         } catch (e) { }
     }
@@ -62,7 +62,7 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
     for (const member of chat.members || []) {
         if (member === state.identityHash || newMembers.includes(member)) continue;
         try {
-            const ciphertext = await signalManager.encrypt(member, JSON.stringify(update), get(userStore).relayUrl, true);
+            const ciphertext = await signalManager.encrypt(member, JSON.stringify(update));
             network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
         } catch (e) { }
     }
@@ -86,7 +86,7 @@ export const leaveGroup = async (groupId: string) => {
     for (const member of chat.members || []) {
         if (member === state.identityHash) continue;
         try {
-            const ciphertext = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl, true);
+            const ciphertext = await signalManager.encrypt(member, JSON.stringify(payload));
             network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
         } catch (e) { }
     }

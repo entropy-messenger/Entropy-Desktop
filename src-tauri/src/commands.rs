@@ -22,6 +22,7 @@ use libsignal_protocol::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use hex;
 use std::io::{Read, Write};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
@@ -35,12 +36,117 @@ const MEDIA_INTERVAL: u64 = 10;
 const PACKET_SIZE: usize = 1536;
 const MEDIA_CHUNK_SIZE: usize = 100 * 1024;
 
-fn flexible_decode(s: &str) -> Result<Vec<u8>, String> {
-    if let Ok(b) = hex::decode(s) {
-        return Ok(b);
+fn flexible_decode(input: &str) -> Result<Vec<u8>, String> {
+    if let Ok(h) = hex::decode(input) {
+        return Ok(h);
     }
-    // Attempt standard base64 decoding
-    base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| e.to_string())
+    base64::engine::general_purpose::STANDARD.decode(input).map_err(|e| e.to_string())
+}
+
+async fn internal_request(
+    state: &NetworkState,
+    msg_type: &str,
+    payload: serde_json::Value
+) -> Result<serde_json::Value, String> {
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let mut full_payload = payload.clone();
+    full_payload["type"] = serde_json::Value::String(msg_type.to_string());
+    full_payload["req_id"] = serde_json::Value::String(req_id.clone());
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    {
+        let mut channels = state.response_channels.lock().unwrap();
+        channels.insert(req_id.clone(), tx);
+    }
+
+    {
+        let sender_lock = state.sender.lock().unwrap();
+        if let Some(ws_tx) = &*sender_lock {
+            let text = full_payload.to_string();
+            let _ = ws_tx.send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(text)),
+                is_media: false,
+            });
+        } else {
+            let mut channels = state.response_channels.lock().unwrap();
+            channels.remove(&req_id);
+            return Err("Not connected to network".into());
+        }
+    }
+
+    match tokio::time::timeout(Duration::from_secs(10), rx).await {
+        Ok(Ok(res)) => Ok(res),
+        _ => {
+            let mut channels = state.response_channels.lock().unwrap();
+            channels.remove(&req_id);
+            Err("Request timed out".into())
+        }
+    }
+}
+
+async fn internal_establish_session_logic(
+    db_state: &DbState,
+    remote_hash: &str,
+    bundle: serde_json::Value
+) -> Result<(), String> {
+    let mut store = SqliteSignalStore::new(db_state);
+    let address = ProtocolAddress::new(remote_hash.to_string(), DeviceId::try_from(1u32).expect("valid ID"));
+
+    let registration_id = bundle["registrationId"].as_u64().ok_or("Missing registrationId")? as u32;
+    let identity_key_hex = bundle["identityKey"].as_str().ok_or("Missing identityKey")?;
+    let identity_key = IdentityKey::decode(&flexible_decode(identity_key_hex)?)
+        .map_err(|e| e.to_string())?;
+
+    let (pre_key_id, pre_key_pub) = if let Some(pre_key_obj) = bundle.get("preKey") {
+        let id = PreKeyId::from(pre_key_obj["id"].as_u64().ok_or("Missing preKey id")? as u32);
+        let pub_bytes = flexible_decode(pre_key_obj["publicKey"].as_str().ok_or("Missing preKey publicKey")?)?;
+        let pub_key = libsignal_protocol::PublicKey::deserialize(&pub_bytes).map_err(|e| e.to_string())?;
+        (id, pub_key)
+    } else if let Some(pre_keys_arr) = bundle.get("preKeys").and_then(|v| v.as_array()) {
+        if pre_keys_arr.is_empty() { return Err("preKeys array is empty".into()); }
+        let first = &pre_keys_arr[0];
+        let id = PreKeyId::from(first["id"].as_u64().ok_or("Missing preKey id in array")? as u32);
+        let pub_bytes = flexible_decode(first["publicKey"].as_str().ok_or("Missing preKey publicKey in array")?)?;
+        let pub_key = libsignal_protocol::PublicKey::deserialize(&pub_bytes).map_err(|e| e.to_string())?;
+        (id, pub_key)
+    } else {
+        return Err("Missing preKey or preKeys in bundle".into());
+    };
+
+    let signed_pre_key_id = SignedPreKeyId::from(bundle["signedPreKey"]["id"].as_u64().ok_or("Missing signedPreKey id")? as u32);
+    let signed_pre_key_pub = libsignal_protocol::PublicKey::deserialize(&flexible_decode(bundle["signedPreKey"]["publicKey"].as_str().ok_or("Missing signedPreKey publicKey")?)?)
+        .map_err(|e| e.to_string())?;
+    let signed_pre_key_sig = flexible_decode(bundle["signedPreKey"]["signature"].as_str().ok_or("Missing signedPreKey signature")?)?;
+
+    let kyber_pre_key_id = KyberPreKeyId::from(bundle["kyberPreKey"]["id"].as_u64().ok_or("Missing kyberPreKey id")? as u32);
+    let kyber_pre_key_pub = kem::PublicKey::deserialize(&flexible_decode(bundle["kyberPreKey"]["publicKey"].as_str().ok_or("Missing kyberPreKey publicKey")?)?)
+        .map_err(|e| e.to_string())?;
+    let kyber_pre_key_sig = flexible_decode(bundle["kyberPreKey"]["signature"].as_str().ok_or("Missing kyberPreKey signature")?)?;
+
+    let prekey_bundle = PreKeyBundle::new(
+        registration_id,
+        DeviceId::try_from(1u32).expect("valid ID"),
+        Some((pre_key_id, pre_key_pub)),
+        signed_pre_key_id,
+        signed_pre_key_pub,
+        signed_pre_key_sig,
+        kyber_pre_key_id,
+        kyber_pre_key_pub,
+        kyber_pre_key_sig,
+        identity_key,
+    ).map_err(|e| e.to_string())?;
+
+    let mut rng = StdRng::from_os_rng();
+    process_prekey_bundle(
+        &address,
+        &mut store.clone(),
+        &mut store,
+        &prekey_bundle,
+        std::time::SystemTime::now(),
+        &mut rng,
+    ).await.map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -528,7 +634,24 @@ pub async fn connect_network(
                         Some(Ok(msg)) => {
                             match msg {
                                 Message::Text(text) => {
-                                    let _ = app_handle.emit("network-msg", text.to_string());
+                                    let text_str = text.to_string();
+                                    
+                                    // Intercept internal requests
+                                    let mut handled_internally = false;
+                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
+                                        if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
+                                            let state = app_handle.state::<NetworkState>();
+                                            let mut channels = state.response_channels.lock().unwrap();
+                                            if let Some(tx) = channels.remove(req_id) {
+                                                let _ = tx.send(val);
+                                                handled_internally = true;
+                                            }
+                                        }
+                                    }
+
+                                    if !handled_internally {
+                                        let _ = app_handle.emit("network-msg", text_str);
+                                    }
                                 }
                                 Message::Binary(bin) => {
                                     let _ = app_handle.emit("network-bin", bin.to_vec());
@@ -1067,113 +1190,24 @@ pub fn signal_get_bundle(state: State<'_, DbState>) -> Result<serde_json::Value,
 
 #[tauri::command]
 pub fn signal_establish_session(
-    state: State<'_, DbState>,
+    db_state: State<'_, DbState>,
     remote_hash: String,
     bundle: serde_json::Value,
 ) -> Result<(), String> {
     tauri::async_runtime::block_on(async move {
-        let mut store = SqliteSignalStore::new(&state);
-        let address = ProtocolAddress::new(remote_hash.clone(), DeviceId::try_from(1u32).expect("valid ID"));
-
-        let registration_id = bundle["registrationId"].as_u64().ok_or("Missing registrationId")? as u32;
-        let identity_key_hex = bundle["identityKey"].as_str().ok_or("Missing identityKey")?;
-        let identity_key = IdentityKey::decode(&flexible_decode(identity_key_hex)?)
-            .map_err(|e| e.to_string())?;
-        
-        println!("[Signal] Establishing session with {} (registration_id={}, idKey={})", remote_hash, registration_id, identity_key_hex);
-
-        // Handle both 'preKey' (object) and 'preKeys' (array with at least one element)
-        let (pre_key_id, pre_key_pub) = if let Some(pre_key_obj) = bundle.get("preKey") {
-            let id = PreKeyId::from(pre_key_obj["id"].as_u64().ok_or("Missing preKey id")? as u32);
-            let pub_bytes = flexible_decode(pre_key_obj["publicKey"].as_str().ok_or("Missing preKey publicKey")?)?;
-            let pub_key = libsignal_protocol::PublicKey::deserialize(&pub_bytes).map_err(|e| e.to_string())?;
-            println!("[Signal] Using one-time PreKey {}", u32::from(id));
-            (id, pub_key)
-        } else if let Some(pre_keys_arr) = bundle.get("preKeys").and_then(|v| v.as_array()) {
-            if pre_keys_arr.is_empty() { return Err("preKeys array is empty".into()); }
-            let first = &pre_keys_arr[0];
-            let id = PreKeyId::from(first["id"].as_u64().ok_or("Missing preKey id in array")? as u32);
-            let pub_bytes = flexible_decode(first["publicKey"].as_str().ok_or("Missing preKey publicKey in array")?)?;
-            let pub_key = libsignal_protocol::PublicKey::deserialize(&pub_bytes).map_err(|e| e.to_string())?;
-            println!("[Signal] Using one-time PreKey {} from preKeys array", u32::from(id));
-            (id, pub_key)
-        } else {
-            return Err("Missing preKey or preKeys in bundle".into());
-        };
-        
-        let signed_pre_key_id = SignedPreKeyId::from(bundle["signedPreKey"]["id"].as_u64().ok_or("Missing signedPreKey id")? as u32);
-        let signed_pre_key_pub = libsignal_protocol::PublicKey::deserialize(&flexible_decode(bundle["signedPreKey"]["publicKey"].as_str().ok_or("Missing signedPreKey publicKey")?)?)
-            .map_err(|e| e.to_string())?;
-        let signed_pre_key_sig = flexible_decode(bundle["signedPreKey"]["signature"].as_str().ok_or("Missing signedPreKey signature")?)?;
-
-        let kyber_pre_key_id = KyberPreKeyId::from(bundle["kyberPreKey"]["id"].as_u64().ok_or("Missing kyberPreKey id")? as u32);
-        let kyber_pre_key_pub = kem::PublicKey::deserialize(&flexible_decode(bundle["kyberPreKey"]["publicKey"].as_str().ok_or("Missing kyberPreKey publicKey")?)?)
-            .map_err(|e| e.to_string())?;
-        let kyber_pre_key_sig = flexible_decode(bundle["kyberPreKey"]["signature"].as_str().ok_or("Missing kyberPreKey signature")?)?;
-
-        let bundle = PreKeyBundle::new(
-            registration_id,
-            DeviceId::try_from(1u32).expect("valid ID"),
-            Some((pre_key_id, pre_key_pub)),
-            signed_pre_key_id,
-            signed_pre_key_pub,
-            signed_pre_key_sig,
-            kyber_pre_key_id,
-            kyber_pre_key_pub,
-            kyber_pre_key_sig,
-            identity_key,
-        ).map_err(|e| e.to_string())?;
-
-        let mut rng = StdRng::from_os_rng();
-        process_prekey_bundle(
-            &address,
-            &mut store.clone(),
-            &mut store,
-            &bundle,
-            std::time::SystemTime::now(),
-            &mut rng,
-        ).await.map_err(|e| e.to_string())?;
-
-        Ok(())
+        internal_establish_session_logic(&db_state, &remote_hash, bundle).await
     })
 }
 
 #[tauri::command]
 pub fn signal_encrypt(
-    state: State<'_, DbState>,
+    db_state: State<'_, DbState>,
+    net_state: State<'_, NetworkState>,
     remote_hash: String,
     message: String,
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::block_on(async move {
-        let mut store = SqliteSignalStore::new(&state);
-        let address = ProtocolAddress::new(remote_hash.clone(), DeviceId::try_from(1u32).expect("valid ID"));
-        let mut rng = StdRng::from_os_rng();
-
-        let ciphertext = message_encrypt(
-            message.as_bytes(),
-            &address,
-            &mut store.clone(),
-            &mut store,
-            std::time::SystemTime::now(),
-            &mut rng,
-        ).await.map_err(|e| e.to_string())?;
-
-        let (type_val, body) = match ciphertext {
-            CiphertextMessage::SignalMessage(m) => {
-                println!("[Signal] Encrypted Whisper message to {}", remote_hash);
-                (CiphertextMessageType::Whisper, m.serialized().to_vec())
-            },
-            CiphertextMessage::PreKeySignalMessage(m) => {
-                println!("[Signal] Encrypted PreKey message to {}", remote_hash);
-                (CiphertextMessageType::PreKey, m.serialized().to_vec())
-            },
-            _ => return Err("Unsupported ciphertext type".into()),
-        };
-
-        Ok(serde_json::json!({
-            "type": type_val as u8,
-            "body": base64::engine::general_purpose::STANDARD.encode(body)
-        }))
+        internal_signal_encrypt(&db_state, &net_state, &remote_hash, message).await
     })
 }
 
@@ -1283,4 +1317,198 @@ pub async fn signal_get_own_identity(state: tauri::State<'_, DbState>) -> Result
 
     Ok(pub_key)
 }
+#[tauri::command]
+pub fn send_typing_status(
+    db_state: State<'_, crate::app_state::DbState>,
+    net_state: State<'_, crate::app_state::NetworkState>,
+    peer_hash: String,
+    is_typing: bool
+) -> Result<(), String> {
+    println!("[Typing] Command called for {} (isTyping={})", peer_hash, is_typing);
+    tauri::async_runtime::block_on(async move {
+        let message = json!({ "type": "typing", "isTyping": is_typing }).to_string();
+        match internal_signal_encrypt(&db_state, &net_state, &peer_hash, message).await {
+            Ok(encrypted) => {
+                println!("[Typing] Encryption success for {}", peer_hash);
+                let _ = internal_send_volatile(&net_state, &peer_hash, encrypted);
+            },
+            Err(e) => println!("[Typing] Encryption FAILED for {}: {}", peer_hash, e),
+        }
+        Ok(())
+    })
+}
 
+
+#[tauri::command]
+pub fn send_presence_update(
+    db_state: State<'_, crate::app_state::DbState>,
+    net_state: State<'_, crate::app_state::NetworkState>,
+    peer_hashes: Vec<String>,
+    is_online: bool
+) -> Result<(), String> {
+    tauri::async_runtime::block_on(async move {
+        for peer in peer_hashes {
+            let message = json!({ "type": "presence", "isOnline": is_online }).to_string();
+            if let Ok(encrypted) = internal_signal_encrypt(&db_state, &net_state, &peer, message).await {
+                let _ = internal_send_volatile(&net_state, &peer, encrypted);
+            }
+        }
+        Ok(())
+    })
+}
+
+
+#[tauri::command]
+pub fn send_receipt(
+    db_state: State<'_, crate::app_state::DbState>,
+    net_state: State<'_, crate::app_state::NetworkState>,
+    peer_hash: String,
+    msg_ids: Vec<String>,
+    status: String
+) -> Result<(), String> {
+    println!("[Receipt] Command called for {} (ids={:?}, status={})", peer_hash, msg_ids, status);
+    tauri::async_runtime::block_on(async move {
+        let message = json!({ "type": "receipt", "msgIds": msg_ids, "status": status }).to_string();
+        match internal_signal_encrypt(&db_state, &net_state, &peer_hash, message).await {
+            Ok(encrypted) => {
+                println!("[Receipt] Encryption success for {}", peer_hash);
+                let _ = internal_send_volatile(&net_state, &peer_hash, encrypted);
+            },
+            Err(e) => println!("[Receipt] Encryption FAILED for {}: {}", peer_hash, e),
+        }
+        Ok(())
+    })
+}
+
+
+#[tauri::command]
+pub fn send_profile_update(
+    db_state: State<'_, crate::app_state::DbState>,
+    net_state: State<'_, crate::app_state::NetworkState>,
+    peer_hash: String,
+    alias: Option<String>,
+    pfp: Option<String>
+) -> Result<(), String> {
+    tauri::async_runtime::block_on(async move {
+        let message = json!({
+            "type": "profile_update",
+            "alias": alias,
+            "pfp": pfp
+        }).to_string();
+        if let Ok(encrypted) = internal_signal_encrypt(&db_state, &net_state, &peer_hash, message).await {
+            let _ = internal_send_volatile(&net_state, &peer_hash, encrypted);
+        }
+        Ok(())
+    })
+}
+
+
+// Polling-based presence loop was removed as per performance/privacy requirements.
+
+async fn internal_signal_encrypt(
+    db_state: &DbState,
+    net_state: &NetworkState,
+    remote_hash: &str,
+    message: String
+) -> Result<serde_json::Value, String> {
+    let mut store = SqliteSignalStore::new(db_state);
+    let address = ProtocolAddress::new(remote_hash.to_string(), DeviceId::try_from(1u32).expect("valid ID"));
+    
+    // Attempt encryption
+    let res = {
+        let mut rng = StdRng::from_os_rng();
+        message_encrypt(
+            message.as_bytes(),
+            &address,
+            &mut store.clone(),
+            &mut store,
+            std::time::SystemTime::now(),
+            &mut rng,
+        ).await
+    };
+
+    match res {
+        Ok(ciphertext) => {
+            let (type_val, body) = match ciphertext {
+                CiphertextMessage::SignalMessage(m) => (CiphertextMessageType::Whisper, m.serialized().to_vec()),
+                CiphertextMessage::PreKeySignalMessage(m) => (CiphertextMessageType::PreKey, m.serialized().to_vec()),
+                _ => return Err("Unsupported ciphertext type".into()),
+            };
+            Ok(json!({
+                "type": type_val as u8,
+                "body": base64::engine::general_purpose::STANDARD.encode(body)
+            }))
+        }
+        Err(e) if e.to_string().contains("session") || e.to_string().contains("not found") => {
+            // Smart recovery: Fetch bundle and establish session
+            println!("[Signal] Session not found for {}, fetching bundle...", remote_hash);
+            
+            let response = internal_request(net_state, "fetch_key", json!({ "target_hash": remote_hash })).await?;
+            
+            if !response["found"].as_bool().unwrap_or(false) {
+                return Err(format!("Peer {} not found on server", remote_hash));
+            }
+
+            let bundle = if let Some(bundles) = response.get("bundles") {
+                bundles[remote_hash].clone()
+            } else {
+                response["bundle"].clone()
+            };
+
+            if bundle.is_null() {
+                return Err(format!("Bundle for {} is null in response", remote_hash));
+            }
+
+            internal_establish_session_logic(db_state, remote_hash, bundle).await?;
+
+            // Retry encryption after session established
+            println!("[Signal] Session established for {}, retrying encryption...", remote_hash);
+            let mut store = SqliteSignalStore::new(db_state);
+            let mut rng = StdRng::from_os_rng();
+            let ciphertext = message_encrypt(
+                message.as_bytes(),
+                &address,
+                &mut store.clone(),
+                &mut store,
+                std::time::SystemTime::now(),
+                &mut rng,
+            ).await.map_err(|e| e.to_string())?;
+
+            let (type_val, body) = match ciphertext {
+                CiphertextMessage::SignalMessage(m) => (CiphertextMessageType::Whisper, m.serialized().to_vec()),
+                CiphertextMessage::PreKeySignalMessage(m) => (CiphertextMessageType::PreKey, m.serialized().to_vec()),
+                _ => return Err("Unsupported ciphertext type".into()),
+            };
+            Ok(json!({
+                "type": type_val as u8,
+                "body": base64::engine::general_purpose::STANDARD.encode(body)
+            }))
+        }
+        Err(e) => Err(e.to_string())
+    }
+}
+
+fn internal_send_volatile(state: &NetworkState, to: &str, payload: serde_json::Value) -> Result<(), String> {
+    let sender_lock = state.sender.lock().unwrap();
+    if let Some(tx) = &*sender_lock {
+        let body = payload.to_string();
+        let envelope = json!({
+            "type": "volatile_relay",
+            "to": to,
+            "body": body
+        });
+        
+        let mut padded = envelope.to_string();
+        if padded.len() < PACKET_SIZE {
+            padded.push_str(&" ".repeat(PACKET_SIZE - padded.len()));
+        }
+        
+        let _ = tx.send(PacedMessage {
+            msg: Message::Text(Utf8Bytes::from(padded)),
+            is_media: true,
+        });
+        Ok(())
+    } else {
+        Err("Disconnected".into())
+    }
+}

@@ -6,5 +6,10 @@ export default defineConfig({
   plugins: [svelte()],
   resolve: {
     conditions: ['browser']
+  },
+  server: {
+    watch: {
+      ignored: ['**/src-tauri/**']
+    }
   }
 })

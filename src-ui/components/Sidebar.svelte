@@ -4,7 +4,7 @@
   import { 
     startChat, createGroup, updateMyProfile, 
     togglePin, toggleArchive, toggleMute, toggleBlock, updatePrivacy,
-    registerGlobalNickname, lookupNickname, burnAccount, refreshDecoys
+    registerGlobalNickname, lookupNickname, burnAccount
   } from '../lib/store';
   import {
     LucidePlus, LucideSettings, LucideSearch,
@@ -592,35 +592,6 @@
                             </div>
                         </div>
 
-                        <div class="space-y-1">
-                            <h3 class="font-bold text-entropy-text-primary flex items-center space-x-2">
-                                <LucideCpu size={18} class="text-entropy-accent" />
-                                <span>Decoy Fetching</span>
-                            </h3>
-                            <p class="text-xs text-entropy-text-secondary leading-relaxed">Fetch multiple random keys when looking up a peer to hide your intent from the server.</p>
-                            <div class="flex items-center justify-between pt-2">
-                                <button 
-                                    onclick={async (e) => {
-                                        const btn = e.currentTarget;
-                                        btn.disabled = true;
-                                        const original = btn.innerText;
-                                        btn.innerText = "REFRESHING...";
-                                        await refreshDecoys($userStore.relayUrl);
-                                        btn.innerText = "DONE!";
-                                        setTimeout(() => { 
-                                            btn.innerText = original; 
-                                            btn.disabled = false;
-                                        }, 1000);
-                                    }}
-                                    class="text-[9px] font-bold text-entropy-accent hover:text-entropy-accent/80 uppercase tracking-tighter"
-                                >
-                                    REFRESH POOL
-                                </button>
-                                <button onclick={() => updatePrivacy({ decoyMode: !$userStore.privacySettings.decoyMode })} class="w-12 h-6 rounded-full transition-colors relative {$userStore.privacySettings.decoyMode ? 'bg-entropy-accent' : 'bg-entropy-surface-light'}" aria-label="Toggle Decoy Mode">
-                                    <div class="absolute top-1 w-4 h-4 bg-white rounded-full transition-all {$userStore.privacySettings.decoyMode ? 'left-7' : 'left-1'}"></div>
-                                </button>
-                            </div>
-                        </div>
 
                         <div class="space-y-1">
                             <h3 class="font-bold text-entropy-text-primary flex items-center space-x-2">
@@ -814,19 +785,16 @@
 {/if}
 
 {#if viewingImage}
-    <div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" onclick={() => viewingImage = null}>
-        <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
-            <button class="absolute -top-12 right-0 p-2 text-white/60 hover:text-white transition" onclick={() => viewingImage = null}>
-                <LucideX size={32} />
-            </button>
-            <img src={viewingImage} alt="Preview" class="max-w-full max-h-full rounded-2xl shadow-2xl animate-in zoom-in-95 duration-300 pointer-events-none" />
-        </div>
-    </div>
-{/if}
-
-{#if viewingImage}
-    <div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" onclick={() => viewingImage = null}>
-        <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div 
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" 
+        onclick={() => viewingImage = null}
+        onkeydown={(e) => e.key === 'Escape' && (viewingImage = null)}
+        role="button"
+        tabindex="0"
+        aria-label="Close preview"
+    >
+        <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
             <button class="absolute -top-12 right-0 p-2 text-white/60 hover:text-white transition" onclick={() => viewingImage = null}>
                 <LucideX size={32} />
             </button>

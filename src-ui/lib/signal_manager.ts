@@ -107,90 +107,19 @@ export class SignalManager {
         console.log("Keys uploaded successfully.");
     }
 
-    private sessionLocks: Map<string, Promise<string | null>> = new Map();
 
     /**
-     * Fetches a peer's identity bundle and establishes a Double Ratchet session.
-     * Implements Plausible Deniability by mixing the true recipient with decoy hashes.
+     * Encrypts a message for a peer. Rust automatically handles session establishment (smart negotiation)
+     * including Decoy Mode for privacy.
      */
-    async establishSession(recipientHash: string, serverUrl: string): Promise<string | null> {
-        if (this.sessionLocks.has(recipientHash)) {
-            return this.sessionLocks.get(recipientHash)!;
-        }
-
-        const sessionPromise = (async () => {
-            try {
-                const state = get(userStore);
-                let targetParam = recipientHash;
-
-                if (state.privacySettings.decoyMode && state.decoyHashes.length > 0) {
-                    const decoys = [...state.decoyHashes]
-                        .sort(() => 0.5 - Math.random())
-                        .slice(0, 10)
-                        .filter(h => h !== recipientHash);
-
-                    const mixed = [recipientHash, ...decoys].sort(() => 0.5 - Math.random());
-                    targetParam = mixed.join(',');
-                    console.debug(`[Signal] Establish session with decoys: Requesting ${mixed.length} bundles`);
-                }
-
-                console.log(`[Signal] Fetching pre-key bundle for ${recipientHash}...`);
-
-                const { network } = await import('./network');
-                const res = await network.request('fetch_key', { target_hash: targetParam });
-
-                if (!res.found) {
-                    console.warn(`[Signal] Failed to fetch bundle for ${recipientHash}: Not Found`);
-                    return null;
-                }
-
-                const bundle = res.bundles ? res.bundles[recipientHash] : res.bundle;
-
-                if (!bundle) {
-                    console.warn(`[Signal] Response found but bundle for ${recipientHash} is null`);
-                    return null;
-                }
-
-                await invoke('signal_establish_session', {
-                    remoteHash: recipientHash,
-                    bundle
-                });
-                return "established";
-            } catch (e: any) {
-                console.error("Session establishment failed:", e);
-                return null;
-            }
-        })();
-
-        this.sessionLocks.set(recipientHash, sessionPromise);
+    async encrypt(recipientHash: string, message: string): Promise<any> {
         try {
-            return await sessionPromise;
-        } finally {
-            this.sessionLocks.delete(recipientHash);
-        }
-    }
-
-    /**
-     * Encrypts a message for a peer. Automatically initiates session establishment if required.
-     */
-    async encrypt(recipientHash: string, message: string, serverUrl: string, skipIntegrity: boolean = false): Promise<any> {
-        try {
-            const encrypted = await invoke<any>('signal_encrypt', {
+            return await invoke<any>('signal_encrypt', {
                 remoteHash: recipientHash,
                 message
             });
-            return encrypted;
         } catch (e: any) {
-            if (e.toString().includes("session") && e.toString().includes("not found")) {
-                const status = await this.establishSession(recipientHash, serverUrl);
-                if (status === "established") {
-                    return await invoke<any>('signal_encrypt', {
-                        remoteHash: recipientHash,
-                        message
-                    });
-                }
-            }
-            console.error("Signal encryption failed after retry:", e);
+            console.error("Signal encryption failed:", e);
             throw e;
         }
     }

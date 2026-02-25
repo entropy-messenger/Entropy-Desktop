@@ -20,8 +20,11 @@ pub struct NetworkState {
     pub queue: Mutex<VecDeque<PacedMessage>>,
     pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>, 
     pub cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
+    pub response_channels: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,
 }
 
 pub struct AudioState {
     pub recorder: Mutex<AudioRecorder>,
 }
+
+

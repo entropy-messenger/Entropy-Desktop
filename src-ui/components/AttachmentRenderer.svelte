@@ -11,7 +11,10 @@
     let loading = $state(false);
     let error = $state(false);
     let isDownloading = $state(false);
-    let downloadSuccess = $state(msg.attachment?.isDownloaded || false);
+    let downloadSuccess = $state(false);
+    $effect(() => {
+        downloadSuccess = msg.attachment?.isDownloaded || false;
+    });
 
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
     import { signalManager } from '../lib/signal_manager';

@@ -27,6 +27,7 @@ fn main() {
             queue: Mutex::new(std::collections::VecDeque::new()),
             sender: Mutex::new(None),
             cancel: Mutex::new(None),
+            response_channels: Mutex::new(std::collections::HashMap::new()),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -64,9 +65,14 @@ fn main() {
             commands::signal_sign_message,
             commands::signal_get_peer_identity,
             commands::signal_set_peer_trust,
-            commands::signal_get_own_identity
+            commands::signal_get_own_identity,
+            commands::send_typing_status,
+            commands::send_presence_update,
+            commands::send_receipt,
+            commands::send_profile_update
         ])
         .setup(|app| {
+            
             // Setup tray and menu as before
             let quit_i = MenuItem::with_id(app, "quit", "Quit Entropy", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;

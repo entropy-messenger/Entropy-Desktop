@@ -187,7 +187,7 @@
                >
                    {playbackSpeed}x
                </button>
-               <LucideMic size={11} class="{isMine ? 'text-white/40' : 'text-entropy-primary/40'}" />
+               <LucideMic size={11} class={isMine ? 'text-white/40' : 'text-entropy-primary/40'} />
            </div>
       </div>
   </div>

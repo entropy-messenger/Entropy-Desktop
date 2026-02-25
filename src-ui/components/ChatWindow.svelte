@@ -15,7 +15,8 @@
     LucideStar, LucideReply, LucideClock, LucideBellOff, LucideTrash2,
     LucideExternalLink, LucideImage, LucideLink, LucideFile, LucideInfo,
     LucideCopy, LucideCheck as LucideCheckIcon, LucideShare2, LucideBan,
-    LucideShieldCheck, LucideShieldAlert, LucideSquare, LucideTrash
+    LucideShieldCheck, LucideShieldAlert, LucideSquare, LucideTrash,
+    LucideLoader
   } from 'lucide-svelte';
   import AttachmentRenderer from './AttachmentRenderer.svelte';
   import VoiceNotePlayer from './VoiceNotePlayer.svelte';
@@ -278,29 +279,28 @@
       setTimeout(() => inviteCopied = false, 2000);
   };
   
-  let typingTimeout: any;
-  let isLocallyTyping = false;
-  let lastTypingSent = 0;
+  let isLocallyTyping = $state(false);
   let lastTypingPeer: string | null = null;
 
   $effect(() => {
       const currentInput = messageInput;
       const currentPeer = activeChat?.peerHash;
+      const canSendTyping = $userStore.privacySettings.lastSeen === 'everyone';
       
-      if (lastTypingPeer && lastTypingPeer !== currentPeer) {
+      // If we switched chats or turned off typing, stop typing in the old one
+      if (lastTypingPeer && (lastTypingPeer !== currentPeer || !canSendTyping)) {
           if (isLocallyTyping) {
               sendTypingStatus(lastTypingPeer, false).catch(() => {});
               isLocallyTyping = false;
           }
       }
-      lastTypingPeer = currentPeer;
+      lastTypingPeer = currentPeer ?? null;
+
+      if (!canSendTyping) return;
 
       if (currentInput.length > 0 && activeChat && !activeChat.isGroup) {
-          const now = Date.now();
-          // Send if first time or every 4s to keep recipient timer alive
-          if (!isLocallyTyping || (now - lastTypingSent > 4000)) {
+          if (!isLocallyTyping) {
               isLocallyTyping = true;
-              lastTypingSent = now;
               sendTypingStatus(activeChat.peerHash, true).catch(() => {});
           }
       } else if (currentInput.length === 0 && isLocallyTyping && activeChat && !activeChat.isGroup) {
@@ -308,20 +308,27 @@
           sendTypingStatus(activeChat.peerHash, false).catch(() => {});
       }
       
-      if (typingTimeout) clearTimeout(typingTimeout);
-      if (activeChat && !activeChat.isGroup) {
-          const typingPeer = activeChat.peerHash;
-          typingTimeout = setTimeout(() => {
-              if (isLocallyTyping) {
-                  isLocallyTyping = false;
-                  sendTypingStatus(typingPeer, false).catch(() => {});
-              }
-          }, 2000);
-      }
+      // Auto-stop typing after 5 seconds of message input inactivity
+      const timeout = setTimeout(() => {
+          if (isLocallyTyping && activeChat && !activeChat.isGroup) {
+              isLocallyTyping = false;
+              sendTypingStatus(activeChat.peerHash, false).catch(() => {});
+          }
+      }, 5000);
 
-      return () => {
-          if (typingTimeout) clearTimeout(typingTimeout);
-      };
+      return () => clearTimeout(timeout);
+  });
+
+  // Keep-alive for typing indicator (refreshes indicator on recipient side every 4 seconds)
+  $effect(() => {
+      if (isLocallyTyping && activeChat && !activeChat.isGroup && $userStore.privacySettings.lastSeen === 'everyone') {
+          const interval = setInterval(() => {
+              if (isLocallyTyping && activeChat) {
+                  sendTypingStatus(activeChat.peerHash, true).catch(() => {});
+              }
+          }, 4000);
+          return () => clearInterval(interval);
+      }
   });
 </script>
 
@@ -546,7 +553,7 @@
                                 {/if}
 
                                 <div class="flex items-center justify-end space-x-1 mt-1.5">
-                                    {#if msg.isStarred}<LucideStar size={10} class="{msg.isMine ? 'text-white fill-white' : 'text-entropy-accent fill-entropy-accent'}" />{/if}
+                                    {#if msg.isStarred}<LucideStar size={10} class={msg.isMine ? 'text-white fill-white' : 'text-entropy-accent fill-entropy-accent'} />{/if}
                                     <span class="text-[9px] font-bold {msg.isMine ? 'text-white/60' : 'text-entropy-text-secondary'}">{new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                                     {#if msg.isMine}
                                         {#if msg.status === 'read'}<LucideCheckCheck size={12} class="text-white/90" />
@@ -876,8 +883,16 @@
 </style>
 
 {#if viewingImage}
-    <div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" onclick={() => viewingImage = null}>
-        <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div 
+        class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md p-4 animate-in fade-in duration-300" 
+        onclick={() => viewingImage = null}
+        onkeydown={(e) => e.key === 'Escape' && (viewingImage = null)}
+        role="button"
+        tabindex="0"
+        aria-label="Close preview"
+    >
+        <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="presentation">
             <button class="absolute -top-12 right-0 p-2 text-white/60 hover:text-white transition" onclick={() => viewingImage = null}>
                 <LucideX size={32} />
             </button>

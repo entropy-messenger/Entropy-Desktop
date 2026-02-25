@@ -233,17 +233,19 @@ export class NetworkLayer {
 
             invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
 
-            const state = get(userStore) as any;
-            Object.keys(state.chats).forEach(peerHash => {
-                if (!state.chats[peerHash].isGroup) {
-                    logicStore.setOnlineStatus(peerHash, true);
-                    logicStore.broadcastProfile(peerHash);
-                }
+            // Broadcast our presence now that we are authenticated and connected
+            import('./actions/contacts').then(({ startHeartbeat }) => {
+                startHeartbeat();
             });
 
-            const current = get(userStore) as any;
-            if (current.privacySettings.decoyMode) {
-                logicStore.refreshDecoys(current.relayUrl).catch(() => { });
+            const state = get(userStore) as any;
+            if (state.privacySettings.lastSeen === 'everyone') {
+                Object.keys(state.chats).forEach(peerHash => {
+                    if (!state.chats[peerHash].isGroup) {
+                        logicStore.setOnlineStatus(peerHash, true);
+                        logicStore.broadcastProfile(peerHash);
+                    }
+                });
             }
 
             return;

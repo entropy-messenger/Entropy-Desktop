@@ -59,7 +59,11 @@ commands.allow = [
     "signal_sign_message",
     "signal_get_peer_identity",
     "signal_set_peer_trust",
-    "signal_get_own_identity"
+    "signal_get_own_identity",
+    "send_typing_status",
+    "send_presence_update",
+    "send_receipt",
+    "send_profile_update"
 ]
 
 [[set]]

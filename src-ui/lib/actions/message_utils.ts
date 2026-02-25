@@ -3,6 +3,7 @@ import { userStore } from '../stores/user';
 import { attachmentStore } from '../attachment_store';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
+import { invoke } from '@tauri-apps/api/core';
 import { toHex } from '../utils';
 import type { Message } from '../types';
 
@@ -72,13 +73,17 @@ export const deleteMessage = (peerHash: string, msgId: string) => bulkDelete(pee
 export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'delivered' | 'read') => {
     const state = get(userStore);
     if (state.blockedHashes.includes(peerHash)) return;
+
+    // Delivery receipts are necessary for the P2P handshake/sync, 
+    // so we only respect the toggle for 'read' receipts.
     if (status === 'read' && !state.privacySettings.readReceipts) return;
+
     if (msgIds.length === 0) return;
-    const receipt = { type: 'receipt', msgIds, status };
     try {
-        const ciphertext = await signalManager.encrypt(peerHash, JSON.stringify(receipt), get(userStore).relayUrl, true);
-        network.sendVolatile(peerHash, new TextEncoder().encode(JSON.stringify(ciphertext)));
-    } catch (e) { }
+        await invoke('send_receipt', { peerHash, msgIds, status });
+    } catch (e) {
+        console.error(`[Receipt] Failed to send to ${peerHash}:`, e);
+    }
 };
 
 /**

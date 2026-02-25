@@ -41,6 +41,10 @@
             class="absolute inset-0 bg-entropy-bg/60 backdrop-blur-sm"
             transition:fade={{ duration: 200 }}
             onclick={handleCancel}
+            onkeydown={(e) => e.key === 'Escape' && handleCancel()}
+            role="button"
+            tabindex="0"
+            aria-label="Close modal"
         ></div>
 
         <!-- Modal Content -->

@@ -397,7 +397,5 @@
         100% { width: 0%; left: 100%; }
     }
 
-    .animate-progress {
-        animation: progress 2s infinite ease-in-out;
-    }
+
 </style>

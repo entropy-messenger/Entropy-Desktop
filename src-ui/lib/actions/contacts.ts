@@ -4,6 +4,7 @@ import { userStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
 import { minePoW } from '../crypto';
+import { invoke } from '@tauri-apps/api/core';
 import { bulkDelete, sendReceipt } from './message_utils';
 import type { PrivacySettings } from '../types';
 
@@ -11,7 +12,7 @@ import type { PrivacySettings } from '../types';
  * Manages peer presence, profile synchronization, and contact metadata updates.
  */
 export const statusTimeouts: Record<string, any> = {};
-let heartbeatInterval: any = null;
+
 
 export const markOnline = (peerHash: string) => {
     if (statusTimeouts[peerHash]) clearTimeout(statusTimeouts[peerHash]);
@@ -43,24 +44,25 @@ export const markOnline = (peerHash: string) => {
 /**
  * Initiates the background heartbeat for presence broadcasting and message expiry.
  */
-export const startHeartbeat = () => {
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
+/**
+ * Broadcasts initial presence upon connection.
+ * Explicit polling has been removed to reduce network overhead and improve privacy.
+ */
+export const startHeartbeat = async () => {
+    const state = get(userStore);
+    if (state.identityHash && state.isConnected) {
+        const peerHashes = Object.keys(state.chats).filter(peerHash =>
+            !state.chats[peerHash].isGroup &&
+            state.privacySettings.lastSeen === 'everyone' &&
+            !state.blockedHashes.includes(peerHash)
+        );
 
-    heartbeatInterval = setInterval(() => {
-        const state = get(userStore);
-        if (state.identityHash && state.isConnected) {
-            Object.keys(state.chats).forEach(peerHash => {
-                if (!state.chats[peerHash].isGroup && state.privacySettings.lastSeen === 'everyone' && state.privacySettings.readReceipts) {
-                    setOnlineStatus(peerHash, true);
-                }
-            });
-        } else if (!state.isConnected) {
-            userStore.update(s => {
-                Object.keys(s.chats).forEach(h => s.chats[h].isOnline = false);
-                return s;
-            });
+        try {
+            await invoke('send_presence_update', { peerHashes, isOnline: true });
+        } catch (e) {
+            console.error(`[Presence] Failed to broadcast:`, e);
         }
-    }, 12000);
+    }
 };
 
 export const updateMyProfile = (alias: string, pfp: string | null) => {
@@ -78,35 +80,33 @@ export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.myAlias && !state.myPfp) return;
     if (state.blockedHashes.includes(peerHash)) return;
-
-    const profile = {
-        type: 'profile_update',
-        alias: state.myAlias,
-        pfp: state.myPfp
-    };
+    if (state.privacySettings.lastSeen !== 'everyone') return;
 
     try {
-        const ciphertext = await signalManager.encrypt(peerHash, JSON.stringify(profile), get(userStore).relayUrl, true);
-        network.sendVolatile(peerHash, new TextEncoder().encode(JSON.stringify(ciphertext)));
-    } catch (e) { }
+        await invoke('send_profile_update', {
+            peerHash,
+            alias: state.myAlias || undefined,
+            pfp: state.myPfp || undefined
+        });
+    } catch (e) {
+        console.error(`[Profile] Failed to broadcast to ${peerHash}:`, e);
+    }
 };
 
-export const sendTypingStatus = async (peerIdentityHash: string, isTyping: boolean) => {
+export const sendTypingStatus = async (peerHash: string, isTyping: boolean) => {
     const state = get(userStore);
-    if (state.chats[peerIdentityHash]?.isGroup || state.blockedHashes.includes(peerIdentityHash)) return;
-    if (!state.privacySettings.readReceipts) return;
+    if (state.chats[peerHash]?.isGroup || state.blockedHashes.includes(peerHash)) return;
+    if (state.privacySettings.lastSeen !== 'everyone') return;
 
-    const contentObj = { type: 'typing', isTyping };
-    const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
-    network.sendVolatile(peerIdentityHash, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
+    try {
+        await invoke('send_typing_status', { peerHash, isTyping });
+    } catch (e) {
+        console.error(`[Typing] Failed to send to ${peerHash}:`, e);
+    }
 };
 
-export const setOnlineStatus = async (peerIdentityHash: string, isOnline: boolean) => {
-    const state = get(userStore);
-    if (state.blockedHashes.includes(peerIdentityHash) || !state.privacySettings.readReceipts) return;
-    const contentObj = { type: 'presence', isOnline };
-    const ciphertextObj = await signalManager.encrypt(peerIdentityHash, JSON.stringify(contentObj), get(userStore).relayUrl, true);
-    network.sendVolatile(peerIdentityHash, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
+export const setOnlineStatus = async (peerHash: string, isOnline: boolean) => {
+    // Legacy - Rust handles this via periodic heartbeats now.
 };
 
 export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned }; return { ...s, chats: { ...s.chats } }; });
@@ -173,7 +173,25 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
     return { ...s };
 });
 
-export const updatePrivacy = (settings: Partial<PrivacySettings>) => userStore.update(s => ({ ...s, privacySettings: { ...s.privacySettings, ...settings } }));
+export const updatePrivacy = (settings: Partial<PrivacySettings>) => {
+    userStore.update(s => {
+        const oldLastSeen = s.privacySettings.lastSeen;
+        const newState = { ...s, privacySettings: { ...s.privacySettings, ...settings } };
+
+        if (settings.lastSeen && oldLastSeen !== settings.lastSeen) {
+            const peerHashes = Object.keys(s.chats).filter(p => !s.chats[p].isGroup && !s.blockedHashes.includes(p));
+            if (settings.lastSeen === 'nobody') {
+                // Going invisible: Tell everyone we are offline
+                invoke('send_presence_update', { peerHashes, isOnline: false }).catch(() => { });
+            } else if (settings.lastSeen === 'everyone') {
+                // Going visible: Tell everyone we are online
+                invoke('send_presence_update', { peerHashes, isOnline: true }).catch(() => { });
+            }
+        }
+
+        return newState;
+    });
+};
 
 /**
  * Registers a global nickname on the relay server.
@@ -221,7 +239,7 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
     if (!input) return null;
 
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
-        return input;
+        return input.toLowerCase();
     }
 
     try {
@@ -238,7 +256,8 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
 export const verifyContact = async (peerHash: string, isVerified: boolean) => {
 };
 
-export const startChat = (peerHash: string, alias?: string) => {
+export const startChat = (peerHashRaw: string, alias?: string) => {
+    const peerHash = peerHashRaw.toLowerCase();
     userStore.update(s => {
         if (!s.chats[peerHash]) {
             s.chats[peerHash] = {

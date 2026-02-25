@@ -49,7 +49,6 @@ export interface PrivacySettings {
     profilePhoto: 'everyone' | 'nobody';
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
-    decoyMode?: boolean;
     theme?: 'light' | 'dark';
 }
 

@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Message, ServerMessage } from '../types';
 import { parseLinkPreview, fromHex } from '../utils';
 import { fromBase64, toBase64 } from '../crypto';
-import { markOnline, setOnlineStatus, broadcastProfile, statusTimeouts } from './contacts';
+import { markOnline, broadcastProfile, statusTimeouts } from './contacts';
 import { addMessage, sendReceipt } from './message_utils';
 
 export { addMessage, bulkDelete, deleteMessage, downloadAttachment, sendReceipt } from './message_utils';
@@ -37,7 +37,8 @@ const createPayload = (type: string, content: any, id: string, replyTo?: any) =>
 /**
  * Sends an end-to-end encrypted text message to a peer or group.
  */
-export const sendMessage = async (destId: string, content: string) => {
+export const sendMessage = async (destIdRaw: string, content: string) => {
+    const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
@@ -58,7 +59,7 @@ export const sendMessage = async (destId: string, content: string) => {
         }
 
         const payload = { type: 'text_msg', content, id: msgId, replyTo: replyToData, linkPreview };
-        const ciphertextObj = await signalManager.encrypt(destId, JSON.stringify(payload), state.relayUrl);
+        const ciphertextObj = await signalManager.encrypt(destId, JSON.stringify(payload));
 
         network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
 
@@ -111,7 +112,7 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
                 id: msgId,
                 replyTo: replyToData
             };
-            const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
+            const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
             targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
         }
 
@@ -140,7 +141,8 @@ export const sendGroupMessage = async (groupId: string, content: string) => {
 /**
  * Encrypts and transmits a file using AES-GCM-256 and Signal key encapsulation.
  */
-export const sendFile = async (destId: string, file: File) => {
+export const sendFile = async (destIdRaw: string, file: File) => {
+    const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
@@ -181,12 +183,12 @@ export const sendFile = async (destId: string, file: File) => {
                 for (const member of chat.members!) {
                     if (member === state.identityHash) continue;
                     const payload = { ...contentObj, groupId: destId };
-                    const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
+                    const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
                     targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
                 }
                 network.sendJSON({ type: 'group_multicast', targets });
             } else {
-                const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj), state.relayUrl);
+                const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
                 network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
             }
 
@@ -214,7 +216,8 @@ export const sendFile = async (destId: string, file: File) => {
 /**
  * Packages and transmits an audio recording as an encrypted voice note.
  */
-export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
+export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
+    const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
@@ -252,12 +255,12 @@ export const sendVoiceNote = async (destId: string, audioBlob: Blob) => {
             for (const member of chat.members!) {
                 if (member === state.identityHash) continue;
                 const payload = { ...contentObj, groupId: destId };
-                const wrapped = await signalManager.encrypt(member, JSON.stringify(payload), state.relayUrl);
+                const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
                 targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
             }
             network.sendJSON({ type: 'group_multicast', targets });
         } else {
-            const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj), state.relayUrl);
+            const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)), { id: msgId });
         }
 
@@ -411,7 +414,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             };
             await attachmentStore.put(incomingMsgId, fromHex(parsed.data));
         } else if (parsed.type === 'typing') {
-            if (!state.privacySettings.readReceipts) return;
+            if (get(userStore).privacySettings.lastSeen !== 'everyone') return;
             if (typingTimeouts[senderHash]) clearTimeout(typingTimeouts[senderHash]);
 
             userStore.update(s => {
@@ -438,7 +441,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             }
             return;
         } else if (parsed.type === 'presence') {
-            if (!state.privacySettings.readReceipts) return;
+            if (state.privacySettings.lastSeen !== 'everyone') return;
             if (parsed.isOnline) {
                 markOnline(senderHash);
                 if (!state.chats[senderHash]?.pfp) broadcastProfile(senderHash);
@@ -467,6 +470,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             });
             return;
         } else if (parsed.type === 'receipt') {
+            if (parsed.status === 'read' && !state.privacySettings.readReceipts) return;
             userStore.update(s => {
                 if (s.chats[senderHash]) {
                     const updatedChat = { ...s.chats[senderHash] };
@@ -484,7 +488,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             return;
         }
     } catch (e) {
-
+        console.error("[Messaging] Error in processPayload:", e);
     }
 
     const msg: Message = {
@@ -517,10 +521,18 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             const trimmedPayload = payload.slice(0, lastIndex);
 
             if (trimmedPayload.length >= 64) {
-                const potentialHeader = new TextDecoder().decode(trimmedPayload.slice(0, 64));
-                if (/^[0-9a-f]{64}$/i.test(potentialHeader)) {
+                // Extract 64-byte header and trim null bytes
+                const headerBytes = payload.slice(0, 64);
+                let headerEnd = 0;
+                while (headerEnd < 64 && headerBytes[headerEnd] !== 0) headerEnd++;
+
+                const potentialHeader = new TextDecoder().decode(headerBytes.slice(0, headerEnd));
+
+                // If it looks like a hash or alias, treat it as a header
+                if (potentialHeader.length > 0 && /^[0-9a-fA-Z]+$/i.test(potentialHeader)) {
                     senderHashPrefix = potentialHeader;
-                    const payloadStr = new TextDecoder().decode(trimmedPayload.slice(64));
+                    const remainingData = trimmedPayload.slice(64);
+                    const payloadStr = new TextDecoder().decode(remainingData);
                     try { incomingObj = JSON.parse(payloadStr); } catch (e) { return; }
                 } else {
                     const payloadStr = new TextDecoder().decode(trimmedPayload);
@@ -537,7 +549,7 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
         if (!incomingObj) return;
 
         const skipTypes = ['relay_success', 'delivery_status', 'auth_success', 'error', 'ping', 'pong', 'dummy_ack', 'dummy_pacing'];
-        if (incomingObj.type && skipTypes.includes(incomingObj.type)) {
+        if (incomingObj.type && typeof incomingObj.type === 'string' && skipTypes.includes(incomingObj.type)) {
             return;
         }
 
@@ -546,7 +558,7 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             return handleIncomingMessage(decoded, incomingObj.sender);
         }
 
-        const finalSenderHash: string = overrideSender || senderHashPrefix || incomingObj.sender || "unknown";
+        const finalSenderHash: string = (overrideSender || senderHashPrefix || incomingObj.sender || "unknown").toLowerCase();
 
         if (incomingObj.type === 'msg_fragment') {
             const fragId = incomingObj.fragmentId;
@@ -571,30 +583,22 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             if (assembly.received === assembly.total) {
                 setTimeout(() => {
                     if (!fragmentReassembly[fragId]) return;
-
                     console.log(`[Messaging] Reassembling fragment ${fragId} (${assembly.total} chunks)...`);
                     let totalLen = 0;
                     const chunkList = [];
                     for (let i = 0; i < assembly.total; i++) {
                         const chunk = assembly.chunks[i];
-                        if (!chunk) {
-                            console.error(`[Messaging] Missing chunk ${i} for fragment ${fragId}`);
-                            return;
-                        }
+                        if (!chunk) return;
                         chunkList.push(chunk);
                         totalLen += chunk.length;
                     }
-
                     const fullData = new Uint8Array(totalLen);
                     let offset = 0;
                     for (const chunk of chunkList) {
                         fullData.set(chunk, offset);
                         offset += chunk.length;
                     }
-
                     delete fragmentReassembly[fragId];
-                    console.debug(`[Messaging] Reassembled ${totalLen} bytes for ${fragId}. Processing...`);
-                    // Use a separate microtask for decryption/processing
                     handleIncomingMessage(fullData, finalSenderHash);
                 }, 0);
                 return;
@@ -607,14 +611,43 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             return;
         }
 
+        // Recursively handle multi-layered payloads (e.g. fragments or volatile wrappers)
+        if (incomingObj.type === 'volatile_relay') {
+            const sender = incomingObj.from || finalSenderHash;
+            let innerBody;
+            try {
+                innerBody = typeof incomingObj.body === 'string' ? JSON.parse(incomingObj.body) : incomingObj.body;
+            } catch (e) {
+                return;
+            }
+            return handleIncomingMessage(innerBody, sender);
+        }
+
+        if (incomingObj.type === 'binary_payload' && incomingObj.data_hex) {
+            const decoded = fromHex(incomingObj.data_hex);
+            return handleIncomingMessage(decoded, incomingObj.sender);
+        }
+
         const decrypted = await signalManager.decrypt(finalSenderHash, incomingObj);
 
         if (decrypted) {
-            console.debug(`[Messaging] Decrypted direct message from ${finalSenderHash}`);
+            // Privacy check: Should we mark them as online based on this interaction?
+            // We skip marking online for volatile heartbeats/typing as they handle their own state
+            // and for anyone if our own lastSeen is set to 'nobody' (reciprocity)
+            const parsed = typeof decrypted === 'string' ? JSON.parse(decrypted) : decrypted;
+            const isVolatile = parsed.type === 'presence' || parsed.type === 'typing' || parsed.type === 'receipt' || parsed.type === 'profile_update';
+
+            // Passive online marking removed to respect stealth/privacy settings.
+            // Online status is now exclusively driven by explicit presence updates.
+
             const bodyStr = typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted);
             await processPayload(finalSenderHash, bodyStr);
         } else {
-            console.warn(`[Messaging] Failed to decrypt direct message from ${finalSenderHash}`, incomingObj);
+            // Filter out internal signaling types to avoid spamming the log
+            const isNoisy = incomingObj.type === undefined || typeof incomingObj.type === 'number';
+            if (!isNoisy && incomingObj.type !== 'dummy_pacing') {
+                console.warn(`[Messaging] Failed to decrypt direct message from ${finalSenderHash}`, incomingObj);
+            }
         }
     } catch (e) {
         console.error("[Messaging] Critical error in handleIncomingMessage:", e);
