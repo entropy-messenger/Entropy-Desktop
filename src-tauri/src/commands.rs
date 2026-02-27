@@ -207,6 +207,76 @@ pub fn crypto_sha256(data: Vec<u8>) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn crypto_encrypt_media(data: Vec<u8>) -> Result<serde_json::Value, String> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); 
+
+    let ciphertext = cipher
+        .encrypt(&nonce, data.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
+    combined.extend_from_slice(&nonce);
+    combined.extend_from_slice(&ciphertext);
+
+    let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+    
+    Ok(serde_json::json!({
+        "ciphertext": hex::encode(combined),
+        "key": key_b64
+    }))
+}
+
+#[tauri::command]
+pub async fn crypto_encrypt_file(path: String) -> Result<serde_json::Value, String> {
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data).map_err(|e| e.to_string())?;
+
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); 
+
+    let ciphertext = cipher
+        .encrypt(&nonce, data.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
+    combined.extend_from_slice(&nonce);
+    combined.extend_from_slice(&ciphertext);
+
+    let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+    
+    Ok(serde_json::json!({
+        "ciphertext": hex::encode(combined),
+        "key": key_b64,
+        "file_size": data.len()
+    }))
+}
+
+#[tauri::command]
+pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<Vec<u8>, String> {
+    let combined = hex::decode(ciphertext_hex).map_err(|e| e.to_string())?;
+    if combined.len() < 12 {
+        return Err("Ciphertext too short".into());
+    }
+
+    let key_bytes = base64::engine::general_purpose::STANDARD.decode(key_b64).map_err(|e| e.to_string())?;
+    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+
+    let nonce = Nonce::from_slice(&combined[..12]);
+    let ciphertext = &combined[12..];
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    Ok(plaintext)
+}
+
+#[tauri::command]
 pub fn vault_exists(app: AppHandle) -> bool {
     if let Ok(app_data_dir) = app.path().app_data_dir() {
         return app_data_dir.join(get_db_filename()).exists();

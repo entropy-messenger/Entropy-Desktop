@@ -118,10 +118,25 @@
     }
   };
 
-  const onFileSelect = (e: Event) => {
-    const files = (e.target as HTMLInputElement).files;
-    if (files && files.length > 0 && activeChat) sendFile(activeChat.peerHash, files[0]);
-  };
+  async function onFileSelect() {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const selected = await open({
+        multiple: false,
+        directory: false,
+    });
+    
+    if (selected && activeChat) {
+        // Use the native path for performance
+        const path = (selected as any).path || selected as string;
+        // We need the filename and extension for the UI
+        const parts = path.split(/[/\\]/);
+        const fileName = parts[parts.length - 1];
+        
+        // Pass to specialized sendLargeFile action
+        const { sendLargeFile } = await import('../lib/store');
+        sendLargeFile(activeChat.peerHash, path, fileName);
+    }
+  }
 
   const startRecording = async () => {
     try {
@@ -638,7 +653,7 @@
                             </button>
                         </div>
                     {:else}
-                        <button onclick={() => fileInput?.click()} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
+                        <button onclick={onFileSelect} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
                         <textarea 
                             id="message-input"
                             bind:this={messageInputEl}

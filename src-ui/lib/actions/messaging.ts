@@ -214,6 +214,80 @@ export const sendFile = async (destIdRaw: string, file: File) => {
 };
 
 /**
+ * Encrypts and transmits a file given its local filesystem path.
+ * Optimal for large files as it avoids browser-layer memory buffers.
+ */
+export const sendLargeFile = async (destIdRaw: string, path: string, fileName: string) => {
+    const destId = destIdRaw.toLowerCase();
+    const state = get(userStore);
+    if (!state.identityHash) return;
+    const chat = state.chats[destId];
+
+    const msgId = crypto.randomUUID();
+
+    // Optimistic UI: Use a placeholder for size if we don't have it yet
+    const optMsg: Message = {
+        id: msgId,
+        timestamp: Date.now(),
+        senderHash: state.identityHash!,
+        content: `File: ${fileName}`,
+        type: 'file',
+        groupId: chat?.isGroup ? destId : undefined,
+        attachment: { fileName: fileName, fileType: 'application/octet-stream', size: 0 },
+        isMine: true,
+        status: 'sending'
+    };
+    addMessage(destId, optMsg);
+
+    try {
+        // Rust will read the file from disk, avoiding JS memory limits
+        const { ciphertext, bundle } = await signalManager.encryptFile(path, fileName, 'application/octet-stream', 0);
+
+        const contentObj = {
+            type: 'file_v2',
+            id: msgId,
+            bundle,
+            data: ciphertext,
+            size: bundle.file_size
+        };
+
+        if (chat?.isGroup) {
+            const targets = [];
+            for (const member of chat.members!) {
+                if (member === state.identityHash) continue;
+                const payload = { ...contentObj, groupId: destId };
+                const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
+                targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
+            }
+            network.sendJSON({ type: 'group_multicast', targets });
+        } else {
+            const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
+            network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
+        }
+
+        userStore.update(s => {
+            if (s.chats[destId]) {
+                const m = s.chats[destId].messages.find(x => x.id === msgId);
+                if (m) {
+                    m.status = 'sent';
+                    if (m.attachment) m.attachment.size = bundle.file_size;
+                }
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    } catch (e) {
+        console.error("[Messaging] Failed to send large file:", e);
+        userStore.update(s => {
+            if (s.chats[destId]) {
+                const m = s.chats[destId].messages.find(x => x.id === msgId);
+                if (m) m.status = 'failed';
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    }
+};
+
+/**
  * Packages and transmits an audio recording as an encrypted voice note.
  */
 export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {

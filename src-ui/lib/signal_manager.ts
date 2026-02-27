@@ -155,35 +155,17 @@ export class SignalManager {
     }
 
     /**
-     * Encrypts binary media using AES-GCM-256 and packages the key for Signal transmission.
+     * Encrypts binary media using native Rust AES-GCM-256 bridge.
+     * Prevents UI thread blocking and memory spikes in the browser layer.
      */
     async encryptMedia(data: Uint8Array, fileName: string, fileType: string): Promise<{ ciphertext: string, bundle: any }> {
-        const key = await crypto.subtle.generateKey(
-            { name: "AES-GCM", length: 256 },
-            true,
-            ["encrypt", "decrypt"]
-        );
-
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-
-        const encryptedBuffer = await crypto.subtle.encrypt(
-            { name: "AES-GCM", iv },
-            key,
-            data as any
-        );
-
-        const exportedKey = await crypto.subtle.exportKey("raw", key);
-        const keyBase64 = toBase64(new Uint8Array(exportedKey));
-
-        const combined = new Uint8Array(iv.length + encryptedBuffer.byteLength);
-        combined.set(iv, 0);
-        combined.set(new Uint8Array(encryptedBuffer), iv.length);
+        const result = await invoke<any>('crypto_encrypt_media', { data });
 
         return {
-            ciphertext: toHex(combined),
+            ciphertext: result.ciphertext,
             bundle: {
                 type: 'signal_media_v2',
-                key: keyBase64,
+                key: result.key,
                 file_name: fileName,
                 file_type: fileType,
                 file_size: data.length
@@ -191,6 +173,24 @@ export class SignalManager {
         };
     }
 
+    async encryptFile(path: string, fileName: string, fileType: string, fileSize: number): Promise<{ ciphertext: string, bundle: any }> {
+        const result = await invoke<any>('crypto_encrypt_file', { path });
+
+        return {
+            ciphertext: result.ciphertext,
+            bundle: {
+                type: 'signal_media_v2',
+                key: result.key,
+                file_name: fileName,
+                file_type: fileType,
+                file_size: result.file_size
+            }
+        };
+    }
+
+    /**
+     * Decrypts binary media using native Rust AES-GCM-256 bridge.
+     */
     async decryptMedia(data: Uint8Array | string, bundle: any): Promise<Uint8Array> {
         if (!bundle || !bundle.key) {
             if (data instanceof Uint8Array) return data;
@@ -198,29 +198,14 @@ export class SignalManager {
         }
 
         try {
-            const combined = data instanceof Uint8Array ? data : fromHex(data);
-            const keyBytes = fromBase64(bundle.key);
-
-            const iv = combined.slice(0, 12);
-            const encryptedData = combined.slice(12);
-
-            const key = await crypto.subtle.importKey(
-                "raw",
-                keyBytes as any,
-                "AES-GCM",
-                true,
-                ["decrypt"]
-            );
-
-            const decryptedBuffer = await crypto.subtle.decrypt(
-                { name: "AES-GCM", iv },
-                key,
-                encryptedData as any
-            );
-
-            return new Uint8Array(decryptedBuffer);
+            const ciphertextHex = typeof data === 'string' ? data : toHex(data);
+            const plaintext = await invoke<number[]>('crypto_decrypt_media', {
+                ciphertextHex,
+                keyB64: bundle.key
+            });
+            return new Uint8Array(plaintext);
         } catch (e) {
-            console.error("[SignalManager] Media decryption failed:", e);
+            console.error("[SignalManager] Native media decryption failed:", e);
             throw e;
         }
     }
