@@ -65,10 +65,6 @@ export const initApp = async (password: string) => {
 
         userStore.update(s => ({ ...s, identityHash: idHash, chats, myAlias, myPfp, sessionToken, authError: null }));
         network.connect();
-        startHeartbeat();
-
-        const serverUrl = get(userStore).relayUrl;
-        try { await signalManager.ensureKeysUploaded(serverUrl); } catch (e) { }
     } else {
         userStore.update(s => ({ ...s, authError: "Identity not found. please create one." }));
     }
@@ -99,8 +95,8 @@ export const createIdentity = async (password: string) => {
         userStore.update(s => ({ ...s, identityHash: idHash }));
 
         console.debug("Connecting to network...");
+        // Status and handshake are now managed by native layer
         network.connect();
-        startHeartbeat();
     } else {
         throw new Error("Identity generation returned null.");
     }
@@ -110,45 +106,8 @@ export const createIdentity = async (password: string) => {
  * Authenticates the local identity with the relay server.
  * Uses persistent session tokens if available, falling back to SHA-256 Proof-of-Work mining.
  */
-export const authenticate = async (identityHash: string) => {
-    if (isAuthInProgress) return;
-    isAuthInProgress = true;
-
-    try {
-        const state = get(userStore);
-        const serverUrl = state.relayUrl;
-
-        if (state.sessionToken) {
-            console.debug("Attempting session-token authentication...");
-            userStore.update(s => ({ ...s, connectionStatus: 'connecting' }));
-            network.sendJSON({
-                type: 'auth',
-                payload: {
-                    identity_hash: identityHash,
-                    session_token: state.sessionToken
-                }
-            });
-        } else {
-            console.debug("No session token. Starting PoW mining via WebSocket...");
-            userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
-
-            // Fetch challenge via normalized WebSocket instead of HTTP
-            const challenge = await network.request('pow_challenge', { identity_hash: identityHash });
-            const { seed, difficulty } = challenge;
-
-            const pow = await minePoW(seed, difficulty, identityHash);
-
-            network.sendJSON({
-                type: 'auth',
-                payload: { identity_hash: identityHash, seed: pow.seed, nonce: pow.nonce }
-            });
-        }
-    } catch (e) {
-        console.error("Authentication failed:", e);
-    } finally {
-        isAuthInProgress = false;
-    }
-};
+// Manual 'authenticate' function removed. 
+// Authentication is now handled autonomously by Rust within 'connect_network'.
 
 
 /**

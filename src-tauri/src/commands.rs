@@ -170,9 +170,7 @@ pub fn get_db_filename() -> String {
     "entropy.db".to_string()
 }
 
-#[tauri::command]
-pub async fn crypto_mine_pow(seed: String, difficulty: u32, context: Option<String>) -> Result<serde_json::Value, String> {
-    let ctx = context.unwrap_or_default();
+pub async fn internal_mine_pow(seed: String, difficulty: u32, context: String) -> serde_json::Value {
     let target = "0".repeat(difficulty as usize);
     let mut nonce = 0u64;
     
@@ -182,21 +180,27 @@ pub async fn crypto_mine_pow(seed: String, difficulty: u32, context: Option<Stri
         }
 
         // PoW format: seed + context + nonce
-        let input = format!("{}{}{}", seed, ctx, nonce);
+        let input = format!("{}{}{}", seed, context, nonce);
         let mut hasher = Sha256::new();
         hasher.update(input);
         let result = hex::encode(hasher.finalize());
         
         if result.starts_with(&target) {
-            return Ok(serde_json::json!({
+            return serde_json::json!({
                 "seed": seed,
                 "nonce": nonce,
                 "hash": result,
-                "context": ctx
-            }));
+                "context": context
+            });
         }
         nonce += 1;
     }
+}
+
+#[tauri::command]
+pub async fn crypto_mine_pow(seed: String, difficulty: u32, context: Option<String>) -> Result<serde_json::Value, String> {
+    let ctx = context.unwrap_or_default();
+    Ok(internal_mine_pow(seed, difficulty, ctx).await)
 }
 
 #[tauri::command]
@@ -570,8 +574,17 @@ pub async fn connect_network(
     app: tauri::AppHandle, 
     state: State<'_, NetworkState>, 
     url: String,
-    proxy_url: Option<String>
+    proxy_url: Option<String>,
+    id_hash: Option<String>,
+    session_token: Option<String>
 ) -> Result<(), String> {
+    {
+        let mut id_lock = state.identity_hash.lock().unwrap();
+        *id_lock = id_hash;
+        let mut token_lock = state.session_token.lock().unwrap();
+        *token_lock = session_token;
+    }
+
     let target_url = Url::parse(&url).map_err(|e| e.to_string())?;
     let host = target_url.host_str().ok_or("Invalid host")?;
     let port = target_url.port_or_known_default().ok_or("Invalid port")?;
@@ -709,12 +722,74 @@ pub async fn connect_network(
                                     // Intercept internal requests
                                     let mut handled_internally = false;
                                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
+                                        let state = app_handle.state::<NetworkState>();
+                                        
+                                        // 1. Check req_id for pending requests
                                         if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
-                                            let state = app_handle.state::<NetworkState>();
                                             let mut channels = state.response_channels.lock().unwrap();
                                             if let Some(tx) = channels.remove(req_id) {
-                                                let _ = tx.send(val);
+                                                let _ = tx.send(val.clone());
                                                 handled_internally = true;
+                                            }
+                                        }
+
+                                        // 2. Handle specific system-level responses
+                                        if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
+                                            match msg_type {
+                                                "auth_success" => {
+                                                    *state.is_authenticated.lock().unwrap() = true;
+                                                    if let Some(token) = val.get("session_token").and_then(|t| t.as_str()) {
+                                                        *state.session_token.lock().unwrap() = Some(token.to_string());
+                                                    }
+                                                    let _ = app_handle.emit("network-status", "authenticated");
+                                                    println!("[Network] Autonomous authentication successful.");
+                                                    handled_internally = true;
+                                                },
+                                                "pow_challenge_res" => {
+                                                    // Only solve autonomously if this isn't a response to a specific request
+                                                    if val.get("req_id").is_none() {
+                                                        let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                                        let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
+                                                        let id = state.identity_hash.lock().unwrap().clone();
+                                                        
+                                                        if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
+                                                            let app_pow = app_handle.clone();
+                                                            tokio::spawn(async move {
+                                                                 println!("[Network] Solving autonomous PoW challenge for {} (diff={})...", i, d);
+                                                                 let result = internal_mine_pow(s, d, i.clone()).await;
+                                                                 let auth_msg = json!({
+                                                                     "type": "auth",
+                                                                     "payload": {
+                                                                         "identity_hash": i,
+                                                                         "seed": result["seed"],
+                                                                         "nonce": result["nonce"]
+                                                                     }
+                                                                 });
+                                                                 
+                                                                 let state = app_pow.state::<NetworkState>();
+                                                                 let sender_lock = state.sender.lock().unwrap();
+                                                                 if let Some(tx) = &*sender_lock {
+                                                                     let _ = tx.send(PacedMessage {
+                                                                         msg: Message::Text(Utf8Bytes::from(auth_msg.to_string())),
+                                                                         is_media: false,
+                                                                     });
+                                                                 }
+                                                            });
+                                                        }
+                                                        handled_internally = true;
+                                                    }
+                                                },
+                                                "error" => {
+                                                    if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
+                                                        if code == "auth_failed" {
+                                                            *state.is_authenticated.lock().unwrap() = false;
+                                                            *state.session_token.lock().unwrap() = None;
+                                                            let _ = app_handle.emit("network-status", "auth_failed");
+                                                            handled_internally = true;
+                                                        }
+                                                    }
+                                                }
+                                                _ => {}
                                             }
                                         }
                                     }
@@ -741,6 +816,7 @@ pub async fn connect_network(
         eprintln!("[Network] Read task terminating.");
         {
             let state = app_handle.state::<NetworkState>();
+            *state.is_authenticated.lock().unwrap() = false;
             let mut s = state.sender.lock().unwrap();
             if s.is_some() {
                 *s = None;
@@ -748,6 +824,47 @@ pub async fn connect_network(
             }
         }
     });
+
+    // Autonomous Handshake Trigger
+    let handshake_app = app.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let state = handshake_app.state::<NetworkState>();
+        
+        let (id_hash, sess_token) = {
+            let id = state.identity_hash.lock().unwrap().clone();
+            let token = state.session_token.lock().unwrap().clone();
+            (id, token)
+        };
+
+        if let Some(id) = id_hash {
+            println!("[Network] Initiating autonomous handshake for {}...", id);
+            let auth_payload = if let Some(token) = sess_token {
+                json!({
+                    "type": "auth",
+                    "payload": {
+                        "identity_hash": id,
+                        "session_token": token
+                    }
+                })
+            } else {
+                json!({
+                    "type": "pow_challenge",
+                    "id": "auto_challenge",
+                    "identity_hash": id
+                })
+            };
+
+            let sender_lock = state.sender.lock().unwrap();
+            if let Some(tx) = &*sender_lock {
+                let _ = tx.send(PacedMessage {
+                    msg: Message::Text(Utf8Bytes::from(auth_payload.to_string())),
+                    is_media: false,
+                });
+            }
+        }
+    });
+
     Ok(())
 }
 
@@ -944,6 +1061,34 @@ pub async fn save_file(app: tauri::AppHandle, data: Vec<u8>, filename: String) -
     let mut file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
     file.write_all(&data).map_err(|e| e.to_string())?;
     
+    Ok(())
+}
+
+#[tauri::command]
+pub fn show_in_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        // Try to use DBus to highlight the file
+        let _ = Command::new("dbus-send")
+            .args(&[
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:file://{}", path),
+                "string:",
+            ])
+            .spawn();
+        
+        // Simple fallback: open the folder itself
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let _ = Command::new("xdg-open")
+                .arg(parent)
+                .spawn();
+        }
+    }
     Ok(())
 }
 
@@ -1201,94 +1346,180 @@ pub fn signal_init(state: State<'_, DbState>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn signal_get_bundle(state: State<'_, DbState>) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::block_on(async move {
-        let mut rng = StdRng::from_os_rng();
-        let mut store = SqliteSignalStore::new(&state);
-        
-        let identity_key_pair = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
-        let registration_id: u32 = store.get_local_registration_id().await.map_err(|e: SignalProtocolError| e.to_string())?;
+pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = handle.state::<DbState>();
+            let mut rng = StdRng::from_os_rng();
+            let mut store = SqliteSignalStore::new(&state);
+            
+            let identity_key_pair = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            let registration_id: u32 = store.get_local_registration_id().await.map_err(|e| e.to_string())?;
 
-        println!("[Signal] Creating bundle for local user. RegistrationId: {}", registration_id);
+            println!("[Signal] Creating bundle for local user. RegistrationId: {}", registration_id);
 
-        // Generate PreKey
-        let pre_key_id = PreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
-        let pre_key_pair = KeyPair::generate(&mut rng);
-        let pre_key_record = PreKeyRecord::new(pre_key_id, &pre_key_pair);
-        println!("[Signal] Generated new PreKey: {}", u32::from(pre_key_id));
-        store.save_pre_key(pre_key_id, &pre_key_record).await.map_err(|e| e.to_string())?;
+            // Generate PreKey
+            let pre_key_id = PreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
+            let pre_key_pair = KeyPair::generate(&mut rng);
+            let pre_key_record = PreKeyRecord::new(pre_key_id, &pre_key_pair);
+            println!("[Signal] Generated new PreKey: {}", u32::from(pre_key_id));
+            store.save_pre_key(pre_key_id, &pre_key_record).await.map_err(|e| e.to_string())?;
 
-        // Generate Signed PreKey
-        let signed_pre_key_id = SignedPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
-        let signed_pre_key_pair = KeyPair::generate(&mut rng);
-        let timestamp = Timestamp::from_epoch_millis(
-            std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
-        );
-        let signature = identity_key_pair.private_key().calculate_signature(&signed_pre_key_pair.public_key.serialize(), &mut rng)
-            .map_err(|e| e.to_string())?;
-        let signed_pre_key_record = SignedPreKeyRecord::new(signed_pre_key_id, timestamp, &signed_pre_key_pair, &signature);
-        println!("[Signal] Generated new SignedPreKey: {}", u32::from(signed_pre_key_id));
-        store.save_signed_pre_key(signed_pre_key_id, &signed_pre_key_record).await.map_err(|e| e.to_string())?;
+            // Generate Signed PreKey
+            let signed_pre_key_id = SignedPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
+            let signed_pre_key_pair = KeyPair::generate(&mut rng);
+            let timestamp = Timestamp::from_epoch_millis(
+                std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
+            );
+            let signature = identity_key_pair.private_key().calculate_signature(&signed_pre_key_pair.public_key.serialize(), &mut rng)
+                .map_err(|e| e.to_string())?;
+            let signed_pre_key_record = SignedPreKeyRecord::new(signed_pre_key_id, timestamp, &signed_pre_key_pair, &signature);
+            println!("[Signal] Generated new SignedPreKey: {}", u32::from(signed_pre_key_id));
+            store.save_signed_pre_key(signed_pre_key_id, &signed_pre_key_record).await.map_err(|e| e.to_string())?;
 
-        // Generate Kyber PreKey
-        let kyber_pre_key_id = KyberPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
-        let kyber_pre_key_record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, kyber_pre_key_id, identity_key_pair.private_key())
-            .map_err(|e| e.to_string())?;
-        println!("[Signal] Generated new KyberPreKey: {}", u32::from(kyber_pre_key_id));
-        store.save_kyber_pre_key(kyber_pre_key_id, &kyber_pre_key_record).await.map_err(|e| e.to_string())?;
+            // Generate Kyber PreKey
+            let kyber_pre_key_id = KyberPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
+            let kyber_pre_key_record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, kyber_pre_key_id, identity_key_pair.private_key())
+                .map_err(|e| e.to_string())?;
+            println!("[Signal] Generated new KyberPreKey: {}", u32::from(kyber_pre_key_id));
+            store.save_kyber_pre_key(kyber_pre_key_id, &kyber_pre_key_record).await.map_err(|e| e.to_string())?;
 
-        Ok(serde_json::json!({
-            "registrationId": registration_id,
-            "identityKey": hex::encode(identity_key_pair.identity_key().serialize()),
-            "preKey": {
-                "id": u32::from(pre_key_id),
-                "publicKey": hex::encode(pre_key_pair.public_key.serialize())
-            },
-            "signedPreKey": {
-                "id": u32::from(signed_pre_key_id),
-                "publicKey": hex::encode(signed_pre_key_pair.public_key.serialize()),
-                "signature": hex::encode(signature)
-            },
-            "kyberPreKey": {
-                "id": u32::from(kyber_pre_key_id),
-                "publicKey": hex::encode(kyber_pre_key_record.public_key().map_err(|e| e.to_string())?.serialize()),
-                "signature": hex::encode(kyber_pre_key_record.signature().map_err(|e| e.to_string())?)
+            Ok(serde_json::json!({
+                "registrationId": registration_id,
+                "identityKey": hex::encode(identity_key_pair.identity_key().serialize()),
+                "preKey": {
+                    "id": u32::from(pre_key_id),
+                    "publicKey": hex::encode(pre_key_pair.public_key.serialize())
+                },
+                "signedPreKey": {
+                    "id": u32::from(signed_pre_key_id),
+                    "publicKey": hex::encode(signed_pre_key_pair.public_key.serialize()),
+                    "signature": hex::encode(signature)
+                },
+                "kyberPreKey": {
+                    "id": u32::from(kyber_pre_key_id),
+                    "publicKey": hex::encode(kyber_pre_key_record.public_key().map_err(|e| e.to_string())?.serialize()),
+                    "signature": hex::encode(kyber_pre_key_record.signature().map_err(|e| e.to_string())?)
+                }
+            }))
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
+#[tauri::command]
+pub fn signal_sync_keys(
+    handle: AppHandle,
+) -> Result<(), String> {
+    let handle_clone = handle.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = handle_clone.state::<NetworkState>();
+            // 1. Generate/Get Bundle (Using existing logic internally)
+            let raw_bundle = signal_get_bundle(handle_clone.clone()).map_err(|e| e.to_string())?;
+            
+            let id_hash = {
+                let lock = state.identity_hash.lock().unwrap();
+                lock.clone().ok_or("No identity hash in network state")?
+            };
+
+            // 2. Prepare Base64 bundle for server 
+            let bundle = json!({
+                "identity_hash": id_hash,
+                "registrationId": raw_bundle["registrationId"],
+                "identityKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["identityKey"].as_str().unwrap()).unwrap()),
+                "signedPreKey": {
+                    "id": raw_bundle["signedPreKey"]["id"],
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
+                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap()).unwrap()),
+                    "pq_publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap()).unwrap())
+                },
+                "preKeys": [{
+                    "id": raw_bundle["preKey"]["id"],
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["preKey"]["publicKey"].as_str().unwrap()).unwrap())
+                }],
+                "pq_identityKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
+                "kyberPreKey": {
+                    "id": raw_bundle["kyberPreKey"]["id"],
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
+                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["signature"].as_str().unwrap()).unwrap())
+                }
+            });
+
+            // 3. Fetch challenge via internal system request
+            println!("[Signal] Fetching PoW challenge for key upload...");
+            let challenge = internal_request(&state, "pow_challenge", json!({ "identity_hash": id_hash })).await?;
+            
+            let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
+            let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
+
+            // 4. Solve PoW
+            println!("[Signal] Solving PoW (diff={})...", difficulty);
+            let result = internal_mine_pow(seed, difficulty, id_hash).await;
+
+            // 5. Upload Keys
+            println!("[Signal] Uploading keys...");
+            let mut final_upload = bundle;
+            final_upload["seed"] = result["seed"].clone();
+            final_upload["nonce"] = result["nonce"].clone();
+            
+            let response = internal_request(&state, "keys_upload", final_upload).await?;
+            
+            if response["status"].as_str() == Some("success") {
+                println!("[Signal] Keys uploaded successfully.");
+                Ok(())
+            } else {
+                let err = response["error"].as_str().unwrap_or("Unknown upload error");
+                println!("[Signal] Key upload failed: {}", err);
+                Err(err.to_string())
             }
-        }))
-    })
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
 pub fn signal_establish_session(
-    db_state: State<'_, DbState>,
+    handle: tauri::AppHandle,
     remote_hash: String,
     bundle: serde_json::Value,
 ) -> Result<(), String> {
-    tauri::async_runtime::block_on(async move {
-        internal_establish_session_logic(&db_state, &remote_hash, bundle).await
-    })
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let db_state = handle.state::<DbState>();
+            internal_establish_session_logic(&db_state, &remote_hash, bundle).await
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
 pub fn signal_encrypt(
-    db_state: State<'_, DbState>,
-    net_state: State<'_, NetworkState>,
+    handle: tauri::AppHandle,
     remote_hash: String,
     message: String,
 ) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::block_on(async move {
-        internal_signal_encrypt(&db_state, &net_state, &remote_hash, message).await
-    })
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let db_state = handle.state::<DbState>();
+            let net_state = handle.state::<NetworkState>();
+            internal_signal_encrypt(&db_state, &net_state, &remote_hash, message).await
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
 pub fn signal_decrypt(
-    state: State<'_, DbState>,
+    handle: tauri::AppHandle,
     remote_hash: String,
     msg_obj: serde_json::Value,
 ) -> Result<String, String> {
-    tauri::async_runtime::block_on(async move {
-        let mut store = SqliteSignalStore::new(&state);
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let db_state = handle.state::<DbState>();
+            let mut store = SqliteSignalStore::new(&db_state);
         let address = ProtocolAddress::new(remote_hash.clone(), DeviceId::try_from(1u32).expect("valid ID"));
         let mut rng = StdRng::from_os_rng();
 
@@ -1324,20 +1555,25 @@ pub fn signal_decrypt(
         ).await.map_err(|e| e.to_string())?;
 
         String::from_utf8(ptext).map_err(|e| e.to_string())
-    })
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 #[tauri::command]
-pub fn signal_sign_message(state: State<'_, DbState>, message: String) -> Result<String, String> {
-    tauri::async_runtime::block_on(async move {
-        let store = SqliteSignalStore::new(&state);
-        let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
-        
-        let mut rng = rand::rngs::StdRng::from_os_rng();
-        let sig = kp.private_key().calculate_signature(message.as_bytes(), &mut rng)
-            .map_err(|e| e.to_string())?;
-        
-        Ok(base64::engine::general_purpose::STANDARD.encode(sig))
-    })
+pub fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<String, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = handle.state::<DbState>();
+            let store = SqliteSignalStore::new(&state);
+            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            let sig = kp.private_key().calculate_signature(message.as_bytes(), &mut rng)
+                .map_err(|e| e.to_string())?;
+            
+            Ok(base64::engine::general_purpose::STANDARD.encode(sig))
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]

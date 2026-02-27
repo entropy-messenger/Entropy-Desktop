@@ -28,6 +28,9 @@ fn main() {
             sender: Mutex::new(None),
             cancel: Mutex::new(None),
             response_channels: Mutex::new(std::collections::HashMap::new()),
+            is_authenticated: Mutex::new(false),
+            identity_hash: Mutex::new(None),
+            session_token: Mutex::new(None),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -59,6 +62,7 @@ fn main() {
             commands::import_database,
             commands::signal_init,
             commands::signal_get_bundle,
+            commands::signal_sync_keys,
             commands::signal_establish_session,
             commands::signal_encrypt,
             commands::signal_decrypt,
@@ -72,7 +76,8 @@ fn main() {
             commands::send_typing_status,
             commands::send_presence_update,
             commands::send_receipt,
-            commands::send_profile_update
+            commands::send_profile_update,
+            commands::show_in_folder
         ])
         .setup(|app| {
             

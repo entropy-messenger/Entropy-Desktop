@@ -54,57 +54,14 @@ export class SignalManager {
      * Includes X3DH bundle preparation and Proof-of-Work to satisfy anti-spam requirements.
      */
     async ensureKeysUploaded(serverUrl: string, force: boolean = false) {
-        const rawBundle = await invoke<any>('signal_get_bundle');
-
-        if (!this.userIdentity && rawBundle.identityKey) {
-            this.userIdentity = await calculateIdentityHash(rawBundle.identityKey);
+        console.debug("[Signal] Synchronizing keys via native layer...");
+        try {
+            await invoke('signal_sync_keys');
+            console.log("Keys synchronized successfully.");
+        } catch (e: any) {
+            console.error("Key synchronization failed:", e);
+            throw e;
         }
-
-        if (!this.userIdentity) {
-            throw new Error("Cannot upload keys: No identity hash available");
-        }
-
-        const bundle = {
-            identity_hash: this.userIdentity,
-            registrationId: rawBundle.registrationId,
-            identityKey: toBase64(fromHex(rawBundle.identityKey)),
-            signedPreKey: {
-                id: rawBundle.signedPreKey.id,
-                publicKey: toBase64(fromHex(rawBundle.signedPreKey.publicKey)),
-                signature: toBase64(fromHex(rawBundle.signedPreKey.signature)),
-                pq_publicKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey))
-            },
-            preKeys: [{
-                id: rawBundle.preKey.id,
-                publicKey: toBase64(fromHex(rawBundle.preKey.publicKey))
-            }],
-            pq_identityKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)),
-            kyberPreKey: {
-                id: rawBundle.kyberPreKey.id,
-                publicKey: toBase64(fromHex(rawBundle.kyberPreKey.publicKey)),
-                signature: toBase64(fromHex(rawBundle.kyberPreKey.signature))
-            }
-        };
-
-        const { network } = await import('./network');
-
-        // Fetch challenge via WebSocket
-        const challenge = await network.request('pow_challenge', { identity_hash: this.userIdentity });
-        const { seed, difficulty } = challenge;
-        const { nonce } = await minePoW(seed, difficulty, this.userIdentity);
-
-        // Upload keys via WebSocket
-        const res = await network.request('keys_upload', {
-            ...bundle,
-            seed,
-            nonce
-        });
-
-        if (res.status !== 'success') {
-            console.error("Key upload failed:", res.error);
-            throw new Error(`Critical: Key upload failed: ${res.error}`);
-        }
-        console.log("Keys uploaded successfully.");
     }
 
 

@@ -166,6 +166,7 @@ export const sendFile = async (destIdRaw: string, file: File) => {
             status: 'sending'
         };
         addMessage(destId, optMsg);
+        await attachmentStore.put(msgId, uint8);
 
         try {
             const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, file.name, file.type);
@@ -195,10 +196,19 @@ export const sendFile = async (destIdRaw: string, file: File) => {
             userStore.update(s => {
                 if (s.chats[destId]) {
                     const m = s.chats[destId].messages.find(x => x.id === msgId);
-                    if (m) m.status = 'sent';
+                    if (m) {
+                        m.status = 'sent';
+                        if (m.attachment) {
+                            m.attachment.bundle = bundle;
+                            m.attachment.isV2 = true;
+                        }
+                    }
                 }
                 return { ...s, chats: { ...s.chats } };
             });
+
+            // Also save the encrypted data back to our local store so we can load it later
+            await attachmentStore.put(msgId, fromHex(ciphertext));
         } catch (e) {
             console.error("[Messaging] Failed to send media:", e);
             userStore.update(s => {
@@ -225,6 +235,14 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
 
     const msgId = crypto.randomUUID();
 
+    // Basic MIME type detection for previews
+    let fileType = 'application/octet-stream';
+    const ext = fileName.split('.').pop()?.toLowerCase();
+    if (ext === 'png') fileType = 'image/png';
+    else if (ext === 'jpg' || ext === 'jpeg') fileType = 'image/jpeg';
+    else if (ext === 'gif') fileType = 'image/gif';
+    else if (ext === 'webp') fileType = 'image/webp';
+
     // Optimistic UI: Use a placeholder for size if we don't have it yet
     const optMsg: Message = {
         id: msgId,
@@ -233,7 +251,7 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
         content: `File: ${fileName}`,
         type: 'file',
         groupId: chat?.isGroup ? destId : undefined,
-        attachment: { fileName: fileName, fileType: 'application/octet-stream', size: 0 },
+        attachment: { fileName: fileName, fileType, size: 0, originalPath: path },
         isMine: true,
         status: 'sending'
     };
@@ -241,7 +259,7 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
 
     try {
         // Rust will read the file from disk, avoiding JS memory limits
-        const { ciphertext, bundle } = await signalManager.encryptFile(path, fileName, 'application/octet-stream', 0);
+        const { ciphertext, bundle } = await signalManager.encryptFile(path, fileName, fileType, 0);
 
         const contentObj = {
             type: 'file_v2',
@@ -270,11 +288,18 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
                 const m = s.chats[destId].messages.find(x => x.id === msgId);
                 if (m) {
                     m.status = 'sent';
-                    if (m.attachment) m.attachment.size = bundle.file_size;
+                    if (m.attachment) {
+                        m.attachment.size = bundle.file_size;
+                        m.attachment.bundle = bundle;
+                        m.attachment.isV2 = true;
+                    }
                 }
             }
             return { ...s, chats: { ...s.chats } };
         });
+
+        // Also save the encrypted data to our local store so we can load it later
+        await attachmentStore.put(msgId, fromHex(ciphertext));
     } catch (e) {
         console.error("[Messaging] Failed to send large file:", e);
         userStore.update(s => {
@@ -312,6 +337,7 @@ export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
         status: 'sending'
     };
     addMessage(destId, optMsg);
+    await attachmentStore.put(msgId, uint8);
 
     try {
         const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, 'voice_note.wav', 'audio/wav');
@@ -341,10 +367,19 @@ export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
         userStore.update(s => {
             if (s.chats[destId]) {
                 const m = s.chats[destId].messages.find(x => x.id === msgId);
-                if (m) m.status = 'sent';
+                if (m) {
+                    m.status = 'sent';
+                    if (m.attachment) {
+                        m.attachment.bundle = bundle;
+                        m.attachment.isV2 = true;
+                    }
+                }
             }
             return { ...s, chats: { ...s.chats } };
         });
+
+        // Also save the encrypted data back to our local store so we can load it later
+        await attachmentStore.put(msgId, fromHex(ciphertext));
     } catch (e) {
         console.error("[Messaging] Failed to send voice note:", e);
         userStore.update(s => {

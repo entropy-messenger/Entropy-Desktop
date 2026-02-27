@@ -21,6 +21,9 @@ pub struct NetworkState {
     pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>, 
     pub cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
     pub response_channels: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,
+    pub is_authenticated: Mutex<bool>,
+    pub identity_hash: Mutex<Option<String>>,
+    pub session_token: Mutex<Option<String>>,
 }
 
 pub struct AudioState {

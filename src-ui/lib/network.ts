@@ -34,6 +34,10 @@ export class NetworkLayer {
         listen('network-status', (event) => {
             if (event.payload === 'disconnected') {
                 this.onDisconnect();
+            } else if (event.payload === 'authenticated') {
+                this.onAuthenticated();
+            } else if (event.payload === 'auth_failed') {
+                this.onAuthFailed();
             }
         });
     }
@@ -65,7 +69,12 @@ export class NetworkLayer {
                 }
 
                 console.log(`Commanding native connection to ${this.url} (Proxy: ${proxyUrl || 'none'})...`);
-                await invoke('connect_network', { url: this.url, proxyUrl });
+                await invoke('connect_network', {
+                    url: this.url,
+                    proxyUrl,
+                    idHash: state.identityHash,
+                    sessionToken: state.sessionToken
+                });
                 this.isConnected = true;
                 this.onConnect();
             } catch (e: any) {
@@ -131,10 +140,50 @@ export class NetworkLayer {
 
         userStore.update((s: any) => ({ ...s, isConnected: true }));
 
+        // Handshake now handled autonomously in Rust
+    }
+
+    private async onAuthenticated() {
+        console.log('Network layer authenticated via autonomous handshake');
+        this.isAuthenticated = true;
+
+        // 1. Sync connection status
+        userStore.update((s: any) => ({
+            ...s,
+            connectionStatus: 'connected'
+        }));
+
+        // 2. Trigger post-auth tasks (Key verification)
         const state = get(userStore) as any;
-        if (state.identityHash) {
-            logicStore.authenticate(state.identityHash);
+        const serverUrl = state.relayUrl;
+
+        import('./signal_manager').then(({ signalManager }) => {
+            signalManager.ensureKeysUploaded(serverUrl).catch(e => console.error("Auto key upload failed:", e));
+        });
+
+        // 3. Trigger pending outbox flush
+        invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
+
+        // 4. Start heartbeat/presence
+        import('./actions/contacts').then(({ startHeartbeat }) => {
+            startHeartbeat();
+        });
+
+        // 5. Broadcast profile to peers if configured
+        if (state.privacySettings.lastSeen === 'everyone') {
+            Object.keys(state.chats).forEach(peerHash => {
+                if (!state.chats[peerHash].isGroup) {
+                    logicStore.setOnlineStatus(peerHash, true);
+                    logicStore.broadcastProfile(peerHash);
+                }
+            });
         }
+    }
+
+    private onAuthFailed() {
+        console.warn("[Network] Authentication failed by Rust. Resetting session.");
+        this.isAuthenticated = false;
+        userStore.update((s: any) => ({ ...s, sessionToken: null, connectionStatus: 'disconnected' }));
     }
 
     private onDisconnect() {
@@ -212,50 +261,16 @@ export class NetworkLayer {
         }
 
         console.debug("[Network] Received JSON:", msg.type, msg);
+
         if (msg.type === 'auth_success') {
-            const token = msg.session_token;
-            const id = msg.identity_hash;
-            console.log("Authenticated as:", id);
-            this.isAuthenticated = true;
-
-            userStore.update((s: any) => ({
-                ...s,
-                sessionToken: token || s.sessionToken,
-                connectionStatus: 'connected'
-            }));
-
-            if (msg.keys_missing) {
-                const serverUrl = get(userStore).relayUrl;
-                import('./signal_manager').then(({ signalManager }) => {
-                    signalManager.ensureKeysUploaded(serverUrl).catch(e => console.error("Auto key upload failed:", e));
-                });
-            }
-
-            invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
-
-            // Broadcast our presence now that we are authenticated and connected
-            import('./actions/contacts').then(({ startHeartbeat }) => {
-                startHeartbeat();
-            });
-
-            const state = get(userStore) as any;
-            if (state.privacySettings.lastSeen === 'everyone') {
-                Object.keys(state.chats).forEach(peerHash => {
-                    if (!state.chats[peerHash].isGroup) {
-                        logicStore.setOnlineStatus(peerHash, true);
-                        logicStore.broadcastProfile(peerHash);
-                    }
-                });
-            }
-
+            // Already handled by autonomous Rust listener in constructor
             return;
         }
 
         if (msg.type === 'error') {
             console.error("Server error:", msg.message);
             if (msg.code === 'auth_failed') {
-                console.warn("Authentication failed. Clearing session token.");
-                userStore.update((s: any) => ({ ...s, sessionToken: null }));
+                // Handled by onAuthFailed listener
             }
             return;
         }

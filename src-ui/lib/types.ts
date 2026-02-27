@@ -25,6 +25,9 @@ export interface Message {
         size?: number;
         data?: Uint8Array;
         isDownloaded?: boolean;
+        originalPath?: string;
+        bundle?: any;
+        isV2?: boolean;
     };
     groupId?: string;
     isMine: boolean;

@@ -21,6 +21,7 @@ commands.allow = [
     "crypto_mine_pow",
     "protocol_sign",
     "signal_init",
+    "signal_sync_keys",
     "signal_get_bundle",
     "signal_establish_session",
     "signal_encrypt",
@@ -66,7 +67,8 @@ commands.allow = [
     "send_typing_status",
     "send_presence_update",
     "send_receipt",
-    "send_profile_update"
+    "send_profile_update",
+    "show_in_folder"
 ]
 
 [[set]]

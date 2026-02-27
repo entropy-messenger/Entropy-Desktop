@@ -1,7 +1,8 @@
 
 <script lang="ts">
     import { attachmentStore } from '../lib/attachment_store';
-    import { LucideMic, LucidePaperclip, LucideDownload, LucideLoader, LucideCheck } from 'lucide-svelte';
+    import { LucideMic, LucidePaperclip, LucideDownload, LucideLoader, LucideCheck, LucideImage } from 'lucide-svelte';
+    import { convertFileSrc } from '@tauri-apps/api/core';
 
     import { markAsDownloaded } from '../lib/actions/message_utils';
 
@@ -16,20 +17,41 @@
         downloadSuccess = msg.attachment?.isDownloaded || false;
     });
 
+    $effect(() => {
+        // Auto-load image previews
+        if (!blobUrl && !loading && !error && msg.attachment) {
+            const isImage = msg.attachment.fileType?.startsWith('image/') || 
+                          /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment.fileName || '');
+            if (isImage || msg.attachment.originalPath) {
+                loadAttachment();
+            }
+        }
+    });
+
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
     import { signalManager } from '../lib/signal_manager';
     import { toHex } from '../lib/crypto';
     import { invoke } from '@tauri-apps/api/core';
     import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
+    async function showInFolder() {
+        if (msg.attachment?.originalPath) {
+            console.debug("[Attachment] Showing in folder:", msg.attachment.originalPath);
+            await invoke('show_in_folder', { path: msg.attachment.originalPath });
+        }
+    }
+
     async function loadAttachment() {
         if (!msg.attachment) return;
-        console.debug("[Attachment] Loading:", msg.id, msg.attachment.fileName);
         
         if (msg.attachment.data) {
-            console.debug("[Attachment] Data already present in message object.");
             blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
             return;
+        }
+
+        if (msg.attachment.originalPath && !msg.attachment.data) {
+            // We can only use this if we have permission for the asset protocol
+            // For now, let's keep it as a fallback but prioritize store data
         }
 
         loading = true;
@@ -38,12 +60,15 @@
             if (data) {
                 console.debug("[Attachment] Retrieved from store. Size:", data.length);
                 if (msg.attachment.isV2 && msg.attachment.bundle) {
-                    console.debug("[Attachment] Decrypting V2 media...");
                     const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
                     blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
-                    console.debug("[Attachment] Created blob URL:", blobUrl);
+                    downloadSuccess = true;
+                } else if (msg.attachment.data) {
+                    // Fallback for optimistic UI data
+                    blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
+                    downloadSuccess = true;
                 } else {
-                    console.warn("[Attachment] Unencrypted attachment ignored.");
+                    console.warn("[Attachment] Unencrypted attachment cannot be reloaded without data.");
                     error = true;
                 }
             } else {
@@ -142,12 +167,19 @@
     {/if}
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2">
-        {#if msg.attachment.fileType?.startsWith('image/') && blobUrl}
+        {#if (msg.attachment.fileType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment.fileName || '')) && blobUrl}
             <div class="relative group max-w-sm rounded-lg overflow-hidden shadow-sm bg-entropy-surface-light">
                 <img 
                     src={blobUrl} 
                     alt={msg.attachment.fileName} 
                     class="max-h-64 object-contain mx-auto"
+                    onerror={() => {
+                        console.error("[Attachment] Image failed to load:", blobUrl);
+                        // If it's an asset URL and failed, it's likely a permission issue
+                        if (blobUrl?.startsWith('asset:')) {
+                            console.warn("[Attachment] Asset protocol blocked. Backend config might be missing protocol permissions.");
+                        }
+                    }}
                 />
                 <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
                     <button 
@@ -172,40 +204,45 @@
             <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0">
                 <LucidePaperclip size={20} />
             </div>
-            <div class="flex-1 min-w-0">
-                <div class="text-[12px] font-bold truncate text-entropy-text-primary tracking-tight">{msg.attachment.fileName}</div>
+            <button 
+                onclick={showInFolder}
+                class="flex-1 min-w-0 text-left hover:bg-white/5 p-1 rounded transition-colors disabled:cursor-auto"
+                disabled={!msg.attachment.originalPath}
+                title={msg.attachment.originalPath ? `Show in Folder: ${msg.attachment.originalPath}` : ''}
+            >
+                <div class="text-[12px] font-bold truncate {msg.attachment.originalPath ? 'text-entropy-primary' : 'text-entropy-text-primary'} tracking-tight">{msg.attachment.fileName}</div>
                 <div class="text-[10px] font-medium text-entropy-text-dim uppercase tracking-wider">
                     {(msg.attachment.size || 0) / 1024 > 1024 
                         ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
                         : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
                 </div>
+            </button>
+        {#if blobUrl}
+            <button 
+                onclick={manualDownload}
+                class="w-8 h-8 rounded-lg {downloadSuccess ? 'bg-entropy-accent' : 'bg-entropy-primary'} text-white flex items-center justify-center hover:bg-opacity-90 transition shadow-md active:scale-95 disabled:opacity-70 disabled:cursor-wait"
+                title={downloadSuccess ? 'Downloaded' : 'Download File'}
+                disabled={isDownloading || downloadSuccess}
+            >
+                {#if isDownloading}
+                    <LucideLoader size={14} class="animate-spin" />
+                {:else if downloadSuccess || blobUrl}
+                    <LucideCheck size={14} />
+                {:else}
+                    <LucideDownload size={14} />
+                {/if}
+            </button>
+        {:else if loading || msg.status === 'sending'}
+            <div class="w-8 h-8 flex items-center justify-center">
+                <LucideLoader size={16} class="animate-spin text-entropy-primary" />
             </div>
-            {#if blobUrl}
-                <button 
-                    onclick={manualDownload}
-                    class="w-8 h-8 rounded-lg {downloadSuccess ? 'bg-entropy-accent' : 'bg-entropy-primary'} text-white flex items-center justify-center hover:bg-opacity-90 transition shadow-md active:scale-95 disabled:opacity-70 disabled:cursor-wait"
-                    title={downloadSuccess ? 'Downloaded' : 'Download File'}
-                    disabled={isDownloading || downloadSuccess}
-                >
-                    {#if isDownloading}
-                        <LucideLoader size={14} class="animate-spin" />
-                    {:else if downloadSuccess}
-                        <LucideCheck size={14} />
-                    {:else}
-                        <LucideDownload size={14} />
-                    {/if}
-                </button>
-            {:else if loading}
-                <div class="w-8 h-8 flex items-center justify-center">
-                    <LucideLoader size={16} class="animate-spin text-entropy-primary" />
-                </div>
-            {:else if msg.status === 'sending'}
-                <div class="w-8 h-8 flex items-center justify-center">
-                    <LucideLoader size={16} class="animate-spin text-entropy-primary" />
-                </div>
-            {:else}
-                <button onclick={loadAttachment} class="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 italic transition font-black text-[9px]">!</button>
-            {/if}
-        </div>
+        {:else if msg.attachment.fileType?.startsWith('image/')}
+            <div class="w-8 h-8 rounded-lg bg-entropy-primary/10 text-entropy-primary flex items-center justify-center">
+                <LucideImage size={16} />
+            </div>
+        {:else}
+            <button onclick={loadAttachment} class="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 flex items-center justify-center hover:bg-red-500/20 italic transition font-black text-[9px]">!</button>
+        {/if}
     </div>
+</div>
 {/if}
