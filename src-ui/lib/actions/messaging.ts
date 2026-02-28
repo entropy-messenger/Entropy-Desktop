@@ -9,7 +9,7 @@ import type { Message, ServerMessage } from '../types';
 import { parseLinkPreview, fromHex } from '../utils';
 import { fromBase64, toBase64 } from '../crypto';
 import { markOnline, broadcastProfile, statusTimeouts } from './contacts';
-import { addMessage, sendReceipt } from './message_utils';
+import { addMessage, commitMessageUpdate, sendReceipt, syncChatToDb } from './message_utils';
 
 export { addMessage, bulkDelete, deleteMessage, downloadAttachment, sendReceipt } from './message_utils';
 
@@ -166,7 +166,6 @@ export const sendFile = async (destIdRaw: string, file: File) => {
             status: 'sending'
         };
         addMessage(destId, optMsg);
-        await attachmentStore.put(msgId, uint8);
 
         try {
             const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, file.name, file.type);
@@ -193,18 +192,13 @@ export const sendFile = async (destIdRaw: string, file: File) => {
                 network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
             }
 
-            userStore.update(s => {
-                if (s.chats[destId]) {
-                    const m = s.chats[destId].messages.find(x => x.id === msgId);
-                    if (m) {
-                        m.status = 'sent';
-                        if (m.attachment) {
-                            m.attachment.bundle = bundle;
-                            m.attachment.isV2 = true;
-                        }
-                    }
+            await commitMessageUpdate(destId, msgId, {
+                status: 'sent',
+                attachment: {
+                    ...optMsg.attachment!,
+                    bundle,
+                    isV2: true
                 }
-                return { ...s, chats: { ...s.chats } };
             });
 
             // Also save the encrypted data back to our local store so we can load it later
@@ -283,19 +277,14 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
         }
 
-        userStore.update(s => {
-            if (s.chats[destId]) {
-                const m = s.chats[destId].messages.find(x => x.id === msgId);
-                if (m) {
-                    m.status = 'sent';
-                    if (m.attachment) {
-                        m.attachment.size = bundle.file_size;
-                        m.attachment.bundle = bundle;
-                        m.attachment.isV2 = true;
-                    }
-                }
+        await commitMessageUpdate(destId, msgId, {
+            status: 'sent',
+            attachment: {
+                ...optMsg.attachment!,
+                size: bundle.file_size,
+                bundle,
+                isV2: true
             }
-            return { ...s, chats: { ...s.chats } };
         });
 
         // Also save the encrypted data to our local store so we can load it later
@@ -337,7 +326,6 @@ export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
         status: 'sending'
     };
     addMessage(destId, optMsg);
-    await attachmentStore.put(msgId, uint8);
 
     try {
         const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, 'voice_note.wav', 'audio/wav');
@@ -364,18 +352,13 @@ export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
             network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)), { id: msgId });
         }
 
-        userStore.update(s => {
-            if (s.chats[destId]) {
-                const m = s.chats[destId].messages.find(x => x.id === msgId);
-                if (m) {
-                    m.status = 'sent';
-                    if (m.attachment) {
-                        m.attachment.bundle = bundle;
-                        m.attachment.isV2 = true;
-                    }
-                }
+        await commitMessageUpdate(destId, msgId, {
+            status: 'sent',
+            attachment: {
+                ...optMsg.attachment!,
+                bundle,
+                isV2: true
             }
-            return { ...s, chats: { ...s.chats } };
         });
 
         // Also save the encrypted data back to our local store so we can load it later
@@ -580,19 +563,66 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             return;
         } else if (parsed.type === 'receipt') {
             if (parsed.status === 'read' && !state.privacySettings.readReceipts) return;
+            const ids = Array.isArray(parsed.msgIds) ? parsed.msgIds : [parsed.msgId];
+
+            // 1. Persist to DB
+            try {
+                await invoke('db_update_messages_status', { chatAddress: senderHash, ids, status: parsed.status });
+            } catch (e) {
+                console.error("[DB] Status update failed:", e);
+            }
+
+            // 2. Update reactive store
             userStore.update(s => {
-                if (s.chats[senderHash]) {
-                    const updatedChat = { ...s.chats[senderHash] };
-                    updatedChat.messages = updatedChat.messages.map(m => {
-                        const ids = Array.isArray(parsed.msgIds) ? parsed.msgIds : [parsed.msgId];
-                        if (ids.includes(m.id) && (parsed.status === 'read' || m.status === 'sent')) {
-                            return { ...m, status: parsed.status };
+                let anyChanged = false;
+                // Clone chats for top-level reactivity
+                const nextChats = { ...s.chats };
+
+                for (const chatId in nextChats) {
+                    const chat = { ...nextChats[chatId] };
+                    let chatChanged = false;
+
+                    // Update messages in memory if they exist
+                    if (chat.messages && chat.messages.length > 0) {
+                        const newMessages = chat.messages.map(m => {
+                            if (ids.includes(m.id)) {
+                                const oldPriority = m.status === 'read' ? 3 : m.status === 'delivered' ? 2 : 1;
+                                const newPriority = parsed.status === 'read' ? 3 : parsed.status === 'delivered' ? 2 : 1;
+                                if (newPriority > oldPriority) {
+                                    chatChanged = true;
+                                    return { ...m, status: parsed.status };
+                                }
+                            }
+                            return m;
+                        });
+                        if (chatChanged) {
+                            chat.messages = newMessages;
+                            // Also update sidebar if it's the last one
+                            const lastId = newMessages[newMessages.length - 1].id;
+                            if (ids.includes(lastId)) {
+                                chat.lastStatus = parsed.status;
+                            }
                         }
-                        return m;
-                    });
-                    s.chats[senderHash] = updatedChat;
+                    } else if (chat.lastMsg) {
+                        // Heuristic for sidebar preview even if messages aren't loaded
+                        // For 1:1, the sender is the peer. For groups, we might need more info but we try anyway
+                        if (chatId === senderHash || (parsed.groupId && chatId === parsed.groupId)) {
+                            chat.lastStatus = parsed.status;
+                            chatChanged = true;
+                        }
+                    }
+
+                    if (chatChanged) {
+                        anyChanged = true;
+                        nextChats[chatId] = chat;
+                        syncChatToDb(chat);
+                    }
                 }
-                return { ...s, chats: { ...s.chats } };
+
+                if (anyChanged) {
+                    return { ...s, chats: nextChats };
+                }
+                return s;
             });
             return;
         }
@@ -750,7 +780,8 @@ export const handleIncomingMessage = async (payload: Uint8Array | ServerMessage,
             // Online status is now exclusively driven by explicit presence updates.
 
             const bodyStr = typeof decrypted === 'string' ? decrypted : JSON.stringify(decrypted);
-            await processPayload(finalSenderHash, bodyStr);
+            const msgId = incomingObj.id || incomingObj.msgId || incomingObj.relay_msg_id;
+            await processPayload(finalSenderHash, bodyStr, incomingObj.groupId, msgId);
         } else {
             // Filter out internal signaling types to avoid spamming the log
             const isNoisy = incomingObj.type === undefined || typeof incomingObj.type === 'number';

@@ -42,44 +42,48 @@
     }
 
     async function loadAttachment() {
-        if (!msg.attachment) return;
+        if (!msg.attachment) {
+            console.debug("[Attachment] No attachment data for message:", msg.id);
+            return;
+        }
         
+        console.debug("[Attachment] Evaluating message:", msg.id, {
+            type: msg.type,
+            isV2: msg.attachment.isV2,
+            hasBundle: !!msg.attachment.bundle,
+            originalPath: msg.attachment.originalPath,
+            hasInMemoryData: !!msg.attachment.data
+        });
+
+        // Step 1: Check in-memory data (Optimistic UI)
         if (msg.attachment.data) {
             blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
             return;
         }
 
-        if (msg.attachment.originalPath && !msg.attachment.data) {
-            // We can only use this if we have permission for the asset protocol
-            // For now, let's keep it as a fallback but prioritize store data
-        }
-
-        loading = true;
-        try {
-            const data = await attachmentStore.get(msg.id);
-            if (data) {
-                console.debug("[Attachment] Retrieved from store. Size:", data.length);
-                if (msg.attachment.isV2 && msg.attachment.bundle) {
+        // Step 2: Try to load from the attachmentStore (encrypted vault)
+        // We prefer the vault because asset:// protocol is often blocked for arbitrary files.
+        if (msg.attachment.isV2 && msg.attachment.bundle) {
+            try {
+                const data = await attachmentStore.get(msg.id);
+                if (data) {
+                    console.debug("[Attachment] Found in store. Size:", data.length);
                     const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
                     blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
                     downloadSuccess = true;
-                } else if (msg.attachment.data) {
-                    // Fallback for optimistic UI data
-                    blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
-                    downloadSuccess = true;
-                } else {
-                    console.warn("[Attachment] Unencrypted attachment cannot be reloaded without data.");
-                    error = true;
+                    return;
                 }
-            } else {
-                console.warn("[Attachment] Not found in attachmentStore:", msg.id);
-                error = true;
+            } catch (e) {
+                console.warn("[Attachment] Vault load failed, falling back to originalPath:", e);
             }
-        } catch (e) {
-            console.error("[Attachment] Load error:", e);
-            error = true;
-        } finally {
+        }
+
+        // Step 3: For Senders - if we have the original path, use it as a robust fallback
+        if (msg.attachment.originalPath) {
+            console.debug("[Attachment] Sender-side fallback: using originalPath.", msg.attachment.originalPath);
+            blobUrl = convertFileSrc(msg.attachment.originalPath);
             loading = false;
+            return;
         }
     }
 

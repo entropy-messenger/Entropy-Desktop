@@ -75,6 +75,11 @@ export interface Chat {
     isVerified?: boolean;
     localNickname?: string;
     inviteCode?: string;
+    lastMsg?: string;
+    lastTimestamp?: number;
+    lastStatus?: Message['status'];
+    lastIsMine?: boolean;
+    lastSenderHash?: string;
 }
 
 export interface ServerMessage {

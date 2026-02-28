@@ -4,7 +4,8 @@
   import { 
     startChat, createGroup, updateMyProfile, 
     togglePin, toggleArchive, toggleMute, toggleBlock, updatePrivacy,
-    registerGlobalNickname, lookupNickname, burnAccount
+    registerGlobalNickname, lookupNickname, burnAccount,
+    loadChatMessages
   } from '../lib/store';
   import {
     LucidePlus, LucideSettings, LucideSearch,
@@ -110,6 +111,7 @@
   });
 
   const selectChat = (hash: string) => {
+    // 1. Immediate UI feedback: shift focus and clear unread visually
     userStore.update(s => {
         if (s.chats[hash]) {
             s.chats[hash] = { 
@@ -119,7 +121,9 @@
         }
         return { ...s, activeChatHash: hash, chats: { ...s.chats } };
     });
-    startChat(hash);
+    
+    // 2. Load messages from relational DB - will update store again when finished
+    loadChatMessages(hash);
   };
 
   /**
@@ -272,8 +276,8 @@
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;
     
-    const aTime = a.messages.length > 0 ? a.messages[a.messages.length - 1].timestamp : 0;
-    const bTime = b.messages.length > 0 ? b.messages[b.messages.length - 1].timestamp : 0;
+    const aTime = a.lastTimestamp || (a.messages.length > 0 ? a.messages[a.messages.length - 1].timestamp : 0);
+    const bTime = b.lastTimestamp || (b.messages.length > 0 ? b.messages[b.messages.length - 1].timestamp : 0);
     return bTime - aTime;
   }));
 
@@ -369,9 +373,9 @@
                                 {#if chat.isPinned}<LucidePin size={10} class="text-entropy-primary fill-entropy-primary" />{/if}
                                 {#if chat.isMuted}<LucideBellOff size={10} class="text-entropy-text-dim" />{/if}
                             </div>
-                            {#if chat.messages.length > 0}
+                            {#if chat.lastTimestamp}
                                  <div class="text-[10px] font-medium text-entropy-text-secondary shrink-0">
-                                    {new Date(chat.messages[chat.messages.length - 1].timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                    {new Date(chat.lastTimestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                  </div>
                             {/if}
                         </div>
@@ -380,18 +384,23 @@
                             <div class="text-[12px] truncate pr-2 flex-1 {chat.isTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
                                 {#if chat.isTyping}
                                     <span>typing...</span>
-                                {:else if chat.messages.length > 0}
+                                {:else if chat.lastMsg}
                                     <div class="flex items-center space-x-1">
-                                        {#if chat.messages[chat.messages.length - 1].isMine}
-                                            {#if chat.messages[chat.messages.length - 1].status === 'read'}
+                                        {#if chat.lastIsMine}
+                                            {#if chat.lastStatus === 'read'}
                                                 <LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
-                                            {:else if chat.messages[chat.messages.length - 1].status === 'delivered'}
+                                            {:else if chat.lastStatus === 'delivered'}
                                                 <LucideCheckCheck size={13} class="text-entropy-text-secondary" />
                                             {:else}
                                                 <LucideCheck size={13} class="text-entropy-text-secondary" />
                                             {/if}
                                         {/if}
-                                        <span class="truncate">{chat.messages[chat.messages.length - 1].content}</span>
+                                        <span class="truncate">
+                                            {#if chat.isGroup && !chat.lastIsMine}
+                                                <span class="text-entropy-primary font-bold">{chat.lastSenderHash?.slice(0, 4) || ''}:</span>
+                                            {/if}
+                                            {chat.lastMsg}
+                                        </span>
                                     </div>
                                 {:else if !chat.isOnline && chat.lastSeen}
                                     <span class="text-[11px] opacity-70">last seen {formatLastSeen(chat.lastSeen)}</span>

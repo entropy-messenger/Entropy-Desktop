@@ -17,24 +17,13 @@ import { vaultSave } from './secure_storage';
 let saveTimeout: any = null;
 
 /**
- * Serializes and persists the application state to the encrypted vault.
- * Transient UI states (e.g., online status, typing indicators) are scrubbed before storage.
+ * Serializes and persists global application metadata (settings, identity) to the vault.
+ * Chats and messages are now managed separately in SQLite.
  */
 async function performSave(state: any) {
     if (!state.identityHash) return;
     try {
-        // Deep copy to remove transient fields and avoid mutation issues during save
-        const chatsCopy: any = JSON.parse(JSON.stringify(state.chats));
-        for (const h in chatsCopy) {
-            delete chatsCopy[h].isOnline;
-            delete chatsCopy[h].isTyping;
-            for (const m of chatsCopy[h].messages) {
-                if (m.attachment?.data) delete m.attachment.data;
-            }
-        }
-
-        const vault = {
-            chats: chatsCopy,
+        const metadata = {
             myAlias: state.myAlias,
             myPfp: state.myPfp,
             blockedHashes: state.blockedHashes,
@@ -42,10 +31,10 @@ async function performSave(state: any) {
             sessionToken: state.sessionToken
         };
 
-        await vaultSave(`entropy_chats_${state.identityHash}`, JSON.stringify(vault));
-        console.debug("[Persistence] Saved state successfully.");
+        await vaultSave(`entropy_meta_${state.identityHash}`, JSON.stringify(metadata));
+        console.debug("[Persistence] Saved global metadata successfully.");
     } catch (e) {
-        console.error("[Persistence] Failed to persist vault:", e);
+        console.error("[Persistence] Failed to persist metadata:", e);
     }
 }
 

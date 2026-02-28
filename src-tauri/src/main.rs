@@ -22,6 +22,8 @@ fn main() {
     tauri::Builder::default()
         .manage(DbState {
             conn: Mutex::new(None),
+            media_key: Mutex::new(None),
+            profile: Mutex::new(profile),
         })
         .manage(NetworkState {
             queue: Mutex::new(std::collections::VecDeque::new()),
@@ -77,7 +79,14 @@ fn main() {
             commands::send_presence_update,
             commands::send_receipt,
             commands::send_profile_update,
-            commands::show_in_folder
+            commands::show_in_folder,
+            commands::db_save_message,
+            commands::db_get_messages,
+            commands::db_update_messages_status,
+            commands::db_upsert_chat,
+            commands::db_get_chats,
+            commands::db_upsert_contact,
+            commands::db_get_contacts
         ])
         .setup(|app| {
             

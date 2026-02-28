@@ -41,29 +41,66 @@ export const initApp = async (password: string) => {
         let myAlias: string | null = null;
         let myPfp: string | null = null;
         let sessionToken: string | null = null;
+        let blockedHashes: string[] = [];
+        let privacySettings: any = {
+            lastSeen: 'everyone',
+            readReceipts: true,
+            routingMode: 'direct',
+            proxyUrl: ''
+        };
 
-        const saved = await vaultLoad(`entropy_chats_${idHash}`);
-
-        if (saved) {
+        // 1. Load Global Metadata (Settings) from KV Store
+        const savedMeta = await vaultLoad(`entropy_meta_${idHash}`);
+        if (savedMeta) {
             try {
-                const vault = JSON.parse(saved);
-                const rawChats = vault.chats || vault;
-
-                for (const h in rawChats) {
-                    rawChats[h].isOnline = false;
-                    rawChats[h].isTyping = false;
-                }
-                chats = rawChats;
-                myAlias = vault.myAlias || null;
-                myPfp = vault.myPfp || null;
-                sessionToken = vault.sessionToken || null;
+                const meta = JSON.parse(savedMeta);
+                myAlias = meta.myAlias || null;
+                myPfp = meta.myPfp || null;
+                sessionToken = meta.sessionToken || null;
+                blockedHashes = meta.blockedHashes || [];
+                privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
-                userStore.update(s => ({ ...s, authError: "Corrupted vault metadata." }));
-                return;
+                console.error("Failed to parse vault metadata:", e);
             }
         }
 
-        userStore.update(s => ({ ...s, identityHash: idHash, chats, myAlias, myPfp, sessionToken, authError: null }));
+        // 2. Load relational Chat objects
+        try {
+            const dbChats = await invoke<any[]>('db_get_chats');
+            for (const c of dbChats) {
+                chats[c.address] = {
+                    peerHash: c.address,
+                    isGroup: c.is_group,
+                    peerAlias: c.alias,
+                    pfp: c.pfp,
+                    members: c.members || undefined,
+                    messages: [], // To be paged on demand
+                    unreadCount: c.unread_count,
+                    isArchived: c.is_archived,
+                    isOnline: false,
+                    isTyping: false,
+                    lastMsg: c.last_msg,
+                    lastTimestamp: c.last_timestamp,
+                    lastStatus: c.last_status,
+                    lastIsMine: c.last_sender_hash === idHash,
+                    lastSenderHash: c.last_sender_hash
+                };
+            }
+        } catch (e) {
+            console.error("Failed to load chats from DB:", e);
+        }
+
+        userStore.update(s => ({
+            ...s,
+            identityHash: idHash,
+            chats,
+            myAlias,
+            myPfp,
+            sessionToken,
+            blockedHashes,
+            privacySettings,
+            authError: null
+        }));
         network.connect();
     } else {
         userStore.update(s => ({ ...s, authError: "Identity not found. please create one." }));

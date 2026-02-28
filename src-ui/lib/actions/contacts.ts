@@ -5,7 +5,7 @@ import { signalManager } from '../signal_manager';
 import { network } from '../network';
 import { minePoW } from '../crypto';
 import { invoke } from '@tauri-apps/api/core';
-import { bulkDelete, sendReceipt } from './message_utils';
+import { bulkDelete, sendReceipt, syncChatToDb } from './message_utils';
 import type { PrivacySettings } from '../types';
 
 /**
@@ -109,9 +109,29 @@ export const setOnlineStatus = async (peerHash: string, isOnline: boolean) => {
     // Legacy - Rust handles this via periodic heartbeats now.
 };
 
-export const togglePin = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned }; return { ...s, chats: { ...s.chats } }; });
-export const toggleArchive = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived }; return { ...s, chats: { ...s.chats } }; });
-export const toggleMute = (peerHash: string) => userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted }; return { ...s, chats: { ...s.chats } }; });
+export const togglePin = (peerHash: string) => userStore.update(s => {
+    if (s.chats[peerHash]) {
+        s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned };
+        syncChatToDb(s.chats[peerHash]);
+    }
+    return { ...s, chats: { ...s.chats } };
+});
+
+export const toggleArchive = (peerHash: string) => userStore.update(s => {
+    if (s.chats[peerHash]) {
+        s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived };
+        syncChatToDb(s.chats[peerHash]);
+    }
+    return { ...s, chats: { ...s.chats } };
+});
+
+export const toggleMute = (peerHash: string) => userStore.update(s => {
+    if (s.chats[peerHash]) {
+        s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted };
+        syncChatToDb(s.chats[peerHash]);
+    }
+    return { ...s, chats: { ...s.chats } };
+});
 export const toggleVerification = async (peerHash: string, verified?: boolean) => {
     const state = get(userStore);
     const chat = state.chats[peerHash];
@@ -260,14 +280,17 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
     const peerHash = peerHashRaw.toLowerCase();
     userStore.update(s => {
         if (!s.chats[peerHash]) {
-            s.chats[peerHash] = {
+            const newChat = {
                 peerHash,
                 peerAlias: alias || peerHash.slice(0, 8),
                 messages: [],
                 unreadCount: 0
             };
+            s.chats[peerHash] = newChat;
+            syncChatToDb(newChat);
         } else if (alias && s.chats[peerHash].peerAlias === s.chats[peerHash].peerHash.slice(0, 8)) {
             s.chats[peerHash].peerAlias = alias;
+            syncChatToDb(s.chats[peerHash]);
         }
 
         const unreadIds: string[] = [];
@@ -281,6 +304,9 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
         s.chats[peerHash].unreadCount = 0;
         if (unreadIds.length > 0) {
             sendReceipt(peerHash, unreadIds, 'read');
+            // Persist read status to relational DB
+            invoke('db_update_messages_status', { chatAddress: peerHash, ids: unreadIds, status: 'read' }).catch(e => console.error("[DB] Failed to update read status:", e));
+            syncChatToDb(s.chats[peerHash]);
         }
 
         return { ...s, activeChatHash: peerHash, chats: { ...s.chats } };

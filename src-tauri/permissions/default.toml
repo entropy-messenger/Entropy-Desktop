@@ -68,7 +68,14 @@ commands.allow = [
     "send_presence_update",
     "send_receipt",
     "send_profile_update",
-    "show_in_folder"
+    "show_in_folder",
+    "db_save_message",
+    "db_get_messages",
+    "db_update_messages_status",
+    "db_upsert_chat",
+    "db_get_chats",
+    "db_upsert_contact",
+    "db_get_contacts"
 ]
 
 [[set]]

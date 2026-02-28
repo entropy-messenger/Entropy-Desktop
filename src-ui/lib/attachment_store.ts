@@ -19,7 +19,7 @@ export class AttachmentStore {
         this.cache.set(id, data);
 
         // Store as regular file in media/ folder via backend
-        await invoke('vault_save_media', { id, data: Array.from(data) });
+        await invoke('vault_save_media', { id, data });
     }
 
     async get(id: string): Promise<Uint8Array | null> {

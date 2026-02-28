@@ -11,6 +11,7 @@ use tokio::time::Duration;
 use serde_json::json;
 use base64::Engine;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use serde::{Serialize, Deserialize};
 use crate::app_state::{DbState, NetworkState, AudioState, PacedMessage};
 use crate::signal_store::SqliteSignalStore;
 use libsignal_protocol::{
@@ -30,6 +31,42 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce
 };
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DbMessage {
+    pub id: String,
+    pub chat_address: String,
+    pub sender_hash: String,
+    pub content: String,
+    pub timestamp: i64,
+    pub r#type: String,
+    pub status: String,
+    pub attachment_json: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DbChat {
+    pub address: String,
+    pub is_group: bool,
+    pub alias: Option<String>,
+    pub pfp: Option<String>,
+    pub last_msg: Option<String>,
+    pub last_timestamp: Option<i64>,
+    pub last_sender_hash: Option<String>,
+    pub last_status: Option<String>,
+    pub unread_count: i32,
+    pub is_archived: bool,
+    pub members: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DbContact {
+    pub hash: String,
+    pub alias: Option<String>,
+    pub pfp: Option<String>,
+    pub is_blocked: bool,
+    pub trust_level: i32,
+}
 
 const PACING_INTERVAL: u64 = 500;
 const MEDIA_INTERVAL: u64 = 10;
@@ -407,17 +444,6 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
         [],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
 
-    // Check for schema migration (v2 identity table with ID primary key)
-    let has_id_col: bool = conn.query_row(
-        "SELECT count(*) FROM pragma_table_info('signal_identity') WHERE name='id'",
-        [],
-        |row| row.get(0)
-    ).unwrap_or(0) > 0;
-
-    if !has_id_col {
-        let _ = conn.execute("DROP TABLE IF EXISTS signal_identity;", []);
-    }
-
     // Signal Protocol Tables
     conn.execute(
         "CREATE TABLE IF NOT EXISTS signal_identity (
@@ -482,9 +508,90 @@ pub fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passphrase: 
         [],
     ).map_err(|e| e.to_string())?;
 
+    // Entity Tables
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS contacts (
+            hash TEXT PRIMARY KEY,
+            alias TEXT,
+            pfp TEXT,
+            is_blocked INTEGER DEFAULT 0,
+            trust_level INTEGER DEFAULT 0
+        )",
+        [],
+    ).map_err(|e| format!("Failed to create contacts: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chats (
+            address TEXT PRIMARY KEY,
+            is_group INTEGER DEFAULT 0,
+            alias TEXT,
+            pfp TEXT,
+            last_msg TEXT,
+            last_timestamp INTEGER,
+            last_sender_hash TEXT,
+            last_status TEXT,
+            unread_count INTEGER DEFAULT 0,
+            is_archived INTEGER DEFAULT 0
+        )",
+        [],
+    ).map_err(|e| format!("Failed to create chats: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            chat_address TEXT,
+            sender_hash TEXT,
+            content TEXT,
+            timestamp INTEGER,
+            type TEXT,
+            status TEXT,
+            attachment_json TEXT,
+            FOREIGN KEY(chat_address) REFERENCES chats(address)
+        )",
+        [],
+    ).map_err(|e| format!("Failed to create messages: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS chat_members (
+            chat_address TEXT,
+            member_hash TEXT,
+            PRIMARY KEY (chat_address, member_hash),
+            FOREIGN KEY(chat_address) REFERENCES chats(address)
+        )",
+        [],
+    ).map_err(|e| format!("Failed to create chat_members: {}", e))?;
+
+    // Media Encryption Key Initialization
+    let media_key = {
+        let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'").map_err(|e| e.to_string())?;
+        let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+        if let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
+            hex::decode(hex_key).map_err(|e| e.to_string())?
+        } else {
+            let key = Aes256Gcm::generate_key(&mut OsRng);
+            let hex_key = hex::encode(key);
+            conn.execute("INSERT INTO kv_store (key, value) VALUES ('_internal_media_key', ?1)", [&hex_key])
+                .map_err(|e| e.to_string())?;
+            key.to_vec()
+        }
+    };
+
     let mut db_conn = state.conn.lock().unwrap();
     *db_conn = Some(conn);
+    let mut state_key = state.media_key.lock().unwrap();
+    *state_key = Some(media_key);
     Ok(())
+}
+
+fn get_media_dir(app: &tauri::AppHandle, state: &State<'_, DbState>) -> Result<std::path::PathBuf, String> {
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let profile = state.profile.lock().unwrap();
+    let media_dir = app_dir.join("media").join(&*profile);
+    if !media_dir.exists() {
+        std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(media_dir)
 }
 
 #[tauri::command]
@@ -541,16 +648,241 @@ pub fn vault_load(state: State<'_, DbState>, key: String) -> Result<Option<Strin
     }
 }
 
+
+
+// --- RELATIONAL DB COMMANDS ---
+
 #[tauri::command]
-pub fn vault_delete(state: State<'_, DbState>, key: String) -> Result<(), String> {
+pub async fn db_save_message(state: State<'_, DbState>, msg: DbMessage) -> Result<(), String> {
     let lock = state.conn.lock().unwrap();
-    if let Some(conn) = lock.as_ref() {
-        conn.execute("DELETE FROM kv_store WHERE key = ?1;", [key])
-            .map_err(|e: rusqlite::Error| e.to_string())?;
-        Ok(())
-    } else {
-        Err("Database not initialized".to_string())
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    // Ensure the parent chat record exists before saving the message
+    // This prevents foreign key violations and "Ghost Chats"
+    conn.execute(
+        "INSERT OR IGNORE INTO chats (address, is_group, alias, unread_count, is_archived) 
+         VALUES (?1, ?2, ?3, 0, 0)",
+        params![msg.chat_address, (msg.chat_address.len() > 60) as i32, &msg.chat_address[0..8]],
+    ).map_err(|e| e.to_string())?;
+
+    // Use INSERT OR IGNORE to prevent overwriting an existing message that might have a more advanced status (like 'read')
+    conn.execute(
+        "INSERT OR IGNORE INTO messages (id, chat_address, sender_hash, content, timestamp, type, status, attachment_json) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![msg.id, msg.chat_address, msg.sender_hash, msg.content, msg.timestamp, msg.r#type, msg.status, msg.attachment_json],
+    ).map_err(|e| e.to_string())?;
+
+    // If it was ignored, it means it already exists. We should only update the status if the new status is "better"
+    // Status priority logic: read (3) > delivered (2) > sent (1) > sending (0)
+    if msg.status != "sending" {
+         conn.execute(
+            "UPDATE messages SET status = ?1 
+             WHERE id = ?2 AND (
+                (status = 'sent' AND (?1 = 'delivered' OR ?1 = 'read')) OR
+                (status = 'delivered' AND ?1 = 'read') OR
+                (status = 'sending')
+             )",
+            params![msg.status, msg.id],
+        ).map_err(|e| e.to_string())?;
+
+        // Update attachment if provided (e.g. adding encryption bundle after processing)
+        if let Some(json) = msg.attachment_json {
+            conn.execute(
+                "UPDATE messages SET attachment_json = ?1 WHERE id = ?2",
+                params![json, msg.id],
+            ).map_err(|e| e.to_string())?;
+        }
     }
+
+    // Auto-update the chat's last message info
+    conn.execute(
+        "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4 
+         WHERE address = ?5 AND (last_timestamp IS NULL OR ?2 >= last_timestamp)",
+        params![msg.content.chars().take(100).collect::<String>(), msg.timestamp, msg.sender_hash, msg.status, msg.chat_address],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_get_messages(state: State<'_, DbState>, chat_address: String, limit: u32, offset: u32) -> Result<Vec<DbMessage>, String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json 
+         FROM messages WHERE chat_address = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(params![chat_address, limit, offset], |row| {
+        Ok(DbMessage {
+            id: row.get(0)?,
+            chat_address: row.get(1)?,
+            sender_hash: row.get(2)?,
+            content: row.get(3)?,
+            timestamp: row.get(4)?,
+            r#type: row.get(5)?,
+            status: row.get(6)?,
+            attachment_json: row.get(7)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut msgs = Vec::new();
+    for r in rows {
+        msgs.push(r.map_err(|e| e.to_string())?);
+    }
+    // Return in chronological order for UI
+    msgs.reverse();
+    Ok(msgs)
+}
+
+#[tauri::command]
+pub async fn db_update_messages_status(state: State<'_, DbState>, chat_address: String, ids: Vec<String>, status: String) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    for id in ids {
+        // First, find which chat this message belongs to (important for groups)
+        let actual_chat: Option<String> = conn.query_row(
+            "SELECT chat_address FROM messages WHERE id = ?1",
+            params![id],
+            |row| row.get(0)
+        ).ok();
+
+        conn.execute(
+            "UPDATE messages SET status = ?1 WHERE id = ?2",
+            params![status, id],
+        ).map_err(|e| e.to_string())?;
+
+        // If we found the chat, update its sidebar preview status
+        if let Some(addr) = actual_chat {
+            let _ = conn.execute(
+                "UPDATE chats SET last_status = ?1 WHERE address = ?2",
+                params![status, addr],
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_upsert_chat(state: State<'_, DbState>, chat: DbChat) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO chats (address, is_group, alias, pfp, last_msg, last_timestamp, last_sender_hash, last_status, unread_count, is_archived) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            chat.address, 
+            chat.is_group as i32, 
+            chat.alias, 
+            chat.pfp, 
+            chat.last_msg, 
+            chat.last_timestamp, 
+            chat.last_sender_hash,
+            chat.last_status,
+            chat.unread_count, 
+            chat.is_archived as i32
+        ],
+    ).map_err(|e| e.to_string())?;
+
+    // Handle members if it's a group
+    if let Some(members) = chat.members {
+        // Clear existing members first (simple way to sync)
+        conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", [chat.address.clone()]).map_err(|e| e.to_string())?;
+        for m in members {
+            conn.execute(
+                "INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)",
+                [chat.address.clone(), m],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn.prepare(
+        "SELECT address, is_group, alias, pfp, last_msg, last_timestamp, unread_count, is_archived, last_sender_hash, last_status FROM chats"
+    ).map_err(|e| e.to_string())?;
+
+    let chat_rows = stmt.query_map([], |row| {
+        Ok(DbChat {
+            address: row.get(0)?,
+            is_group: row.get::<_, i32>(1)? != 0,
+            alias: row.get(2)?,
+            pfp: row.get(3)?,
+            last_msg: row.get(4)?,
+            last_timestamp: row.get(5)?,
+            unread_count: row.get(6)?,
+            is_archived: row.get::<_, i32>(7)? != 0,
+            last_sender_hash: row.get(8)?,
+            last_status: row.get(9)?,
+            members: None, // Will fill below
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut chats = Vec::new();
+    for r in chat_rows {
+        let mut chat = r.map_err(|e| e.to_string())?;
+        
+        // Fetch members for this chat
+        let mut m_stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1").map_err(|e| e.to_string())?;
+        let m_rows = m_stmt.query_map([&chat.address], |m_row| m_row.get(0)).map_err(|e| e.to_string())?;
+        let mut members = Vec::new();
+        for mr in m_rows {
+            members.push(mr.map_err(|e| e.to_string())?);
+        }
+
+        if !members.is_empty() {
+            chat.members = Some(members);
+        }
+        chats.push(chat);
+    }
+    Ok(chats)
+}
+
+#[tauri::command]
+pub async fn db_upsert_contact(state: State<'_, DbState>, contact: DbContact) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO contacts (hash, alias, pfp, is_blocked, trust_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![contact.hash, contact.alias, contact.pfp, contact.is_blocked as i32, contact.trust_level],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    let mut stmt = conn.prepare("SELECT hash, alias, pfp, is_blocked, trust_level FROM contacts").map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(DbContact {
+            hash: row.get(0)?,
+            alias: row.get(1)?,
+            pfp: row.get(2)?,
+            is_blocked: row.get::<_, i32>(3)? != 0,
+            trust_level: row.get(4)?,
+        })
+    }).map_err(|e| e.to_string())?;
+
+    let mut contacts = Vec::new();
+    for r in rows {
+        contacts.push(r.map_err(|e| e.to_string())?);
+    }
+    Ok(contacts)
 }
 
 #[tauri::command]
@@ -1094,28 +1426,10 @@ pub fn show_in_folder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String, data: Vec<u8>) -> Result<String, String> {
-    // 1. Get/Create Encryption Key
+    // 1. Get Key from state
     let key_bytes = {
-        let lock = state.conn.lock().unwrap();
-        if let Some(conn) = lock.as_ref() {
-            // Check if key exists
-            let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'").map_err(|e| e.to_string())?;
-            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-            
-            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
-                let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
-                hex::decode(hex_key).map_err(|e| e.to_string())?
-            } else {
-                // Create new key
-                let key = Aes256Gcm::generate_key(OsRng);
-                let hex_key = hex::encode(key);
-                conn.execute("INSERT INTO kv_store (key, value) VALUES ('_internal_media_key', ?1)", [&hex_key])
-                    .map_err(|e| e.to_string())?;
-                key.to_vec()
-            }
-        } else {
-            return Err("Database not initialized".to_string());
-        }
+        let lock = state.media_key.lock().unwrap();
+        lock.clone().ok_or("Media key not initialized")?
     };
 
     // 2. Encrypt Data
@@ -1129,12 +1443,7 @@ pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, 
     final_blob.extend(ciphertext);
 
     // 3. Save to Disk
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let media_dir = app_dir.join("media");
-    if !media_dir.exists() {
-        std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
-    }
-    
+    let media_dir = get_media_dir(&app, &state)?;
     let file_path = media_dir.join(&id);
     let mut file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
     file.write_all(&final_blob).map_err(|e| e.to_string())?;
@@ -1144,26 +1453,14 @@ pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, 
 
 #[tauri::command]
 pub async fn vault_load_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String) -> Result<Vec<u8>, String> {
-    // 1. Get Key
+    // 1. Get Key from state
     let key_bytes = {
-        let lock = state.conn.lock().unwrap();
-        if let Some(conn) = lock.as_ref() {
-            let mut stmt = conn.prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'").map_err(|e| e.to_string())?;
-            let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-            if let Some(row) = rows.next().map_err(|e| e.to_string())? {
-                let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
-                hex::decode(hex_key).map_err(|e| e.to_string())?
-            } else {
-                return Err("Media encryption key missing from DB".to_string());
-            }
-        } else {
-             return Err("Database not initialized".to_string());
-        }
+        let lock = state.media_key.lock().unwrap();
+        lock.clone().ok_or("Media key not initialized")?
     };
 
     // 2. Load File
-    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let media_dir = app_dir.join("media");
+    let media_dir = get_media_dir(&app, &state)?;
     let file_path = media_dir.join(&id);
     
     if !file_path.exists() {
@@ -1190,12 +1487,32 @@ pub async fn vault_load_media(app: tauri::AppHandle, state: State<'_, DbState>, 
 }
 
 #[tauri::command]
+pub fn vault_delete(app: tauri::AppHandle, state: State<'_, DbState>, key: String) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    if let Some(conn) = lock.as_ref() {
+        conn.execute("DELETE FROM kv_store WHERE key = ?1;", [key.clone()])
+            .map_err(|e: rusqlite::Error| e.to_string())?;
+    }
+
+    // Media clean up if prefixed with "att_"
+    if key.starts_with("att_") {
+        let id = &key[4..];
+        if let Ok(media_dir) = get_media_dir(&app, &state) {
+            let file_path = media_dir.join(id);
+            if file_path.exists() {
+                let _ = std::fs::remove_file(file_path);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, target_path: String) -> Result<(), String> {
-    // 1. Checkpoint WAL to main DB file to ensure backup is complete
+    // 1. Checkpoint WAL to main DB file
     {
         let conn_guard = state.conn.lock().unwrap();
         if let Some(conn) = conn_guard.as_ref() {
-            // Force checkpoint. TRUNCATE resets the WAL file.
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
                 .map_err(|e| format!("Failed to checkpoint DB: {}", e))?;
         }

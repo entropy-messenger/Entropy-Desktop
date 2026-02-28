@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 
 pub struct DbState {
     pub conn: Mutex<Option<Connection>>,
+    pub media_key: Mutex<Option<Vec<u8>>>,
+    pub profile: Mutex<String>,
 }
 
 pub struct PacedMessage {
