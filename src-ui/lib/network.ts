@@ -40,6 +40,49 @@ export class NetworkLayer {
                 this.onAuthFailed();
             }
         });
+
+        // Listen for authoritative message creation from Rust (Headless Core)
+        listen('msg://added', (event) => {
+            const m = event.payload as any;
+            const state = get(userStore);
+
+            // Convert native snake_case to UI camelCase
+            const uiMsg: any = {
+                id: m.id,
+                timestamp: m.timestamp,
+                senderHash: m.sender_hash,
+                content: m.content,
+                type: m.type,
+                isMine: m.sender_hash === state.identityHash,
+                status: m.status,
+                attachment: m.attachment_json ? JSON.parse(m.attachment_json) : undefined
+            };
+
+            // Update UI
+            logicStore.addMessage(m.chat_address, uiMsg);
+        });
+
+        // Listen for message status updates (Read Receipts)
+        listen('msg://status', (event) => {
+            const { chat_address, ids, status } = event.payload as any;
+            logicStore.updateMessageStatusUI(chat_address, ids, status);
+        });
+
+        // Listen for volatile UI-only signals
+        listen('msg://typing', (event) => {
+            const { sender, payload } = event.payload as any;
+            logicStore.handleTypingSignal(sender, payload);
+        });
+
+        listen('msg://presence', (event) => {
+            const { sender, payload } = event.payload as any;
+            logicStore.handlePresenceSignal(sender, payload);
+        });
+
+        listen('msg://profile_update', (event) => {
+            const { sender, payload } = event.payload as any;
+            logicStore.handleProfileUpdate(sender, payload);
+        });
     }
 
     private connectingPromise: Promise<void> | null = null;

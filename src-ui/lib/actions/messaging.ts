@@ -43,11 +43,11 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     if (!state.identityHash) return;
     const chat = state.chats[destId];
     if (state.blockedHashes.includes(destId)) return;
+
+    // Group messages: Move to native next, but for now still logic-heavy in JS
     if (chat?.isGroup) return sendGroupMessage(destId, content);
 
     try {
-        const msgId = crypto.randomUUID();
-        const linkPreview = await parseLinkPreview(content);
         let replyToData = undefined;
         if (state.replyingTo) {
             replyToData = {
@@ -58,26 +58,22 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
             };
         }
 
-        const payload = { type: 'text_msg', content, id: msgId, replyTo: replyToData, linkPreview };
-        const ciphertextObj = await signalManager.encrypt(destId, JSON.stringify(payload));
+        // ONE SINGLE NATIVE CALL
+        // Rust handles ID generation, timestamping, encryption, DB saving, and Network dispatch.
+        const msgRecord = await invoke<any>('process_outgoing_text', {
+            payload: {
+                recipient: destId,
+                content,
+                reply_to: replyToData
+            }
+        });
 
-        network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(ciphertextObj)));
-
-        const msg: Message = {
-            id: msgId,
-            timestamp: Date.now(),
-            senderHash: state.identityHash,
-            content,
-            type: 'text',
-            isMine: true,
-            status: 'sent',
-            replyTo: replyToData,
-            linkPreview
-        };
-        addMessage(destId, msg);
+        // The msg://added listener in NetworkLayer will handle the UI update
+        // but we can also do it here for immediate feedback if we want.
+        // For now, let's keep it clean and rely on the authoritative event.
         setReplyingTo(null);
     } catch (e) {
-        console.error("Send failed", e);
+        console.error("Native send failed", e);
     }
 };
 

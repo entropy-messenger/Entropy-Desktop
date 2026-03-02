@@ -32,7 +32,7 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DbMessage {
     pub id: String,
     pub chat_address: String,
@@ -652,6 +652,105 @@ pub fn vault_load(state: State<'_, DbState>, key: String) -> Result<Option<Strin
 
 // --- RELATIONAL DB COMMANDS ---
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyTo {
+    pub id: String,
+    pub content: String,
+    pub sender_alias: Option<String>,
+    pub r#type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OutgoingText {
+    pub recipient: String,
+    pub content: String,
+    pub reply_to: Option<ReplyTo>,
+}
+
+#[tauri::command]
+pub fn process_outgoing_text(
+    app: AppHandle,
+    payload: OutgoingText,
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let db_state = app.state::<DbState>();
+            let net_state = app.state::<NetworkState>();
+
+            let msg_id = uuid::Uuid::new_v4().to_string();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+
+            let own_id = {
+                let id_lock = net_state.identity_hash.lock().unwrap();
+                id_lock.clone().ok_or("Not authenticated")?
+            };
+
+            // 1. Prepare E2EE payload
+            let signal_payload = serde_json::json!({
+                "type": "text_msg",
+                "content": payload.content,
+                "id": msg_id,
+                "replyTo": payload.reply_to,
+                "timestamp": timestamp,
+            });
+
+            // 2. Encrypt using internal logic
+            let ciphertext_obj = internal_signal_encrypt(
+                &db_state, 
+                &net_state, 
+                &payload.recipient, 
+                signal_payload.to_string()
+            ).await?;
+
+            // 3. Save to Database
+            let db_msg = DbMessage {
+                id: msg_id.clone(),
+                chat_address: payload.recipient.clone(),
+                sender_hash: own_id.clone(),
+                content: payload.content.clone(),
+                timestamp,
+                r#type: "text".to_string(),
+                status: "sent".to_string(),
+                attachment_json: None,
+            };
+            db_save_message(db_state, db_msg.clone()).await?;
+
+            // 4. Dispatch to Network as a BINARY packet (the "Old Way" compatibility)
+            let routing_hash = payload.recipient.split('.').next().unwrap_or(&payload.recipient);
+            
+            // The receiver expects: [64 bytes header] + [JSON string of ciphertext object]
+            let payload_str = ciphertext_obj.to_string();
+            let payload_bytes = payload_str.as_bytes();
+            
+            let mut packet = Vec::with_capacity(64 + payload_bytes.len());
+            
+            // Pad routing hash to 64 bytes
+            let hash_bytes = routing_hash.as_bytes();
+            packet.extend_from_slice(hash_bytes);
+            if hash_bytes.len() < 64 {
+                packet.extend(std::iter::repeat(0u8).take(64 - hash_bytes.len()));
+            }
+
+            // Append JSON payload
+            packet.extend_from_slice(payload_bytes);
+
+            // Send as binary
+            send_to_network(app.clone(), net_state, None, Some(packet), true, None).await?;
+
+            // 5. Emit event for UI refresh
+            let final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
+
+            Ok(final_json)
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
 #[tauri::command]
 pub async fn db_save_message(state: State<'_, DbState>, msg: DbMessage) -> Result<(), String> {
     let lock = state.conn.lock().unwrap();
@@ -737,7 +836,7 @@ pub async fn db_get_messages(state: State<'_, DbState>, chat_address: String, li
 }
 
 #[tauri::command]
-pub async fn db_update_messages_status(state: State<'_, DbState>, chat_address: String, ids: Vec<String>, status: String) -> Result<(), String> {
+pub async fn db_update_messages_status(state: State<'_, DbState>, _chat_address: String, ids: Vec<String>, status: String) -> Result<(), String> {
     let lock = state.conn.lock().unwrap();
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
@@ -1130,8 +1229,16 @@ pub async fn connect_network(
                                         let _ = app_handle.emit("network-msg", text_str);
                                     }
                                 }
-                                Message::Binary(bin) => {
-                                    let _ = app_handle.emit("network-bin", bin.to_vec());
+                                 Message::Binary(bin) => {
+                                    let app_recv = app_handle.clone();
+                                    let bin_vec = bin.to_vec();
+                                    tokio::task::spawn_blocking(move || {
+                                        if let Err(e) = process_incoming_binary(app_recv.clone(), bin_vec.clone(), None) {
+                                            eprintln!("[Network] Headless receiver failed: {}", e);
+                                            // Fallback to JS for now if Rust fails
+                                            let _ = app_recv.emit("network-bin", bin_vec);
+                                        }
+                                    });
                                 }
                                 Message::Close(_) => {
                                     break;
@@ -2109,6 +2216,154 @@ async fn internal_signal_encrypt(
         }
         Err(e) => Err(e.to_string())
     }
+}
+
+// --- HEADLESS RECEIVER LOGIC ---
+
+async fn internal_signal_decrypt(
+    db_state: &DbState,
+    remote_hash: &str,
+    message_type: u8,
+    message_body: &[u8]
+) -> Result<String, String> {
+    let mut store = SqliteSignalStore::new(db_state);
+    let address = ProtocolAddress::new(remote_hash.to_string(), DeviceId::try_from(1u32).expect("valid ID"));
+    let mut rng = StdRng::from_os_rng();
+
+    let ciphertext_type = CiphertextMessageType::try_from(message_type)
+        .map_err(|_| "Invalid message type")?;
+
+    let ciphertext = match ciphertext_type {
+        CiphertextMessageType::Whisper => CiphertextMessage::SignalMessage(
+            libsignal_protocol::SignalMessage::try_from(message_body).map_err(|e| e.to_string())?
+        ),
+        CiphertextMessageType::PreKey => CiphertextMessage::PreKeySignalMessage(
+            libsignal_protocol::PreKeySignalMessage::try_from(message_body).map_err(|e| e.to_string())?
+        ),
+        _ => return Err("Unsupported ciphertext type".into()),
+    };
+
+    let ptext = message_decrypt(
+        &ciphertext,
+        &address,
+        &mut store.clone(),
+        &mut store.clone(),
+        &mut store.clone(),
+        &store.clone(),
+        &mut store,
+        &mut rng,
+    ).await.map_err(|e| e.to_string())?;
+
+    String::from_utf8(ptext).map_err(|e| e.to_string())
+}
+
+pub fn process_incoming_binary(
+    app: AppHandle,
+    payload: Vec<u8>,
+    override_sender: Option<String>
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let db_state = app.state::<DbState>();
+            let net_state = app.state::<NetworkState>();
+
+            // 1. Trim padding (trailing zeros)
+            let mut last_idx = payload.len();
+            while last_idx > 0 && payload[last_idx - 1] == 0 {
+                last_idx -= 1;
+            }
+            let trimmed = &payload[..last_idx];
+
+            if trimmed.len() < 64 {
+                return Ok(()); // Invalid or dummy
+            }
+
+            // 2. Extract header (routing hash)
+            let header_bytes = &trimmed[0..64];
+            let header_end = header_bytes.iter().position(|&b| b == 0).unwrap_or(64);
+            let header_str = String::from_utf8_lossy(&header_bytes[..header_end]).to_string();
+
+            // The data following the header is the JSON string of the encrypted envelope
+            let body_data = &trimmed[64..];
+            let envelope: serde_json::Value = serde_json::from_slice(body_data)
+                .map_err(|e| format!("Failed to parse message envelope: {}", e))?;
+
+            let sender = override_sender.unwrap_or(header_str).to_lowercase();
+            let msg_type = envelope["type"].as_u64().ok_or("Missing envelope type")? as u8;
+            let body_b64 = envelope["body"].as_str().ok_or("Missing envelope body")?;
+            let body_bytes = base64::engine::general_purpose::STANDARD.decode(body_b64)
+                .map_err(|e| e.to_string())?;
+
+            // 3. Decrypt
+            let decrypted_str = internal_signal_decrypt(&db_state, &sender, msg_type, &body_bytes).await?;
+            let decrypted_json: serde_json::Value = serde_json::from_str(&decrypted_str)
+                .map_err(|e| e.to_string())?;
+
+            // 4. Handle based on payload type
+            let p_type = decrypted_json["type"].as_str().unwrap_or("");
+            match p_type {
+                "text_msg" => {
+                    let msg_id = decrypted_json["id"].as_str().ok_or("Missing msg id")?.to_string();
+                    let content = decrypted_json["content"].as_str().unwrap_or("").to_string();
+                    let timestamp = decrypted_json["timestamp"].as_i64().unwrap_or_else(|| {
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+                    });
+
+                    let db_msg = DbMessage {
+                        id: msg_id,
+                        chat_address: sender.clone(),
+                        sender_hash: sender.clone(),
+                        content,
+                        timestamp,
+                        r#type: "text".to_string(),
+                        status: "delivered".to_string(),
+                        attachment_json: None,
+                    };
+
+                    db_save_message(db_state.clone(), db_msg.clone()).await?;
+
+                    // Emit event so UI updates
+                    let final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                    app.emit("msg://added", final_json).map_err(|e| e.to_string())?;
+                },
+                "receipt" => {
+                    let status = decrypted_json["status"].as_str().unwrap_or("delivered").to_string();
+                    let ids = if let Some(arr) = decrypted_json["msgIds"].as_array() {
+                        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+                    } else if let Some(id) = decrypted_json["msgId"].as_str() {
+                        vec![id.to_string()]
+                    } else {
+                        vec![]
+                    };
+
+                    if !ids.is_empty() {
+                        db_update_messages_status(db_state.clone(), sender.clone(), ids.clone(), status.clone()).await?;
+                        app.emit("msg://status", json!({
+                            "chat_address": sender,
+                            "ids": ids,
+                            "status": status
+                        })).map_err(|e| e.to_string())?;
+                    }
+                },
+                "typing" | "presence" | "profile_update" => {
+                    app.emit(&format!("msg://{}", p_type), json!({
+                        "sender": sender,
+                        "payload": decrypted_json
+                    })).map_err(|e| e.to_string())?;
+                },
+                _ => {
+                    println!("[Headless] Decrypted unknown type: {}", p_type);
+                    app.emit("msg://decrypted", json!({
+                        "sender": sender,
+                        "type": p_type,
+                        "payload": decrypted_json
+                    })).map_err(|e| e.to_string())?;
+                }
+            }
+            Ok(())
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 fn internal_send_volatile(state: &NetworkState, to: &str, payload: serde_json::Value) -> Result<(), String> {

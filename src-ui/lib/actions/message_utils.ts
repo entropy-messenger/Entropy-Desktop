@@ -311,3 +311,125 @@ export const markAsDownloaded = (chatId: string, msgId: string) => {
         return { ...s, chats: { ...s.chats } };
     });
 };
+// --- Headless Core UI Helpers ---
+const typingTimeouts: Record<string, any> = {};
+
+export const updateMessageStatusUI = (senderHash: string, ids: string[], status: string) => {
+    const state = get(userStore);
+    if (status === 'read' && !state.privacySettings.readReceipts) return;
+
+    userStore.update(s => {
+        let anyChanged = false;
+        const nextChats = { ...s.chats };
+
+        for (const chatId in nextChats) {
+            const chat = { ...nextChats[chatId] };
+            let chatChanged = false;
+
+            if (chat.messages && chat.messages.length > 0) {
+                const newMessages = chat.messages.map(m => {
+                    if (ids.includes(m.id)) {
+                        const oldPriority = m.status === 'read' ? 3 : m.status === 'delivered' ? 2 : 1;
+                        const newPriority = status === 'read' ? 3 : status === 'delivered' ? 2 : 1;
+                        if (newPriority > oldPriority) {
+                            chatChanged = true;
+                            return { ...m, status: status as any };
+                        }
+                    }
+                    return m;
+                });
+                if (chatChanged) {
+                    chat.messages = newMessages;
+                    const lastId = newMessages[newMessages.length - 1].id;
+                    if (ids.includes(lastId)) {
+                        chat.lastStatus = status as any;
+                    }
+                }
+            } else if (chat.lastMsg) {
+                if (chatId === senderHash) {
+                    chat.lastStatus = status as any;
+                    chatChanged = true;
+                }
+            }
+
+            if (chatChanged) {
+                anyChanged = true;
+                nextChats[chatId] = chat;
+                syncChatToDb(chat);
+            }
+        }
+
+        if (anyChanged) return { ...s, chats: nextChats };
+        return s;
+    });
+};
+
+export const handleTypingSignal = (senderHash: string, payload: any) => {
+    const state = get(userStore);
+    if (state.privacySettings.lastSeen !== 'everyone') return;
+    if (typingTimeouts[senderHash]) clearTimeout(typingTimeouts[senderHash]);
+
+    userStore.update(s => {
+        if (s.chats[senderHash]) {
+            const updated = { ...s.chats[senderHash] };
+            updated.isTyping = payload.isTyping;
+            s.chats[senderHash] = updated;
+        }
+        return { ...s, chats: { ...s.chats } };
+    });
+
+    if (payload.isTyping) {
+        typingTimeouts[senderHash] = setTimeout(() => {
+            userStore.update(s => {
+                if (s.chats[senderHash]) {
+                    const updated = { ...s.chats[senderHash] };
+                    updated.isTyping = false;
+                    s.chats[senderHash] = updated;
+                }
+                return { ...s, chats: { ...s.chats } };
+            });
+            delete typingTimeouts[senderHash];
+        }, 6000);
+    }
+};
+
+export const handlePresenceSignal = (senderHash: string, payload: any) => {
+    const state = get(userStore);
+    if (state.privacySettings.lastSeen !== 'everyone') return;
+
+    if (payload.isOnline) {
+        // Need to import these if moving here
+        // for now simple property update
+        userStore.update(s => {
+            if (s.chats[senderHash]) {
+                const updated = { ...s.chats[senderHash] };
+                updated.isOnline = true;
+                s.chats[senderHash] = updated;
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    } else {
+        userStore.update(s => {
+            if (s.chats[senderHash]) {
+                const updated = { ...s.chats[senderHash] };
+                updated.isOnline = false;
+                updated.lastSeen = Date.now();
+                s.chats[senderHash] = updated;
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    }
+};
+
+export const handleProfileUpdate = (senderHash: string, payload: any) => {
+    userStore.update(s => {
+        if (s.chats[senderHash]) {
+            const updated = { ...s.chats[senderHash] };
+            if (payload.alias) updated.peerAlias = payload.alias;
+            if (payload.pfp) updated.pfp = payload.pfp;
+            s.chats[senderHash] = updated;
+            syncChatToDb(updated);
+        }
+        return { ...s, chats: { ...s.chats } };
+    });
+};

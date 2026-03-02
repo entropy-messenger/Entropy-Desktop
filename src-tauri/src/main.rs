@@ -86,7 +86,8 @@ fn main() {
             commands::db_upsert_chat,
             commands::db_get_chats,
             commands::db_upsert_contact,
-            commands::db_get_contacts
+            commands::db_get_contacts,
+            commands::process_outgoing_text
         ])
         .setup(|app| {
             
