@@ -22,7 +22,7 @@
         if (!blobUrl && !loading && !error && msg.attachment) {
             const isImage = msg.attachment.fileType?.startsWith('image/') || 
                           /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment.fileName || '');
-            if (isImage || msg.attachment.originalPath) {
+            if (isImage || msg.type === 'voice_note' || msg.attachment.originalPath) {
                 loadAttachment();
             }
         }
@@ -30,7 +30,7 @@
 
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
     import { signalManager } from '../lib/signal_manager';
-    import { toHex } from '../lib/crypto';
+    import { toHex, fromBase64 } from '../lib/crypto';
     import { invoke } from '@tauri-apps/api/core';
     import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
@@ -55,9 +55,13 @@
             hasInMemoryData: !!msg.attachment.data
         });
 
-        // Step 1: Check in-memory data (Optimistic UI)
+        // Step 1: Check in-memory data (Optimistic UI or small Rust data)
         if (msg.attachment.data) {
-            blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
+            let bytes = msg.attachment.data;
+            if (typeof bytes === 'string') {
+                bytes = fromBase64(bytes);
+            }
+            blobUrl = URL.createObjectURL(new Blob([bytes], {type: msg.attachment.fileType}));
             return;
         }
 
@@ -150,7 +154,7 @@
     });
 </script>
 
-{#if msg.type === 'voice_note'}
+{#if msg.type === 'voice_note' || msg.attachment?.fileName === 'voice_note.wav'}
     {#if blobUrl}
         <VoiceNotePlayer src={blobUrl} id={msg.id} isMine={msg.isMine} />
     {:else if loading}

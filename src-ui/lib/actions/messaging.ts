@@ -44,94 +44,32 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     const chat = state.chats[destId];
     if (state.blockedHashes.includes(destId)) return;
 
-    // Group messages: Move to native next, but for now still logic-heavy in JS
-    if (chat?.isGroup) return sendGroupMessage(destId, content);
-
     try {
         let replyToData = undefined;
         if (state.replyingTo) {
             replyToData = {
                 id: state.replyingTo.id,
                 content: state.replyingTo.content,
-                senderAlias: state.replyingTo.senderAlias,
+                sender_alias: state.replyingTo.senderAlias,
                 type: state.replyingTo.type
             };
         }
 
-        // ONE SINGLE NATIVE CALL
-        // Rust handles ID generation, timestamping, encryption, DB saving, and Network dispatch.
-        const msgRecord = await invoke<any>('process_outgoing_text', {
+        // ONE SINGLE NATIVE CALL for both 1:1 and Groups
+        await invoke<any>('process_outgoing_text', {
             payload: {
                 recipient: destId,
                 content,
-                reply_to: replyToData
+                reply_to: replyToData,
+                is_group: !!chat?.isGroup,
+                group_members: chat?.members || null
             }
         });
 
-        // The msg://added listener in NetworkLayer will handle the UI update
-        // but we can also do it here for immediate feedback if we want.
-        // For now, let's keep it clean and rely on the authoritative event.
         setReplyingTo(null);
     } catch (e) {
         console.error("Native send failed", e);
     }
-};
-
-/**
- * Multicasts a message to group members using per-recipient Signal encryption.
- */
-export const sendGroupMessage = async (groupId: string, content: string) => {
-    const state = get(userStore);
-    const group = state.chats[groupId];
-    if (!group?.isGroup || !group.members) return;
-
-    const msgId = crypto.randomUUID();
-    let replyToData = undefined;
-    if (state.replyingTo) {
-        replyToData = {
-            id: state.replyingTo.id,
-            content: state.replyingTo.content,
-            senderAlias: state.replyingTo.senderAlias,
-            type: state.replyingTo.type
-        };
-    }
-
-    try {
-        const targets = [];
-        for (const member of group.members!) {
-            if (member === state.identityHash) continue;
-            const payload = {
-                type: 'group_message_v2',
-                groupId,
-                sender: state.identityHash,
-                content: content,
-                id: msgId,
-                replyTo: replyToData
-            };
-            const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
-            targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
-        }
-
-        if (targets.length > 0) {
-            network.sendJSON({ type: 'group_multicast', targets });
-        }
-    } catch (e) {
-        console.error("Group Send Failed:", e);
-    }
-
-    const msg: Message = {
-        id: msgId,
-        timestamp: Date.now(),
-        senderHash: state.identityHash!,
-        content,
-        type: 'text',
-        groupId,
-        isMine: true,
-        status: 'sent',
-        replyTo: replyToData
-    };
-    addMessage(groupId, msg);
-    setReplyingTo(null);
 };
 
 /**
@@ -147,67 +85,28 @@ export const sendFile = async (destIdRaw: string, file: File) => {
     reader.onload = async () => {
         const buffer = reader.result as ArrayBuffer;
         const uint8 = new Uint8Array(buffer);
-        const msgId = crypto.randomUUID();
-
-        // Optimistic UI: Add message to store immediately
-        const optMsg: Message = {
-            id: msgId,
-            timestamp: Date.now(),
-            senderHash: state.identityHash!,
-            content: `File: ${file.name}`,
-            type: 'file',
-            groupId: chat?.isGroup ? destId : undefined,
-            attachment: { fileName: file.name, fileType: file.type, size: file.size, data: uint8 },
-            isMine: true,
-            status: 'sending'
-        };
-        addMessage(destId, optMsg);
 
         try {
-            const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, file.name, file.type);
-
-            const contentObj = {
-                type: 'file_v2',
-                id: msgId,
-                bundle,
-                data: ciphertext,
-                size: uint8.length
-            };
-
-            if (chat?.isGroup) {
-                const targets = [];
-                for (const member of chat.members!) {
-                    if (member === state.identityHash) continue;
-                    const payload = { ...contentObj, groupId: destId };
-                    const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
-                    targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
-                }
-                network.sendJSON({ type: 'group_multicast', targets });
-            } else {
-                const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
-                network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
-            }
-
-            await commitMessageUpdate(destId, msgId, {
-                status: 'sent',
-                attachment: {
-                    ...optMsg.attachment!,
-                    bundle,
-                    isV2: true
+            await invoke('process_outgoing_media', {
+                payload: {
+                    recipient: destId,
+                    file_data: Array.from(uint8),
+                    file_name: file.name,
+                    file_type: file.type,
+                    msg_type: 'file',
+                    is_group: !!chat?.isGroup,
+                    group_members: chat?.members || null,
+                    reply_to: state.replyingTo ? {
+                        id: state.replyingTo.id,
+                        content: state.replyingTo.content,
+                        sender_alias: state.replyingTo.senderAlias,
+                        type: state.replyingTo.type
+                    } : null
                 }
             });
-
-            // Also save the encrypted data back to our local store so we can load it later
-            await attachmentStore.put(msgId, fromHex(ciphertext));
+            setReplyingTo(null);
         } catch (e) {
-            console.error("[Messaging] Failed to send media:", e);
-            userStore.update(s => {
-                if (s.chats[destId]) {
-                    const m = s.chats[destId].messages.find(x => x.id === msgId);
-                    if (m) m.status = 'failed';
-                }
-                return { ...s, chats: { ...s.chats } };
-            });
+            console.error("[Messaging] Native media send failed:", e);
         }
     };
     reader.readAsArrayBuffer(file);
@@ -223,8 +122,6 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    const msgId = crypto.randomUUID();
-
     // Basic MIME type detection for previews
     let fileType = 'application/octet-stream';
     const ext = fileName.split('.').pop()?.toLowerCase();
@@ -233,67 +130,27 @@ export const sendLargeFile = async (destIdRaw: string, path: string, fileName: s
     else if (ext === 'gif') fileType = 'image/gif';
     else if (ext === 'webp') fileType = 'image/webp';
 
-    // Optimistic UI: Use a placeholder for size if we don't have it yet
-    const optMsg: Message = {
-        id: msgId,
-        timestamp: Date.now(),
-        senderHash: state.identityHash!,
-        content: `File: ${fileName}`,
-        type: 'file',
-        groupId: chat?.isGroup ? destId : undefined,
-        attachment: { fileName: fileName, fileType, size: 0, originalPath: path },
-        isMine: true,
-        status: 'sending'
-    };
-    addMessage(destId, optMsg);
-
     try {
-        // Rust will read the file from disk, avoiding JS memory limits
-        const { ciphertext, bundle } = await signalManager.encryptFile(path, fileName, fileType, 0);
-
-        const contentObj = {
-            type: 'file_v2',
-            id: msgId,
-            bundle,
-            data: ciphertext,
-            size: bundle.file_size
-        };
-
-        if (chat?.isGroup) {
-            const targets = [];
-            for (const member of chat.members!) {
-                if (member === state.identityHash) continue;
-                const payload = { ...contentObj, groupId: destId };
-                const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
-                targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
-            }
-            network.sendJSON({ type: 'group_multicast', targets });
-        } else {
-            const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
-            network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)));
-        }
-
-        await commitMessageUpdate(destId, msgId, {
-            status: 'sent',
-            attachment: {
-                ...optMsg.attachment!,
-                size: bundle.file_size,
-                bundle,
-                isV2: true
+        await invoke('process_outgoing_media', {
+            payload: {
+                recipient: destId,
+                file_path: path,
+                file_name: fileName,
+                file_type: fileType,
+                msg_type: 'file',
+                is_group: !!chat?.isGroup,
+                group_members: chat?.members || null,
+                reply_to: state.replyingTo ? {
+                    id: state.replyingTo.id,
+                    content: state.replyingTo.content,
+                    sender_alias: state.replyingTo.senderAlias,
+                    type: state.replyingTo.type
+                } : null
             }
         });
-
-        // Also save the encrypted data to our local store so we can load it later
-        await attachmentStore.put(msgId, fromHex(ciphertext));
+        setReplyingTo(null);
     } catch (e) {
-        console.error("[Messaging] Failed to send large file:", e);
-        userStore.update(s => {
-            if (s.chats[destId]) {
-                const m = s.chats[destId].messages.find(x => x.id === msgId);
-                if (m) m.status = 'failed';
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
+        console.error("[Messaging] Native large file send failed:", e);
     }
 };
 
@@ -308,66 +165,28 @@ export const sendVoiceNote = async (destIdRaw: string, audioBlob: Blob) => {
 
     const buffer = await audioBlob.arrayBuffer();
     const uint8 = new Uint8Array(buffer);
-    const msgId = crypto.randomUUID();
-
-    const optMsg: Message = {
-        id: msgId,
-        timestamp: Date.now(),
-        senderHash: state.identityHash!,
-        content: "[Voice Note]",
-        type: 'voice_note',
-        groupId: chat?.isGroup ? destId : undefined,
-        attachment: { fileName: 'voice_note.wav', fileType: 'audio/wav', size: uint8.length, data: uint8 },
-        isMine: true,
-        status: 'sending'
-    };
-    addMessage(destId, optMsg);
 
     try {
-        const { ciphertext, bundle } = await signalManager.encryptMedia(uint8, 'voice_note.wav', 'audio/wav');
-
-        const contentObj = {
-            type: 'voice_note_v2',
-            id: msgId,
-            bundle,
-            data: ciphertext,
-            size: uint8.length
-        };
-
-        if (chat?.isGroup) {
-            const targets = [];
-            for (const member of chat.members!) {
-                if (member === state.identityHash) continue;
-                const payload = { ...contentObj, groupId: destId };
-                const wrapped = await signalManager.encrypt(member, JSON.stringify(payload));
-                targets.push({ to: member, body: wrapped.body, msg_type: wrapped.type });
-            }
-            network.sendJSON({ type: 'group_multicast', targets });
-        } else {
-            const wrapped = await signalManager.encrypt(destId, JSON.stringify(contentObj));
-            network.sendBinary(destId, new TextEncoder().encode(JSON.stringify(wrapped)), { id: msgId });
-        }
-
-        await commitMessageUpdate(destId, msgId, {
-            status: 'sent',
-            attachment: {
-                ...optMsg.attachment!,
-                bundle,
-                isV2: true
+        await invoke('process_outgoing_media', {
+            payload: {
+                recipient: destId,
+                file_data: Array.from(uint8),
+                file_name: 'voice_note.wav',
+                file_type: 'audio/wav',
+                msg_type: 'voice_note',
+                is_group: !!chat?.isGroup,
+                group_members: chat?.members || null,
+                reply_to: state.replyingTo ? {
+                    id: state.replyingTo.id,
+                    content: state.replyingTo.content,
+                    sender_alias: state.replyingTo.senderAlias,
+                    type: state.replyingTo.type
+                } : null
             }
         });
-
-        // Also save the encrypted data back to our local store so we can load it later
-        await attachmentStore.put(msgId, fromHex(ciphertext));
+        setReplyingTo(null);
     } catch (e) {
-        console.error("[Messaging] Failed to send voice note:", e);
-        userStore.update(s => {
-            if (s.chats[destId]) {
-                const m = s.chats[destId].messages.find(x => x.id === msgId);
-                if (m) m.status = 'failed';
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
+        console.error("[Messaging] Native voice note send failed:", e);
     }
 };
 
@@ -479,8 +298,8 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
         if (parsed.type === 'group_message' || parsed.type === 'group_message_v2' || parsed.type === 'text_msg') {
             content = parsed.content || parsed.body || parsed.m || content;
         } else if (parsed.type === 'file' || parsed.type === 'voice_note') {
-            type = parsed.type;
-            content = parsed.type === 'file' ? `File: ${parsed.fileName}` : "Voice Note";
+            type = (parsed.type === 'voice_note' || parsed.fileName === 'voice_note.wav') ? 'voice_note' : 'file';
+            content = type === 'file' ? `File: ${parsed.fileName}` : "Voice Note";
             const attachmentData = fromBase64(parsed.data);
             attachment = {
                 fileName: parsed.fileName || (parsed.type === 'voice_note' ? 'voice_note.wav' : 'file'),
@@ -490,7 +309,7 @@ const processPayload = async (senderHash: string, payloadStr: string, groupId?: 
             };
             await attachmentStore.put(incomingMsgId, attachmentData);
         } else if (parsed.type === 'file_v2' || parsed.type === 'voice_note_v2') {
-            type = parsed.type === 'file_v2' ? 'file' : 'voice_note';
+            type = (parsed.type === 'voice_note_v2' || (parsed.bundle && parsed.bundle.file_name === 'voice_note.wav')) ? 'voice_note' : 'file';
             const size = parsed.size || (parsed.bundle && parsed.bundle.file_size) || 0;
             content = type === 'file' ? `File: ${parsed.bundle.file_name}` : "Voice Note";
             attachment = {

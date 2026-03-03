@@ -76,7 +76,8 @@ commands.allow = [
     "db_get_chats",
     "db_upsert_contact",
     "db_get_contacts",
-    "process_outgoing_text"
+    "process_outgoing_text",
+    "process_outgoing_media"
 ]
 
 [[set]]
