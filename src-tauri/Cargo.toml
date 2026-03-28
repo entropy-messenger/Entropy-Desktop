@@ -25,6 +25,8 @@ url = "2"
 hex = "0.4"
 sha2 = "0.10"
 base64 = "0.22"
+argon2 = "0.5"
+num-bigint = "0.4"
 tokio-socks = "0.5"
 cpal = "0.17.1"
 hound = "3.5.1"
@@ -33,6 +35,7 @@ rand = "0.9"
 subtle = "2.6"
 async-trait = "0.1"
 uuid = { version = "1.13", features = ["v4"] }
+chrono = "0.4"
 zip = "0.6"
 walkdir = "2"
 tar = "0.4.44"
@@ -40,12 +43,18 @@ flate2 = "1.1.9"
 aes-gcm = "0.10"
 tokio-rustls = "0.26.4"
 tokio-util = "0.7.18"
+tracing = "0.1"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
+[profile.dev]
+opt-level = 3 # Fast crypto even in debug mode
+
 [profile.release]
+opt-level = 3 # Maximize execution speed
+ incremental = false # Full optimization for release
 panic = "abort" # Reduce binary size and remove stack trace info
 codegen-units = 1 # Better optimizations
 lto = true # Link Time Optimization across all crates

@@ -35,109 +35,48 @@
     import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
     async function showInFolder() {
-        if (msg.attachment?.originalPath) {
-            console.debug("[Attachment] Showing in folder:", msg.attachment.originalPath);
-            await invoke('show_in_folder', { path: msg.attachment.originalPath });
+        const path = msg.attachment?.vaultPath || msg.attachment?.originalPath;
+        if (path) {
+            console.debug("[Attachment] Showing in folder:", path);
+            await invoke('show_in_folder', { path });
         }
     }
 
     async function loadAttachment() {
-        if (!msg.attachment) {
-            console.debug("[Attachment] No attachment data for message:", msg.id);
+        if (!msg.attachment) return;
+        
+        const path = msg.attachment.vaultPath || msg.attachment.originalPath;
+
+        // Step 1: Use native-decrypted file on disk (High Performance)
+        if (path) {
+            blobUrl = convertFileSrc(path);
+            loading = false;
             return;
         }
-        
-        console.debug("[Attachment] Evaluating message:", msg.id, {
-            type: msg.type,
-            isV2: msg.attachment.isV2,
-            hasBundle: !!msg.attachment.bundle,
-            originalPath: msg.attachment.originalPath,
-            hasInMemoryData: !!msg.attachment.data
-        });
 
-        // Step 1: Check in-memory data (Optimistic UI or small Rust data)
+        // Step 2: Fallback for in-memory data (Small fragments/Legacy)
         if (msg.attachment.data) {
             let bytes = msg.attachment.data;
-            if (typeof bytes === 'string') {
-                bytes = fromBase64(bytes);
-            }
+            if (typeof bytes === 'string') bytes = fromBase64(bytes);
             blobUrl = URL.createObjectURL(new Blob([bytes], {type: msg.attachment.fileType}));
-            return;
-        }
-
-        // Step 2: Try to load from the attachmentStore (encrypted vault)
-        // We prefer the vault because asset:// protocol is often blocked for arbitrary files.
-        if (msg.attachment.isV2 && msg.attachment.bundle) {
-            try {
-                const data = await attachmentStore.get(msg.id);
-                if (data) {
-                    console.debug("[Attachment] Found in store. Size:", data.length);
-                    const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
-                    blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
-                    downloadSuccess = true;
-                    return;
-                }
-            } catch (e) {
-                console.warn("[Attachment] Vault load failed, falling back to originalPath:", e);
-            }
-        }
-
-        // Step 3: For Senders - if we have the original path, use it as a robust fallback
-        if (msg.attachment.originalPath) {
-            console.debug("[Attachment] Sender-side fallback: using originalPath.", msg.attachment.originalPath);
-            blobUrl = convertFileSrc(msg.attachment.originalPath);
-            loading = false;
             return;
         }
     }
 
     async function manualDownload() {
         if (isDownloading) return;
+        const path = msg.attachment?.vaultPath || msg.attachment?.originalPath;
+        if (!path) return;
+
         isDownloading = true;
-        downloadSuccess = false;
-
-        console.debug("[Attachment] Manual download requested for:", msg.attachment.fileName);
         try {
-            // First check if it's already in the message object (V1)
-            let bytes: Uint8Array | null = null;
-            if (msg.attachment.data) {
-                bytes = msg.attachment.data;
-            } else {
-                const data = await attachmentStore.get(msg.id);
-                if (data) {
-                    if (msg.attachment.isV2 && msg.attachment.bundle) {
-                        bytes = await signalManager.decryptMedia(data, msg.attachment.bundle);
-                    } else {
-                        throw new Error("Legacy attachment download not supported");
-                    }
-                }
-            }
-
-            if (!bytes) throw new Error("File data not found");
-
-            console.debug("[Attachment] Saving file via native bridge...");
-            await invoke('save_file', { 
-                data: Array.from(bytes),
-                filename: msg.attachment.fileName || 'download' 
-            });
-
+            // Since it's already on disk (Native-First), manual download 
+            // is just revealing it or moving it. For now, reveal is safer.
+            await invoke('show_in_folder', { path });
             downloadSuccess = true;
             if (chatId) markAsDownloaded(chatId, msg.id);
-
-            // Notify user
-            let hasPermission = await isPermissionGranted();
-            if (!hasPermission) {
-                const permission = await requestPermission();
-                hasPermission = permission === 'granted';
-            }
-            if (hasPermission) {
-                sendNotification({ 
-                    title: 'Download Complete', 
-                    body: `Saved ${msg.attachment.fileName} to Downloads` 
-                });
-            }
         } catch (e: any) {
-            console.error("[Attachment] Native save failed:", e);
+            console.error("[Attachment] Reveal failed:", e);
         } finally {
             isDownloading = false;
         }
@@ -215,8 +154,8 @@
             <button 
                 onclick={showInFolder}
                 class="flex-1 min-w-0 text-left hover:bg-white/5 p-1 rounded transition-colors disabled:cursor-auto"
-                disabled={!msg.attachment.originalPath}
-                title={msg.attachment.originalPath ? `Show in Folder: ${msg.attachment.originalPath}` : ''}
+                disabled={!(msg.attachment.vaultPath || msg.attachment.originalPath)}
+                title={(msg.attachment.vaultPath || msg.attachment.originalPath) ? `Show in Folder: ${msg.attachment.vaultPath || msg.attachment.originalPath}` : ''}
             >
                 <div class="text-[12px] font-bold truncate {msg.attachment.originalPath ? 'text-entropy-primary' : 'text-entropy-text-primary'} tracking-tight">{msg.attachment.fileName}</div>
                 <div class="text-[10px] font-medium text-entropy-text-dim uppercase tracking-wider">

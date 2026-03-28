@@ -1,6 +1,6 @@
 
 import { get } from 'svelte/store';
-import { userStore } from '../stores/user';
+import { userStore, messageStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
 import { network } from '../network';
 import { minePoW } from '../crypto';
@@ -9,61 +9,8 @@ import { bulkDelete, sendReceipt, syncChatToDb } from './message_utils';
 import type { PrivacySettings } from '../types';
 
 /**
- * Manages peer presence, profile synchronization, and contact metadata updates.
+ * Manages profile synchronization and contact metadata updates.
  */
-export const statusTimeouts: Record<string, any> = {};
-
-
-export const markOnline = (peerHash: string) => {
-    if (statusTimeouts[peerHash]) clearTimeout(statusTimeouts[peerHash]);
-
-    userStore.update(s => {
-        if (s.chats[peerHash]) {
-            const updated = { ...s.chats[peerHash] };
-            updated.isOnline = true;
-            updated.lastSeen = undefined;
-            s.chats[peerHash] = updated;
-        }
-        return { ...s, chats: { ...s.chats } };
-    });
-
-    statusTimeouts[peerHash] = setTimeout(() => {
-        userStore.update(s => {
-            if (s.chats[peerHash]) {
-                const updated = { ...s.chats[peerHash] };
-                updated.isOnline = false;
-                updated.lastSeen = Date.now();
-                s.chats[peerHash] = updated;
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
-        delete statusTimeouts[peerHash];
-    }, 25000);
-};
-
-/**
- * Initiates the background heartbeat for presence broadcasting and message expiry.
- */
-/**
- * Broadcasts initial presence upon connection.
- * Explicit polling has been removed to reduce network overhead and improve privacy.
- */
-export const startHeartbeat = async () => {
-    const state = get(userStore);
-    if (state.identityHash && state.isConnected) {
-        const peerHashes = Object.keys(state.chats).filter(peerHash =>
-            !state.chats[peerHash].isGroup &&
-            state.privacySettings.lastSeen === 'everyone' &&
-            !state.blockedHashes.includes(peerHash)
-        );
-
-        try {
-            await invoke('send_presence_update', { peerHashes, isOnline: true });
-        } catch (e) {
-            console.error(`[Presence] Failed to broadcast:`, e);
-        }
-    }
-};
 
 export const updateMyProfile = (alias: string, pfp: string | null) => {
     userStore.update(s => ({ ...s, myAlias: alias, myPfp: pfp }));
@@ -80,7 +27,7 @@ export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.myAlias && !state.myPfp) return;
     if (state.blockedHashes.includes(peerHash)) return;
-    if (state.privacySettings.lastSeen !== 'everyone') return;
+    if (state.privacySettings.typingStatus !== 'everyone') return;
 
     try {
         await invoke('send_profile_update', {
@@ -96,7 +43,7 @@ export const broadcastProfile = async (peerHash: string) => {
 export const sendTypingStatus = async (peerHash: string, isTyping: boolean) => {
     const state = get(userStore);
     if (state.chats[peerHash]?.isGroup || state.blockedHashes.includes(peerHash)) return;
-    if (state.privacySettings.lastSeen !== 'everyone') return;
+    if (state.privacySettings.typingStatus !== 'everyone') return;
 
     try {
         await invoke('send_typing_status', { peerHash, isTyping });
@@ -105,13 +52,12 @@ export const sendTypingStatus = async (peerHash: string, isTyping: boolean) => {
     }
 };
 
-export const setOnlineStatus = async (peerHash: string, isOnline: boolean) => {
-    // Legacy - Rust handles this via periodic heartbeats now.
-};
 
 export const togglePin = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
-        s.chats[peerHash] = { ...s.chats[peerHash], isPinned: !s.chats[peerHash].isPinned };
+        const nextPinned = !s.chats[peerHash].isPinned;
+        s.chats[peerHash] = { ...s.chats[peerHash], isPinned: nextPinned };
+        invoke('db_set_chat_pinned', { address: peerHash, isPinned: nextPinned }).catch(console.error);
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -119,15 +65,9 @@ export const togglePin = (peerHash: string) => userStore.update(s => {
 
 export const toggleArchive = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
-        s.chats[peerHash] = { ...s.chats[peerHash], isArchived: !s.chats[peerHash].isArchived };
-        syncChatToDb(s.chats[peerHash]);
-    }
-    return { ...s, chats: { ...s.chats } };
-});
-
-export const toggleMute = (peerHash: string) => userStore.update(s => {
-    if (s.chats[peerHash]) {
-        s.chats[peerHash] = { ...s.chats[peerHash], isMuted: !s.chats[peerHash].isMuted };
+        const nextArchived = !s.chats[peerHash].isArchived;
+        s.chats[peerHash] = { ...s.chats[peerHash], isArchived: nextArchived };
+        invoke('db_set_chat_archived', { address: peerHash, isArchived: nextArchived }).catch(console.error);
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -154,17 +94,21 @@ export const toggleVerification = async (peerHash: string, verified?: boolean) =
         console.error("Failed to update verification status:", e);
     }
 };
-export const toggleStar = (peerHash: string, msgId: string) => userStore.update(s => {
-    if (s.chats[peerHash]) {
-        s.chats[peerHash] = {
-            ...s.chats[peerHash],
-            messages: s.chats[peerHash].messages.map(m =>
-                m.id === msgId ? { ...m, isStarred: !m.isStarred } : m
-            )
-        };
-    }
-    return { ...s, chats: { ...s.chats } };
-});
+export const toggleStar = (peerHash: string, msgId: string) => {
+    messageStore.update(mStore => {
+        if (!mStore[peerHash]) return mStore;
+        
+        const msgs = [...mStore[peerHash]];
+        const idx = msgs.findIndex(m => m.id === msgId);
+        if (idx !== -1) {
+            const nextStarred = !msgs[idx].isStarred;
+            msgs[idx] = { ...msgs[idx], isStarred: nextStarred };
+            invoke('db_set_message_starred', { id: msgId, isStarred: nextStarred }).catch(console.error);
+            return { ...mStore, [peerHash]: msgs };
+        }
+        return mStore;
+    });
+};
 
 
 export const setLocalNickname = (peerHash: string, nickname: string | null) => {
@@ -179,34 +123,43 @@ export const setLocalNickname = (peerHash: string, nickname: string | null) => {
     });
 };
 
-export const bulkStar = (peerHash: string, msgIds: string[]) => userStore.update(s => {
-    if (s.chats[peerHash]) {
-        s.chats[peerHash].messages.forEach(m => { if (msgIds.includes(m.id)) m.isStarred = true; });
-    }
-    return { ...s, chats: { ...s.chats } };
-});
+export const bulkStar = (peerHash: string, msgIds: string[]) => {
+    messageStore.update(mStore => {
+        const msgs = mStore[peerHash];
+        if (msgs) {
+            msgs.forEach(m => {
+                if (msgIds.includes(m.id)) {
+                    m.isStarred = true;
+                    invoke('db_set_message_starred', { id: m.id, isStarred: true }).catch(console.error);
+                }
+            });
+        }
+        return { ...mStore };
+    });
+};
 
 export const toggleBlock = (peerHash: string) => userStore.update(s => {
     const isBlocked = s.blockedHashes.includes(peerHash);
-    if (isBlocked) s.blockedHashes = s.blockedHashes.filter(h => h !== peerHash);
-    else s.blockedHashes = [...s.blockedHashes, peerHash];
+    const nextStatus = !isBlocked;
+
+    if (nextStatus) s.blockedHashes = [...s.blockedHashes, peerHash];
+    else s.blockedHashes = s.blockedHashes.filter(h => h !== peerHash);
+
+    if (s.chats[peerHash]) {
+        s.chats[peerHash] = { ...s.chats[peerHash], isBlocked: nextStatus };
+    }
+
+    invoke('db_set_contact_blocked', { hash: peerHash, isBlocked: nextStatus }).catch(console.error);
     return { ...s };
 });
 
 export const updatePrivacy = (settings: Partial<PrivacySettings>) => {
     userStore.update(s => {
-        const oldLastSeen = s.privacySettings.lastSeen;
+        const oldTypingStatus = s.privacySettings.typingStatus;
         const newState = { ...s, privacySettings: { ...s.privacySettings, ...settings } };
 
-        if (settings.lastSeen && oldLastSeen !== settings.lastSeen) {
-            const peerHashes = Object.keys(s.chats).filter(p => !s.chats[p].isGroup && !s.blockedHashes.includes(p));
-            if (settings.lastSeen === 'nobody') {
-                // Going invisible: Tell everyone we are offline
-                invoke('send_presence_update', { peerHashes, isOnline: false }).catch(() => { });
-            } else if (settings.lastSeen === 'everyone') {
-                // Going visible: Tell everyone we are online
-                invoke('send_presence_update', { peerHashes, isOnline: true }).catch(() => { });
-            }
+        if (settings.typingStatus && oldTypingStatus !== settings.typingStatus) {
+            // Typing status visibility changed. 
         }
 
         return newState;
@@ -279,39 +232,43 @@ export const verifyContact = async (peerHash: string, isVerified: boolean) => {
 export const startChat = (peerHashRaw: string, alias?: string) => {
     const peerHash = peerHashRaw.toLowerCase();
     userStore.update(s => {
-        if (!s.chats[peerHash]) {
-            const newChat = {
+        let chat = s.chats[peerHash];
+        if (!chat) {
+            chat = {
                 peerHash,
                 peerAlias: alias || peerHash.slice(0, 8),
-                messages: [],
-                unreadCount: 0
-            };
-            s.chats[peerHash] = newChat;
-            syncChatToDb(newChat);
-        } else if (alias && s.chats[peerHash].peerAlias === s.chats[peerHash].peerHash.slice(0, 8)) {
-            s.chats[peerHash].peerAlias = alias;
-            syncChatToDb(s.chats[peerHash]);
+                unreadCount: 0,
+                isSynced: false
+            } as any;
+        } else if (alias && chat.peerAlias === chat.peerHash.slice(0, 8)) {
+            chat = { ...chat, peerAlias: alias };
         }
 
-        const unreadIds: string[] = [];
-        s.chats[peerHash].messages.forEach(m => {
-            if (!m.isMine && m.status !== 'read') {
-                m.status = 'read';
-                unreadIds.push(m.id);
-            }
-        });
+        const msgs = get(messageStore)[peerHash] || [];
+        const unreadIds = msgs.filter(m => !m.isMine && m.status !== 'read').map(m => m.id);
 
-        s.chats[peerHash].unreadCount = 0;
+        // ALWAYS RESET AND PERSIST UNREAD STATUS
+        chat = { ...chat, unreadCount: 0 };
+        syncChatToDb(chat);
+
         if (unreadIds.length > 0) {
             sendReceipt(peerHash, unreadIds, 'read');
+            // Update UI store first for responsiveness
+            messageStore.update(mStore => {
+                if (mStore[peerHash]) {
+                    mStore[peerHash] = mStore[peerHash].map(m => unreadIds.includes(m.id) ? { ...m, status: 'read' } : m);
+                }
+                return { ...mStore };
+            });
             // Persist read status to relational DB
             invoke('db_update_messages_status', { chatAddress: peerHash, ids: unreadIds, status: 'read' }).catch(e => console.error("[DB] Failed to update read status:", e));
-            syncChatToDb(s.chats[peerHash]);
         }
 
+        s.chats[peerHash] = chat;
         return { ...s, activeChatHash: peerHash, chats: { ...s.chats } };
     });
 };
+
 
 export const updateAlias = (peerHash: string, newAlias: string) => {
     userStore.update(s => { if (s.chats[peerHash]) s.chats[peerHash].peerAlias = newAlias; return s; });

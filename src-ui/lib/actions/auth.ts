@@ -6,7 +6,7 @@ import { signalManager } from '../signal_manager';
 import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
 import { minePoW, initCrypto, toBase64, fromHex } from '../crypto';
-import { statusTimeouts, startHeartbeat, broadcastProfile } from './contacts';
+import { broadcastProfile } from './contacts';
 import { initVault, vaultLoad, vaultSave } from '../secure_storage';
 import type { Chat } from '../types';
 
@@ -43,7 +43,7 @@ export const initApp = async (password: string) => {
         let sessionToken: string | null = null;
         let blockedHashes: string[] = [];
         let privacySettings: any = {
-            lastSeen: 'everyone',
+            typingStatus: 'everyone',
             readReceipts: true,
             routingMode: 'direct',
             proxyUrl: ''
@@ -57,37 +57,41 @@ export const initApp = async (password: string) => {
                 myAlias = meta.myAlias || null;
                 myPfp = meta.myPfp || null;
                 sessionToken = meta.sessionToken || null;
-                blockedHashes = meta.blockedHashes || [];
                 privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
                 console.error("Failed to parse vault metadata:", e);
             }
         }
 
-        // 2. Load relational Chat objects
+        // 2. Load relational Chat/Contact objects
         try {
+            const dbContacts = await invoke<any[]>('db_get_contacts');
+            blockedHashes = dbContacts.filter(c => c.isBlocked).map(c => c.hash);
+
             const dbChats = await invoke<any[]>('db_get_chats');
             for (const c of dbChats) {
                 chats[c.address] = {
                     peerHash: c.address,
-                    isGroup: c.is_group,
+                    isGroup: c.isGroup,
                     peerAlias: c.alias,
                     pfp: c.pfp,
                     members: c.members || undefined,
-                    messages: [], // To be paged on demand
-                    unreadCount: c.unread_count,
-                    isArchived: c.is_archived,
-                    isOnline: false,
+                    messages: [],
+                    unreadCount: c.unreadCount,
+                    isArchived: c.isArchived,
+                    isPinned: c.isPinned,
+                    isVerified: c.isVerified,
+                    isBlocked: c.isBlocked,
                     isTyping: false,
-                    lastMsg: c.last_msg,
-                    lastTimestamp: c.last_timestamp,
-                    lastStatus: c.last_status,
-                    lastIsMine: c.last_sender_hash === idHash,
-                    lastSenderHash: c.last_sender_hash
+                    lastMsg: c.lastMsg,
+                    lastTimestamp: c.lastTimestamp,
+                    lastStatus: c.lastStatus,
+                    lastIsMine: c.lastSenderHash === idHash,
+                    lastSenderHash: c.lastSenderHash
                 };
             }
         } catch (e) {
-            console.error("Failed to load chats from DB:", e);
+            console.error("Failed to load chats/contacts from DB:", e);
         }
 
         userStore.update(s => ({

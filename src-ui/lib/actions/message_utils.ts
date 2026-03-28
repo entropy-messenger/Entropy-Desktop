@@ -1,139 +1,136 @@
-import { get } from 'svelte/store';
-import { userStore } from '../stores/user';
+import { get, writable } from 'svelte/store';
+import { userStore, messageStore } from '../stores/user';
 import { attachmentStore } from '../attachment_store';
-import { signalManager } from '../signal_manager';
-import { network } from '../network';
 import { invoke } from '@tauri-apps/api/core';
-import { toHex } from '../utils';
-import type { Message } from '../types';
+import type { Message, Chat } from '../types';
 
 /**
- * Commits a message to the local store.
- * Handles attachment indexing, deduplication, unread tracking, and system notifications.
- */
-/**
- * Commits a message to the relational database and the local reactive store.
+ * Commits a message to the relational database and the local reactive stores.
+ * Separates metadata (Sidebar) from history (Chat Window).
  */
 export const addMessage = async (peerHash: string, msg: Message) => {
-    // Sender messages handle vault storage post-encryption to avoid race conditions
+    // 1. Index attachments
     if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
         await attachmentStore.put(msg.id, msg.attachment.data).catch(() => { });
     }
 
-    // 1. Persist to Relational DB
-    try {
-        const dbMsg = {
-            id: msg.id,
-            chat_address: peerHash,
-            sender_hash: msg.senderHash,
-            content: msg.content,
-            timestamp: msg.timestamp,
-            type: msg.type,
-            status: msg.status,
-            attachment_json: msg.attachment ? JSON.stringify({ ...msg.attachment, data: undefined }) : null
-        };
-        await invoke('db_save_message', { msg: dbMsg });
-    } catch (e) {
-        console.error("[DB] Failed to save message:", e);
-    }
+    let updatedChatMetadata: Chat | null = null;
 
-    // 2. Reactive Update
+    // 2. Update Chat Metadata (Sidebar)
     userStore.update(s => {
-        const chat = s.chats[peerHash];
-        if (!chat) {
-            const newChat: any = {
+        if (!s.chats[peerHash]) {
+            s.chats[peerHash] = {
                 peerHash,
                 peerAlias: peerHash.slice(0, 8),
-                messages: [],
                 unreadCount: 0,
                 isGroup: !!msg.groupId
             };
-            s.chats[peerHash] = newChat;
-            // Async sync new chat to DB
-            syncChatToDb(newChat);
-        } else if (chat.messages.some(m => m.id === msg.id)) {
-            return s;
         }
 
-        const updatedChat = { ...s.chats[peerHash] };
-        // Update sidebar preview metadata
-        updatedChat.lastMsg = msg.content;
-        updatedChat.lastTimestamp = msg.timestamp;
-        updatedChat.lastStatus = msg.status;
-        updatedChat.lastIsMine = msg.isMine;
-        updatedChat.lastSenderHash = msg.senderHash;
+        const chat = { ...s.chats[peerHash] };
+        chat.lastMsg = msg.content;
+        chat.lastTimestamp = msg.timestamp;
+        chat.lastStatus = msg.status;
+        chat.lastIsMine = msg.isMine;
+        chat.lastSenderHash = msg.senderHash;
+        chat.isTyping = false; // Reset typing on message
 
-        // We only keep a small buffer of messages in memory
-        updatedChat.messages = [...updatedChat.messages, msg].slice(-100);
-
-        if (!msg.isMine) {
-            if (s.activeChatHash === peerHash) {
-                msg.status = 'read';
-                sendReceipt(peerHash, [msg.id], 'read');
-            } else {
-                updatedChat.unreadCount = (updatedChat.unreadCount || 0) + 1;
-                // Native Notification Logic...
-                if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-                    import('@tauri-apps/plugin-notification').then(({ sendNotification, isPermissionGranted }) => {
-                        isPermissionGranted().then((granted: boolean) => {
-                            if (granted) {
-                                sendNotification({
-                                    title: `Message from ${updatedChat.peerAlias}`,
-                                    body: msg.content.length > 50 ? msg.content.substring(0, 47) + '...' : msg.content
-                                });
-                            }
-                        });
-                    });
-                }
-            }
+        if (!msg.isMine && s.activeChatHash !== peerHash) {
+            chat.unreadCount = (chat.unreadCount || 0) + 1;
         }
 
-        s.chats[peerHash] = updatedChat;
-        // 3. Persist updated metadata (last message, unread count) to DB
-        syncChatToDb(updatedChat);
+        // Clear typing timeout if message received
+        const sender = msg.senderHash || peerHash;
+        if (typingTimeouts[sender]) {
+            clearTimeout(typingTimeouts[sender]);
+            delete typingTimeouts[sender];
+        }
+
+        s.chats[peerHash] = chat;
+        updatedChatMetadata = chat;
         return { ...s, chats: { ...s.chats } };
     });
+
+    // 3. Update Message History (Chat Window)
+    messageStore.update(mStore => {
+        const msgs = mStore[peerHash] || [];
+        if (msgs.some(m => m.id === msg.id)) return mStore;
+        const updated = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp).slice(-100);
+        return { ...mStore, [peerHash]: updated };
+    });
+
+    // 4. Persistence & Notifications
+    if (updatedChatMetadata) {
+        syncChatToDb(updatedChatMetadata);
+        
+        const s = get(userStore);
+        if (!msg.isMine && s.activeChatHash !== peerHash) {
+            triggerNativeNotification(updatedChatMetadata, msg);
+        } else if (!msg.isMine && s.activeChatHash === peerHash) {
+            invoke('db_update_messages_status', { chatAddress: peerHash, ids: [msg.id], status: 'read' }).catch(() => { });
+            sendReceipt(peerHash, [msg.id], 'read');
+        }
+    }
+};
+
+const triggerNativeNotification = (chat: Chat, msg: Message) => {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        import('@tauri-apps/plugin-notification').then(({ sendNotification, isPermissionGranted }) => {
+            isPermissionGranted().then((granted: boolean) => {
+                if (granted) {
+                    sendNotification({
+                        title: `Message from ${chat.peerAlias || chat.localNickname || 'Peer'}`,
+                        body: msg.content.length > 50 ? msg.content.substring(0, 47) + '...' : msg.content
+                    });
+                }
+            });
+        });
+    }
 };
 
 /**
- * Updates an existing message's status or metadata in both store and DB.
+ * Updates an existing message's status or metadata.
  */
 export const commitMessageUpdate = async (chatId: string, msgId: string, patch: Partial<Message>) => {
     let finalMsg: Message | null = null;
 
-    userStore.update(s => {
-        const chat = s.chats[chatId];
-        if (chat) {
-            const idx = chat.messages.findIndex(m => m.id === msgId);
+    messageStore.update(mStore => {
+        const msgs = mStore[chatId];
+        if (msgs) {
+            const idx = msgs.findIndex(m => m.id === msgId);
             if (idx !== -1) {
-                chat.messages[idx] = { ...chat.messages[idx], ...patch };
-                finalMsg = chat.messages[idx];
-
-                // If it's the last message, update sidebar preview
-                if (idx === chat.messages.length - 1) {
-                    chat.lastStatus = finalMsg.status;
-                    chat.lastMsg = finalMsg.content;
-                    chat.lastTimestamp = finalMsg.timestamp;
-                    chat.lastIsMine = finalMsg.isMine;
-                    syncChatToDb(chat);
-                }
+                msgs[idx] = { ...msgs[idx], ...patch };
+                finalMsg = msgs[idx];
             }
         }
-        return { ...s, chats: { ...s.chats } };
+        return { ...mStore };
     });
 
     if (finalMsg) {
+        const m: Message = finalMsg;
+        userStore.update(s => {
+            const chat = s.chats[chatId];
+            if (chat && m.timestamp === chat.lastTimestamp) {
+                chat.lastStatus = m.status;
+                chat.lastMsg = m.content;
+                syncChatToDb(chat);
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+
         try {
-            const m: Message = finalMsg;
             const dbMsg = {
                 id: m.id,
-                chat_address: chatId,
-                sender_hash: m.senderHash,
+                chatAddress: chatId,
+                senderHash: m.senderHash,
                 content: m.content,
                 timestamp: m.timestamp,
                 type: m.type,
                 status: m.status,
-                attachment_json: m.attachment ? JSON.stringify({ ...m.attachment, data: undefined }) : null
+                attachmentJson: m.attachment ? JSON.stringify({ ...m.attachment, data: undefined }) : null,
+                isStarred: !!m.isStarred,
+                isGroup: !!m.groupId,
+                replyToJson: m.replyTo ? JSON.stringify(m.replyTo) : null
             };
             await invoke('db_save_message', { msg: dbMsg });
         } catch (e) {
@@ -142,21 +139,22 @@ export const commitMessageUpdate = async (chatId: string, msgId: string, patch: 
     }
 };
 
-export const syncChatToDb = async (chat: any) => {
+export const syncChatToDb = async (chat: Chat) => {
     const state = get(userStore);
     try {
         await invoke('db_upsert_chat', {
             chat: {
                 address: chat.peerHash,
-                is_group: !!chat.isGroup,
+                isGroup: !!chat.isGroup,
                 alias: chat.peerAlias || null,
                 pfp: chat.pfp || null,
-                last_msg: chat.lastMsg || (chat.messages?.length > 0 ? chat.messages[chat.messages.length - 1].content : null),
-                last_timestamp: chat.lastTimestamp || (chat.messages?.length > 0 ? chat.messages[chat.messages.length - 1].timestamp : null),
-                last_sender_hash: chat.lastIsMine ? state.identityHash : (chat.lastSenderHash || null),
-                last_status: chat.lastStatus || (chat.messages?.length > 0 ? chat.messages[chat.messages.length - 1].status : null),
-                unread_count: chat.unreadCount || 0,
-                is_archived: !!chat.isArchived
+                lastMsg: chat.lastMsg || null,
+                lastTimestamp: chat.lastTimestamp || null,
+                lastSenderHash: chat.lastIsMine ? state.identityHash : (chat.lastSenderHash || null),
+                lastStatus: chat.lastStatus || null,
+                unreadCount: chat.unreadCount || 0,
+                isArchived: !!chat.isArchived,
+                isPinned: !!chat.isPinned
             }
         });
     } catch (e) {
@@ -164,104 +162,106 @@ export const syncChatToDb = async (chat: any) => {
     }
 };
 
-export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0) => {
+export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0, prepend = true) => {
     try {
-        const rawMsgs = await invoke<any[]>('db_get_messages', { chatAddress: peerHash, limit, offset });
         const identityHash = get(userStore).identityHash;
-        const messages: Message[] = rawMsgs.map(m => {
-            let attachment = undefined;
-            if (m.attachment_json) {
-                try {
-                    attachment = JSON.parse(m.attachment_json);
-                } catch (e) {
-                    console.error("[DB] Failed to parse attachment JSON:", e);
-                }
-            }
-            return {
-                id: m.id,
-                timestamp: m.timestamp,
-                senderHash: m.sender_hash,
-                content: m.content,
-                type: m.type as any,
-                isMine: m.sender_hash === identityHash,
-                status: m.status as any,
-                attachment
-            };
+        const rawMsgs = await invoke<any[]>('db_get_messages', { 
+            chatAddress: peerHash, 
+            limit, 
+            offset, 
+            includeAttachments: true 
+        });
+
+        const messages: Message[] = rawMsgs.map(m => ({
+            id: m.id,
+            timestamp: m.timestamp,
+            senderHash: m.senderHash,
+            content: m.content,
+            type: m.type as any,
+            isMine: m.senderHash === identityHash,
+            status: m.status as any,
+            attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
+            isStarred: !!m.isStarred,
+            replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
+        }));
+
+        messageStore.update(mStore => {
+            const existing = mStore[peerHash] || [];
+            const existingIds = new Set(existing.map(m => m.id));
+            const newMsgs = messages.filter(m => !existingIds.has(m.id));
+            
+            const updatedMessages = prepend 
+                ? [...newMsgs, ...existing]
+                : [...existing, ...newMsgs];
+
+            return { ...mStore, [peerHash]: updatedMessages.sort((a, b) => a.timestamp - b.timestamp) };
         });
 
         userStore.update(s => {
-            console.debug(`[DB Load] Updating store for ${peerHash} with ${messages.length} messages.`);
-
-            // Ensure chat exists in memory - this avoids the "requires sending a message to show" bug
             if (!s.chats[peerHash]) {
-                console.debug(`[DB Load] Creating missing chat in-memory for ${peerHash}.`);
                 s.chats[peerHash] = {
                     peerHash,
                     peerAlias: peerHash.slice(0, 8),
-                    messages: [],
                     unreadCount: 0,
-                    isOnline: false,
-                    isTyping: false
                 };
             }
+            const chat = { ...s.chats[peerHash] };
+            chat.hasMore = messages.length === limit;
 
-            const chat = s.chats[peerHash];
-            const updatedChat = {
-                ...chat,
-                messages: messages.sort((a, b) => a.timestamp - b.timestamp) // Safety re-sort
-            };
+            // Sync sidebar preview from the actual newest DB message (fixes stale preview on first open)
+            const allMsgs = get(messageStore)[peerHash] || [];
+            if (allMsgs.length > 0) {
+                const newest = allMsgs[allMsgs.length - 1];
+                chat.lastMsg = newest.content;
+                chat.lastTimestamp = newest.timestamp;
+                chat.lastStatus = newest.status;
+                chat.lastIsMine = newest.isMine;
+                chat.lastSenderHash = newest.senderHash;
+            }
 
-            // If this is the active chat, mark as read immediately
             if (s.activeChatHash === peerHash) {
-                const unreadIds: string[] = [];
-                updatedChat.messages.forEach(m => {
-                    if (!m.isMine && m.status !== 'read') {
-                        m.status = 'read';
-                        unreadIds.push(m.id);
-                    }
-                });
-
+                const unreadIds = allMsgs.filter(m => !m.isMine && m.status !== 'read').map(m => m.id);
                 if (unreadIds.length > 0) {
-                    updatedChat.unreadCount = 0;
-                    sendReceipt(peerHash, unreadIds, 'read');
+                    chat.unreadCount = 0;
                     invoke('db_update_messages_status', { chatAddress: peerHash, ids: unreadIds, status: 'read' }).catch(() => { });
-                    syncChatToDb(updatedChat);
+                    // Send read receipt to peer so they get the blue tick
+                    sendReceipt(peerHash, unreadIds, 'read');
+                    syncChatToDb(chat);
                 }
             }
-            s.chats[peerHash] = updatedChat;
+
+            s.chats[peerHash] = chat;
             return { ...s, chats: { ...s.chats } };
         });
+        
+        return messages.length;
     } catch (e) {
         console.error("[DB] Failed to load messages:", e);
+        return 0;
     }
 };
 
-/**
- * Deletes multiple messages from the store and indexes.
- */
-export const bulkDelete = (peerHash: string, msgIds: string[]) => {
-    msgIds.forEach(id => attachmentStore.delete(id).catch(() => { }));
-    userStore.update(s => {
-        if (s.chats[peerHash]) {
-            s.chats[peerHash].messages = s.chats[peerHash].messages.filter(m => !msgIds.includes(m.id));
-        }
-        return { ...s, chats: { ...s.chats } };
-    });
+export const loadMoreMessages = async (peerHash: string) => {
+    const msgs = get(messageStore)[peerHash] || [];
+    return await loadChatMessages(peerHash, 50, msgs.length, true); 
 };
 
 export const deleteMessage = (peerHash: string, msgId: string) => bulkDelete(peerHash, [msgId]);
 
-/**
- * Transmits an encrypted delivery or read receipt to a peer.
- */
+export const bulkDelete = (peerHash: string, msgIds: string[]) => {
+    msgIds.forEach(id => attachmentStore.delete(id).catch(() => { }));
+    messageStore.update(mStore => {
+        if (mStore[peerHash]) {
+            mStore[peerHash] = mStore[peerHash].filter(m => !msgIds.includes(m.id));
+        }
+        return { ...mStore };
+    });
+};
+
 export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'delivered' | 'read') => {
     const state = get(userStore);
     if (state.blockedHashes.includes(peerHash)) return;
-
-    // Delivery receipts are necessary for the P2P handshake/sync, 
-    // so we only respect the toggle for 'read' receipts.
     if (status === 'read' && !state.privacySettings.readReceipts) return;
-
     if (msgIds.length === 0) return;
     try {
         await invoke('send_receipt', { peerHash, msgIds, status });
@@ -270,110 +270,80 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
     }
 };
 
-/**
- * Decrypts a stored attachment and triggers a browser-level download for the host system.
- */
-export const downloadAttachment = async (msgId: string, bundle: any) => {
-    try {
-        const encrypted = await attachmentStore.get(msgId);
-        if (!encrypted) {
-            throw new Error("Attachment not found locally");
-        }
-
-        const decrypted = await signalManager.decryptMedia(encrypted, bundle);
-
-        const blob = new Blob([decrypted as any], { type: bundle.file_type || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = bundle.file_name || 'download';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error("[Download] Failed:", e);
-    }
-};
-
-/**
- * Updates the local state to flag an attachment as physically retrieved.
- */
 export const markAsDownloaded = (chatId: string, msgId: string) => {
-    userStore.update(s => {
-        const chat = s.chats[chatId];
-        if (chat) {
-            const m = chat.messages.find(x => x.id === msgId);
-            if (m && m.attachment) {
-                m.attachment.isDownloaded = true;
-            }
+    messageStore.update(mStore => {
+        const msgs = mStore[chatId];
+        if (msgs) {
+            const m = msgs.find(x => x.id === msgId);
+            if (m && m.attachment) m.attachment.isDownloaded = true;
         }
-        return { ...s, chats: { ...s.chats } };
+        return { ...mStore };
     });
 };
-// --- Headless Core UI Helpers ---
-const typingTimeouts: Record<string, any> = {};
+
+export const downloadAttachment = async (chatId: string, msgId: string) => {
+    // Placeholder for background download logic
+    console.debug(`[Attachment] Initiating download for ${msgId} in ${chatId}`);
+};
 
 export const updateMessageStatusUI = (senderHash: string, ids: string[], status: string) => {
     const state = get(userStore);
     if (status === 'read' && !state.privacySettings.readReceipts) return;
+    const idSet = new Set(ids);
 
-    userStore.update(s => {
-        let anyChanged = false;
-        const nextChats = { ...s.chats };
+    messageStore.update(mStore => {
+        for (const chatId in mStore) {
+            const msgs = mStore[chatId];
+            let changed = false;
 
-        for (const chatId in nextChats) {
-            const chat = { ...nextChats[chatId] };
-            let chatChanged = false;
+            const updated = msgs.map(m => {
+                if (!idSet.has(m.id)) return m;
+                const oldPriority = m.status === 'read' ? 3 : m.status === 'delivered' ? 2 : 1;
+                const newPriority = status === 'read' ? 3 : status === 'delivered' ? 2 : 1;
+                if (newPriority > oldPriority) {
+                    changed = true;
+                    return { ...m, status: status as any };
+                }
+                return m;
+            });
 
-            if (chat.messages && chat.messages.length > 0) {
-                const newMessages = chat.messages.map(m => {
-                    if (ids.includes(m.id)) {
-                        const oldPriority = m.status === 'read' ? 3 : m.status === 'delivered' ? 2 : 1;
-                        const newPriority = status === 'read' ? 3 : status === 'delivered' ? 2 : 1;
-                        if (newPriority > oldPriority) {
-                            chatChanged = true;
-                            return { ...m, status: status as any };
+            if (changed) {
+                mStore[chatId] = updated;
+
+                // Update sidebar preview if the last message is one that changed
+                userStore.update(s => {
+                    const chat = s.chats[chatId];
+                    if (chat) {
+                        const lastMsgInStore = updated[updated.length - 1];
+                        // If the message being updated is the same as the one shown in the sidebar (by timestamp or ID)
+                        // OR if it is the absolute newest in the store
+                        const isLastInSidebar = (lastMsgInStore && idSet.has(lastMsgInStore.id)) || 
+                                              msgs.some(m => idSet.has(m.id) && m.timestamp === chat.lastTimestamp);
+                        
+                        if (isLastInSidebar) {
+                            const updatedChat = { ...chat, lastStatus: status as any };
+                            s.chats[chatId] = updatedChat;
+                            syncChatToDb(updatedChat);
                         }
                     }
-                    return m;
+                    return { ...s, chats: { ...s.chats } };
                 });
-                if (chatChanged) {
-                    chat.messages = newMessages;
-                    const lastId = newMessages[newMessages.length - 1].id;
-                    if (ids.includes(lastId)) {
-                        chat.lastStatus = status as any;
-                    }
-                }
-            } else if (chat.lastMsg) {
-                if (chatId === senderHash) {
-                    chat.lastStatus = status as any;
-                    chatChanged = true;
-                }
-            }
-
-            if (chatChanged) {
-                anyChanged = true;
-                nextChats[chatId] = chat;
-                syncChatToDb(chat);
             }
         }
-
-        if (anyChanged) return { ...s, chats: nextChats };
-        return s;
+        return { ...mStore };
     });
 };
 
+
+const typingTimeouts: Record<string, any> = {};
 export const handleTypingSignal = (senderHash: string, payload: any) => {
     const state = get(userStore);
-    if (state.privacySettings.lastSeen !== 'everyone') return;
+    if (state.privacySettings.typingStatus !== 'everyone') return;
     if (typingTimeouts[senderHash]) clearTimeout(typingTimeouts[senderHash]);
 
     userStore.update(s => {
         if (s.chats[senderHash]) {
-            const updated = { ...s.chats[senderHash] };
-            updated.isTyping = payload.isTyping;
-            s.chats[senderHash] = updated;
+            s.chats[senderHash] = { ...s.chats[senderHash], isTyping: payload.isTyping };
         }
         return { ...s, chats: { ...s.chats } };
     });
@@ -382,9 +352,7 @@ export const handleTypingSignal = (senderHash: string, payload: any) => {
         typingTimeouts[senderHash] = setTimeout(() => {
             userStore.update(s => {
                 if (s.chats[senderHash]) {
-                    const updated = { ...s.chats[senderHash] };
-                    updated.isTyping = false;
-                    s.chats[senderHash] = updated;
+                    s.chats[senderHash] = { ...s.chats[senderHash], isTyping: false };
                 }
                 return { ...s, chats: { ...s.chats } };
             });
@@ -393,42 +361,14 @@ export const handleTypingSignal = (senderHash: string, payload: any) => {
     }
 };
 
-export const handlePresenceSignal = (senderHash: string, payload: any) => {
-    const state = get(userStore);
-    if (state.privacySettings.lastSeen !== 'everyone') return;
-
-    if (payload.isOnline) {
-        // Need to import these if moving here
-        // for now simple property update
-        userStore.update(s => {
-            if (s.chats[senderHash]) {
-                const updated = { ...s.chats[senderHash] };
-                updated.isOnline = true;
-                s.chats[senderHash] = updated;
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
-    } else {
-        userStore.update(s => {
-            if (s.chats[senderHash]) {
-                const updated = { ...s.chats[senderHash] };
-                updated.isOnline = false;
-                updated.lastSeen = Date.now();
-                s.chats[senderHash] = updated;
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
-    }
-};
-
 export const handleProfileUpdate = (senderHash: string, payload: any) => {
     userStore.update(s => {
         if (s.chats[senderHash]) {
-            const updated = { ...s.chats[senderHash] };
-            if (payload.alias) updated.peerAlias = payload.alias;
-            if (payload.pfp) updated.pfp = payload.pfp;
-            s.chats[senderHash] = updated;
-            syncChatToDb(updated);
+            const chat = { ...s.chats[senderHash] };
+            if (payload.alias) chat.peerAlias = payload.alias;
+            if (payload.pfp) chat.pfp = payload.pfp;
+            s.chats[senderHash] = chat;
+            syncChatToDb(chat);
         }
         return { ...s, chats: { ...s.chats } };
     });

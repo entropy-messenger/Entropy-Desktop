@@ -37,6 +37,7 @@ export interface Message {
     replyTo?: {
         id: string;
         content: string;
+        senderHash?: string;
         senderAlias?: string;
         type: Message['type'];
     };
@@ -48,7 +49,7 @@ export interface Message {
  */
 export interface PrivacySettings {
     readReceipts: boolean;
-    lastSeen: 'everyone' | 'nobody';
+    typingStatus: 'everyone' | 'nobody';
     profilePhoto: 'everyone' | 'nobody';
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
@@ -62,16 +63,15 @@ export interface Chat {
     peerHash: string;
     peerAlias?: string;
     pfp?: string;
-    messages: Message[];
-    lastSeen?: number;
-    unreadCount: number;
-    isOnline?: boolean;
-    isTyping?: boolean;
+    messages?: Message[];
+    hasMore?: boolean;
+    unreadCount: number,
+    isTyping?: boolean,
     isGroup?: boolean;
     members?: string[];
     isPinned?: boolean;
     isArchived?: boolean;
-    isMuted?: boolean;
+    isBlocked?: boolean;
     isVerified?: boolean;
     localNickname?: string;
     inviteCode?: string;

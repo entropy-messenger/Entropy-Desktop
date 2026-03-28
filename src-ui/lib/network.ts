@@ -12,24 +12,16 @@ import type { ServerMessage } from './types';
  */
 export class NetworkLayer {
     private url: string = "";
-    private retryCount = 0;
-    private maxRetries = 5;
     private isAuthenticated = false;
     private isConnected = false;
     private lastActivity = Date.now();
     private isManualDisconnect = false;
+    private lastWarningTime: Map<string, number> = new Map();
 
     /** Tracking table for asynchronous request-response cycles over the socket */
     private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
 
     constructor() {
-        listen('network-msg', (event) => {
-            this.handleMessage(event.payload as string);
-        });
-
-        listen('network-bin', (event) => {
-            this.handleBinaryMessage(new Uint8Array(event.payload as number[]));
-        });
 
         listen('network-status', (event) => {
             if (event.payload === 'disconnected') {
@@ -41,25 +33,39 @@ export class NetworkLayer {
             }
         });
 
+        listen('network-warning', async (event) => {
+            const { type } = event.payload as any;
+            
+            // 10-second debounce per warning type
+            const now = Date.now();
+            const last = this.lastWarningTime.get(type) || 0;
+            if (now - last < 10000) return;
+            this.lastWarningTime.set(type, now);
+
+            const { addToast } = await import('./stores/ui');
+            if (type === 'media_offline') {
+                addToast("Recipient is offline. Media cannot be sent.", 'warning');
+            } else if (type === 'storage_full') {
+                addToast("Recipient's offline storage is full (200 limit).", 'error');
+            }
+        });
+
         // Listen for authoritative message creation from Rust (Headless Core)
         listen('msg://added', (event) => {
             const m = event.payload as any;
             const state = get(userStore);
 
-            // Convert native snake_case to UI camelCase
+            // Payload is now natively camelCase from Rust
+            console.debug("[Network] Received msg://added:", m.id, "for chat:", m.chatAddress);
             const uiMsg: any = {
-                id: m.id,
-                timestamp: m.timestamp,
-                senderHash: m.sender_hash,
-                content: m.content,
-                type: m.type,
-                isMine: m.sender_hash === state.identityHash,
-                status: m.status,
-                attachment: m.attachment_json ? JSON.parse(m.attachment_json) : undefined
+                ...m,
+                isMine: m.senderHash === state.identityHash,
+                attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
+                replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
             };
 
             // Update UI
-            logicStore.addMessage(m.chat_address, uiMsg);
+            logicStore.addMessage(m.chatAddress, uiMsg);
         });
 
         // Listen for message status updates (Read Receipts)
@@ -74,14 +80,46 @@ export class NetworkLayer {
             logicStore.handleTypingSignal(sender, payload);
         });
 
-        listen('msg://presence', (event) => {
-            const { sender, payload } = event.payload as any;
-            logicStore.handlePresenceSignal(sender, payload);
-        });
 
         listen('msg://profile_update', (event) => {
             const { sender, payload } = event.payload as any;
             logicStore.handleProfileUpdate(sender, payload);
+        });
+
+        // Group Handlers
+        listen('msg://invite', (event) => {
+            const { groupId, name, members } = event.payload as any;
+            userStore.update(s => ({
+                ...s,
+                chats: {
+                    ...s.chats,
+                    [groupId]: {
+                        peerHash: groupId,
+                        peerAlias: name,
+                        messages: [],
+                        unreadCount: 1,
+                        isGroup: true,
+                        members
+                    }
+                }
+            }));
+        });
+
+        listen('msg://group_leave', (event) => {
+            const { groupId, member } = event.payload as any;
+            userStore.update(s => {
+                const chat = s.chats[groupId];
+                if (chat && chat.isGroup && chat.members) {
+                    chat.members = chat.members.filter(m => m !== member);
+                    s.chats[groupId] = { ...chat };
+                }
+                return { ...s, chats: { ...s.chats } };
+            });
+        });
+
+        listen('msg://group_update', (event) => {
+            const { groupId } = event.payload as any;
+            // Native logic in Rust already updated DB; Svelte handles reload on next view
         });
     }
 
@@ -118,7 +156,7 @@ export class NetworkLayer {
                     idHash: state.identityHash,
                     sessionToken: state.sessionToken
                 });
-                this.isConnected = true;
+                // Note: isConnected will be set by the 'network-status' event listener
                 this.onConnect();
             } catch (e: any) {
                 const errorStr = e.toString();
@@ -129,7 +167,6 @@ export class NetworkLayer {
                     addToast("Privacy routing failed. Is Tor/Proxy running?", 'error');
                 }
 
-                this.retry();
             } finally {
                 this.connectingPromise = null;
             }
@@ -170,16 +207,10 @@ export class NetworkLayer {
         return this.connect();
     }
 
-    private stabilityTimer: any = null;
 
     private onConnect() {
         console.log('Native network layer connected');
 
-        if (this.stabilityTimer) clearTimeout(this.stabilityTimer);
-        this.stabilityTimer = setTimeout(() => {
-            console.log("Connection stabilized. Resetting retry count.");
-            this.retryCount = 0;
-        }, 5000);
 
         userStore.update((s: any) => ({ ...s, isConnected: true }));
 
@@ -207,16 +238,12 @@ export class NetworkLayer {
         // 3. Trigger pending outbox flush
         invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
 
-        // 4. Start heartbeat/presence
-        import('./actions/contacts').then(({ startHeartbeat }) => {
-            startHeartbeat();
-        });
+        // 4. Presence/Heartbeat logic removed as per privacy requirements.
 
         // 5. Broadcast profile to peers if configured
-        if (state.privacySettings.lastSeen === 'everyone') {
+        if (state.privacySettings.typingStatus === 'everyone') {
             Object.keys(state.chats).forEach(peerHash => {
                 if (!state.chats[peerHash].isGroup) {
-                    logicStore.setOnlineStatus(peerHash, true);
                     logicStore.broadcastProfile(peerHash);
                 }
             });
@@ -241,10 +268,6 @@ export class NetworkLayer {
             return;
         }
 
-        if (this.stabilityTimer) {
-            clearTimeout(this.stabilityTimer);
-            this.stabilityTimer = null;
-        }
 
         const wasAuthenticated = this.isAuthenticated;
         this.isConnected = false;
@@ -263,82 +286,22 @@ export class NetworkLayer {
             return newState;
         });
 
-        this.retry();
     }
 
-    private retry() {
-        if (this.retryCount < this.maxRetries) {
-            this.retryCount++;
-            setTimeout(() => this.connect(), 2000 * this.retryCount);
-        }
-    }
 
-    private async handleMessage(text: string) {
+
+
+    sendJSON(data: any, recipientHash?: string) {
         try {
-            const msg: ServerMessage = JSON.parse(text);
-            if (msg.type === 'dummy_ack' || (msg as any).type === 'dummy_pacing') return;
-            await this.onJsonMessage(msg);
-        } catch (e) {
-            console.error("Failed to parse native JSON msg", e);
-        }
-    }
-
-    private async handleBinaryMessage(payload: Uint8Array) {
-        await logicStore.handleIncomingMessage(payload);
-    }
-
-    private async onJsonMessage(msg: any) {
-        this.lastActivity = Date.now();
-
-        if (msg.req_id && this.pendingRequests.has(msg.req_id)) {
-            const { resolve, reject, timeout } = this.pendingRequests.get(msg.req_id)!;
-            clearTimeout(timeout);
-            this.pendingRequests.delete(msg.req_id);
-
-            if (msg.error) {
-                reject(new Error(msg.message || "Request failed"));
-            } else {
-                resolve(msg);
-            }
-            return;
-        }
-
-        console.debug("[Network] Received JSON:", msg.type, msg);
-
-        if (msg.type === 'auth_success') {
-            // Already handled by autonomous Rust listener in constructor
-            return;
-        }
-
-        if (msg.type === 'error') {
-            console.error("Server error:", msg.message);
-            if (msg.code === 'auth_failed') {
-                // Handled by onAuthFailed listener
-            }
-            return;
-        }
-
-        if (msg.type === 'ping') {
-            this.sendJSON({ type: 'pong' });
-            return;
-        }
-
-        if (msg.type === 'relay_success' || msg.type === 'delivery_status') {
-            return;
-        }
-
-        if (msg.type === 'queued_message') {
-            await logicStore.handleIncomingMessage(msg.payload);
-            return;
-        }
-
-        await logicStore.handleIncomingMessage(msg);
-    }
-
-    sendJSON(data: any) {
-        try {
+            const routingHash = recipientHash ? recipientHash.split('.')[0] : null;
             let msg = JSON.stringify(data);
-            invoke('send_to_network', { msg, data: null, isBinary: false, metadata: data }).catch(e => {
+            invoke('send_to_network', { 
+                routingHash, 
+                msg, 
+                data: null, 
+                isBinary: false, 
+                isMedia: false 
+            }).catch(e => {
                 if (e.toString().includes("queued")) {
                     console.debug("[Network] Message queued in persistent outbox");
                 } else {
@@ -352,16 +315,14 @@ export class NetworkLayer {
 
     sendBinary(recipientHash: string, data: Uint8Array, metadata?: any) {
         const routingHash = recipientHash.split('.')[0];
-        const encoder = new TextEncoder();
-        const hashBytes = encoder.encode(routingHash);
-        if (hashBytes.length !== 64) return;
-
-        const packet = new Uint8Array(64 + data.length);
-        packet.set(hashBytes, 0);
-        packet.set(data, 64);
-
         try {
-            invoke('send_to_network', { msg: null, data: packet, isBinary: true, metadata }).catch(e => {
+            invoke('send_to_network', { 
+                routingHash, 
+                msg: null, 
+                data: Array.from(data), 
+                isBinary: true, 
+                isMedia: true 
+            }).catch(e => {
                 if (!e.toString().includes("queued")) {
                     console.warn("[Network] Binary background send failed:", e);
                 }
@@ -369,25 +330,6 @@ export class NetworkLayer {
         } catch (e) {
             console.error("Native sendBinary failed", e);
         }
-    }
-
-    sendVolatile(recipientHash: string, data: Uint8Array) {
-        if (!this.isAuthenticated) return;
-        const body = new TextDecoder().decode(data);
-        this.sendJSON({
-            type: 'volatile_relay',
-            to: recipientHash,
-            body: body
-        });
-    }
-
-    sendTyping(recipientHash: string, isTyping: boolean) {
-        if (!this.isAuthenticated) return;
-        this.sendJSON({
-            type: 'volatile_relay',
-            to: recipientHash,
-            body: JSON.stringify({ type: 'typing', isTyping })
-        });
     }
 
     /**

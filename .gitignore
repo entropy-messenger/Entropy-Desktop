@@ -27,3 +27,5 @@ src-tauri/gen/
 
 .env
 .env.local
+*.txt
+*.log

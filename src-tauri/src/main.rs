@@ -5,6 +5,7 @@ mod audio;
 mod app_state;
 mod commands;
 mod signal_store;
+mod security;
 
 use std::sync::Mutex;
 use tauri::{
@@ -26,6 +27,9 @@ fn main() {
             profile: Mutex::new(profile),
         })
         .manage(NetworkState {
+            is_enabled: Mutex::new(false),
+            url: Mutex::new(None),
+            proxy_url: Mutex::new(None),
             queue: Mutex::new(std::collections::VecDeque::new()),
             sender: Mutex::new(None),
             cancel: Mutex::new(None),
@@ -33,6 +37,9 @@ fn main() {
             is_authenticated: Mutex::new(false),
             identity_hash: Mutex::new(None),
             session_token: Mutex::new(None),
+            halted_targets: Mutex::new(std::collections::HashSet::new()),
+            media_assembler: Mutex::new(std::collections::HashMap::new()),
+            pending_media_links: Mutex::new(std::collections::HashMap::new()),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -75,18 +82,24 @@ fn main() {
             commands::signal_get_peer_identity,
             commands::signal_set_peer_trust,
             commands::signal_get_own_identity,
+            commands::signal_get_identity_hash,
+            commands::signal_get_fingerprint,
             commands::send_typing_status,
-            commands::send_presence_update,
             commands::send_receipt,
             commands::send_profile_update,
             commands::show_in_folder,
             commands::db_save_message,
             commands::db_get_messages,
+            commands::db_search_messages,
             commands::db_update_messages_status,
             commands::db_upsert_chat,
             commands::db_get_chats,
             commands::db_upsert_contact,
             commands::db_get_contacts,
+            commands::db_set_contact_blocked,
+            commands::db_set_chat_pinned,
+            commands::db_set_chat_archived,
+            commands::db_set_message_starred,
             commands::process_outgoing_text,
             commands::process_outgoing_media
         ])

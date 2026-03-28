@@ -130,15 +130,15 @@ The desktop app contributes to metadata resistance on its end:
 
 ---
 
-## 9. File Attachment Handling
+## 9. File Attachment Handling (Binary Fragmentation)
 
-Files are encrypted client-side before upload:
+All media and files are transported as fragmented binary streams to ensure metadata blindness and reliable delivery:
 
-1. **Chunking**: Files >5MB are split into chunks of 5MB each
-2. **Encryption**: Each chunk is encrypted with AES-256-GCM using a random file key
-3. **Upload**: Chunks are sent to the relay server (stored in Redis with TTL)
-4. **Recipient Download**: Recipient fetches chunks, decrypts locally, and reassembles
-5. **Burn After Read**: Chunks are deleted from server after successful download
+1.  **Binary Fragmentation (Type 0x02)**: Files are split into **1024-byte** data chunks. Each chunk is prefixed with a 4-byte Transfer ID, 4-byte Index, and 4-byte Total count.
+2.  **Metadata Pointer (Type 0x01)**: A Signal-encrypted message is sent separately, containing the file's Transfer ID, name, type, and AES decryption key. This message contains no raw file data.
+3.  **Rust-Side Reassembly**: The Rust core buffers incoming fragments in memory. Once all fragments for a Transfer ID are received, they are reassembled into a complete file.
+4.  **Asynchronous Linking**: The reassembled file is linked to its metadata via the Transfer ID. If the metadata arrives after the fragments, it is automatically associated once available.
+5.  **Traffic Normalization**: All fragments are padded to a static **1536-byte** frame and sent with adaptive pacing (5ms delay) to resist traffic analysis.
 
 ---
 

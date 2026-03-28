@@ -11,5 +11,12 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**']
     }
+  },
+  build: {
+    minify: 'esbuild',
+    sourcemap: false,
+    reportCompressedSize: false,
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 1000
   }
 })

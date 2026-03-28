@@ -33,7 +33,7 @@ export function setupBackgroundHandlers() {
             try {
                 const parsedBody = JSON.parse(dbMsg.body);
                 // Depending on how Rust forwards the body, we check if it's the raw V2 payload
-                if (parsedBody && (parsedBody.type === 'voice_note_v2' || parsedBody.type === 'file_v2')) {
+                if (parsedBody && (parsedBody.type === 'voice_note' || parsedBody.type === 'file')) {
                     const size = parsedBody.size || (parsedBody.bundle && parsedBody.bundle.file_size) || 0;
                     msg.content = msg.type === 'file' ? `File: ${parsedBody.bundle?.file_name || 'file'}` : "Voice Note";
                     msg.attachment = {
@@ -76,34 +76,10 @@ export function setupBackgroundHandlers() {
         });
     });
 
-    listen('peer-presence', (event: any) => {
-        const { sender, isOnline } = event.payload;
-        userStore.update(s => {
-            if (s.chats[sender]) {
-                const chat = s.chats[sender];
-                chat.isOnline = isOnline;
-                if (!isOnline) {
-                    chat.lastSeen = Date.now();
-                }
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
-    });
 
     listen('receipt-update', (event: any) => {
         const { sender, status, msgIds } = event.payload;
-        userStore.update(s => {
-            if (s.chats[sender]) {
-                const chat = s.chats[sender];
-                chat.messages = chat.messages.map(m => {
-                    if (msgIds.includes(m.id)) {
-                        return { ...m, status };
-                    }
-                    return m;
-                });
-            }
-            return { ...s, chats: { ...s.chats } };
-        });
+        import('./message_utils').then(m => m.updateMessageStatusUI(sender, msgIds, status));
     });
 
     listen('contact-update', (event: any) => {
@@ -123,7 +99,6 @@ export function setupBackgroundHandlers() {
                 s.chats[groupId] = {
                     peerHash: groupId,
                     peerAlias: name,
-                    messages: [],
                     unreadCount: 1,
                     isGroup: true,
                     members
