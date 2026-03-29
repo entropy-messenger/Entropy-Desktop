@@ -1,9 +1,7 @@
-
 import { listen } from '@tauri-apps/api/event';
 import { userStore } from '../stores/user';
-import { addMessage } from './message_utils';
+import { addMessage, updateMessageStatusUI } from './chat';
 import type { Message } from '../types';
-import { attachmentStore } from '../attachment_store';
 import { fromHex } from '../crypto';
 
 /**
@@ -32,7 +30,6 @@ export function setupBackgroundHandlers() {
         if ((msg.type === 'voice_note' || msg.type === 'file') && dbMsg.body) {
             try {
                 const parsedBody = JSON.parse(dbMsg.body);
-                // Depending on how Rust forwards the body, we check if it's the raw V2 payload
                 if (parsedBody && (parsedBody.type === 'voice_note' || parsedBody.type === 'file')) {
                     const size = parsedBody.size || (parsedBody.bundle && parsedBody.bundle.file_size) || 0;
                     msg.content = msg.type === 'file' ? `File: ${parsedBody.bundle?.file_name || 'file'}` : "Voice Note";
@@ -40,24 +37,18 @@ export function setupBackgroundHandlers() {
                         fileName: parsedBody.bundle?.file_name || (msg.type === 'voice_note' ? 'voice_note.wav' : 'file'),
                         fileType: parsedBody.bundle?.file_type || (msg.type === 'voice_note' ? 'audio/wav' : 'application/octet-stream'),
                         size: size,
-                        bundle: parsedBody.bundle,
-                        isV2: true
+                        bundle: parsedBody.bundle
                     };
 
-                    if (parsedBody.data) {
+                    if (parsedBody.data && msg.attachment) {
                         try {
-                            const attachmentData = fromHex(parsedBody.data);
-                            attachmentStore.put(msg.id, attachmentData).catch(e => console.error("[Background] Failed to save attachment:", e));
-                            console.debug(`[Background] Extracted and stored ${attachmentData.length} bytes for attachment ${msg.id}`);
+                            msg.attachment.data = fromHex(parsedBody.data);
                         } catch (e) {
                             console.error("[Background] Error decoding hex data for attachment:", e);
                         }
-                    } else {
-                        console.warn("[Background] No encrypted hex data found in V2 payload for attachment.");
                     }
                 }
             } catch (e) {
-                // Not JSON or failed to parse, leave as is
                 console.debug("[Background] Could not parse dbMsg.body as JSON for attachment recovery.");
             }
         }
@@ -79,14 +70,14 @@ export function setupBackgroundHandlers() {
 
     listen('receipt-update', (event: any) => {
         const { sender, status, msgIds } = event.payload;
-        import('./message_utils').then(m => m.updateMessageStatusUI(sender, msgIds, status));
+        updateMessageStatusUI(sender, msgIds, status);
     });
 
     listen('contact-update', (event: any) => {
         const { hash, alias } = event.payload;
         userStore.update(s => {
             if (s.chats[hash]) {
-                s.chats[hash].peerAlias = alias;
+                s.chats[hash].peerNickname = alias;
             }
             return { ...s, chats: { ...s.chats } };
         });
@@ -98,7 +89,7 @@ export function setupBackgroundHandlers() {
             if (!s.chats[groupId]) {
                 s.chats[groupId] = {
                     peerHash: groupId,
-                    peerAlias: name,
+                    peerNickname: name,
                     unreadCount: 1,
                     isGroup: true,
                     members

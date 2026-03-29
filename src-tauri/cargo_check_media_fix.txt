@@ -1,9 +1,0 @@
-    Checking entropy v0.1.0 (/home/moyzy/projects/entropy/DesktopApp/src-tauri)
-error[E0063]: missing fields `bundle`, `data` and `size` in initializer of `SignalingPayload`
-    --> src/commands.rs:1583:13
-     |
-1583 |             SignalingPayload {
-     |             ^^^^^^^^^^^^^^^^ missing `bundle`, `data` and `size`
-
-For more information about this error, try `rustc --explain E0063`.
-error: could not compile `entropy` (bin "entropy") due to 1 previous error

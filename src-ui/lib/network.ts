@@ -1,9 +1,9 @@
-
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
 import { userStore } from './stores/user';
-import * as logicStore from './store';
+import { addMessage, updateMessageStatusUI, handleTypingSignal } from './actions/chat';
+import { handleProfileUpdate, broadcastProfile } from './actions/contacts';
 import type { ServerMessage } from './types';
 
 /**
@@ -65,25 +65,25 @@ export class NetworkLayer {
             };
 
             // Update UI
-            logicStore.addMessage(m.chatAddress, uiMsg);
+            addMessage(m.chatAddress, uiMsg);
         });
 
         // Listen for message status updates (Read Receipts)
         listen('msg://status', (event) => {
             const { chat_address, ids, status } = event.payload as any;
-            logicStore.updateMessageStatusUI(chat_address, ids, status);
+            updateMessageStatusUI(chat_address, ids, status);
         });
 
         // Listen for volatile UI-only signals
         listen('msg://typing', (event) => {
             const { sender, payload } = event.payload as any;
-            logicStore.handleTypingSignal(sender, payload);
+            handleTypingSignal(sender, payload);
         });
 
 
         listen('msg://profile_update', (event) => {
             const { sender, payload } = event.payload as any;
-            logicStore.handleProfileUpdate(sender, payload);
+            handleProfileUpdate(sender, payload);
         });
 
         // Group Handlers
@@ -227,13 +227,14 @@ export class NetworkLayer {
             connectionStatus: 'connected'
         }));
 
-        // 2. Trigger post-auth tasks (Key verification)
+        // 2. Automated Signal Key Sync (High Priority on connect)
         const state = get(userStore) as any;
-        const serverUrl = state.relayUrl;
-
-        import('./signal_manager').then(({ signalManager }) => {
-            signalManager.ensureKeysUploaded(serverUrl).catch(e => console.error("Auto key upload failed:", e));
-        });
+        if (!state.isSynced) {
+            console.log("[Network] Triggering initial signal sync...");
+            import('./signal_manager').then(({ signalManager }) => {
+                signalManager.ensureKeysUploaded().catch(e => console.warn("[Network] Initial Signal sync failed:", e));
+            });
+        }
 
         // 3. Trigger pending outbox flush
         invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
@@ -244,7 +245,9 @@ export class NetworkLayer {
         if (state.privacySettings.typingStatus === 'everyone') {
             Object.keys(state.chats).forEach(peerHash => {
                 if (!state.chats[peerHash].isGroup) {
-                    logicStore.broadcastProfile(peerHash);
+                    import('./actions/contacts').then(({ broadcastProfile }) => {
+                        broadcastProfile(peerHash);
+                    });
                 }
             });
         }
@@ -280,7 +283,7 @@ export class NetworkLayer {
                 connectionStatus: 'disconnected'
             };
             if (!wasAuthenticated && s.sessionToken) {
-                console.warn("[Network] Disconnected while unauthenticated. Clearing session token for fallback.");
+                console.log("[Network] Clearing session token on unauthenticated disconnect.");
                 newState.sessionToken = null;
             }
             return newState;

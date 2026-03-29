@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
-  import { toggleStar, setReplyingTo, toggleBlock } from '../lib/store';
-  import { loadMoreMessages } from '../lib/actions/message_utils';
+  import { toggleStar, toggleBlock } from '../lib/actions/contacts';
+  import { setReplyingTo, loadChatMessages, sendReceipt } from '../lib/actions/chat';
   import { LucideSearch, LucideX, LucideInfo, LucideLoader, LucideChevronDown, LucideBan } from 'lucide-svelte';
   
   import MessageBubble from './MessageBubble.svelte';
@@ -30,7 +30,37 @@
   let activeChat = $derived($userStore.activeChatHash ? $userStore.chats[$userStore.activeChatHash] : null);
   let activeMessages = $derived($userStore.activeChatHash ? ($messageStore[$userStore.activeChatHash] || []) : []);
   
-  let virtualizedMessages = $derived(activeMessages.slice(-300));
+  let virtualizedMessages = $derived(activeMessages);
+
+  const getDayLabel = (ts: number) => {
+    const date = new Date(ts);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) return "Today";
+    if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+    
+    const options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric' };
+    if (date.getFullYear() !== today.getFullYear()) options.year = 'numeric';
+    return date.toLocaleDateString(undefined, options);
+  };
+
+  let groupedMessages = $derived.by(() => {
+    const msgs = virtualizedMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase()));
+    const result: (any)[] = [];
+    let lastDateLabel = "";
+
+    for (const msg of msgs) {
+        const dateLabel = getDayLabel(msg.timestamp);
+        if (dateLabel !== lastDateLabel) {
+            result.push({ type: 'date_divider', content: dateLabel, id: `divider-${msg.timestamp}` });
+            lastDateLabel = dateLabel;
+        }
+        result.push(msg);
+    }
+    return result;
+  });
 
   const scrollToBottom = async () => {
       await tick();
@@ -38,6 +68,16 @@
           scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'instant' });
       }
   };
+
+  $effect(() => {
+    if (activeMessages.length > 0 && activeChat && $userStore.activeChatHash === activeChat.peerHash) {
+        const unreadIncoming = activeMessages.filter(m => !m.isMine && m.status !== 'read');
+        if (unreadIncoming.length > 0) {
+            const ids = unreadIncoming.map(m => m.id);
+            sendReceipt(activeChat.peerHash, ids, 'read');
+        }
+    }
+  });
 
   $effect(() => {
     if (activeMessages.length > 0) {
@@ -49,24 +89,22 @@
 
   const handleScroll = async (e: Event) => {
       const target = e.target as HTMLElement;
-      if (!activeChat || isLoadingMore || !activeChat.hasMore) return;
+      if (!activeChat) return;
 
-      if (target.scrollTop < 50) {
+      // 1. Pagination: Show "load more" if we hit the top and have more to load
+      if (target.scrollTop < 50 && !isLoadingMore && activeChat.hasMore) {
           isLoadingMore = true;
           lastScrollHeight = target.scrollHeight;
-          
           const loadedCount = await loadMoreMessages(activeChat.peerHash);
-          
           if (loadedCount && loadedCount > 0) {
               await tick();
               target.scrollTop = target.scrollHeight - lastScrollHeight;
           }
-          
           isLoadingMore = false;
       }
 
-      // show scroll to bottom if more than 300px from bottom
-      const threshold = 300;
+      // 2. Visibility: Always show scroll-to-bottom if we are far enough from the floor
+      const threshold = 100;
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
       showScrollToBottom = distanceFromBottom > threshold;
   };
@@ -165,8 +203,14 @@
                     </div>
                 {/if}
 
-                {#each virtualizedMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase())) as msg (msg.id)}
-                    {#if msg.type === 'system'}
+                {#each groupedMessages as msg (msg.id)}
+                    {#if msg.type === 'date_divider'}
+                        <div class="flex items-center justify-center my-4 px-12 sticky top-1 z-[20] pointer-events-none animate-in fade-in duration-500">
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-transparent via-entropy-border/30 to-transparent"></div>
+                            <span class="mx-6 text-[10px] font-black text-entropy-primary uppercase tracking-[0.2em]">{msg.content}</span>
+                            <div class="h-[1px] flex-1 bg-gradient-to-r from-transparent via-entropy-border/30 to-transparent"></div>
+                        </div>
+                    {:else if msg.type === 'system'}
                         <div class="flex justify-center my-4">
                             <div class="bg-entropy-surface-light px-4 py-1.5 rounded-full border border-entropy-border/5 flex items-center space-x-2 shadow-sm">
                                 <LucideInfo size={12} class="text-entropy-primary" />
@@ -188,7 +232,7 @@
                 {/each}
 
                 {#if activeChat.isTyping}
-                    <div class="flex items-center space-x-2 p-2 px-4 py-2.5 bg-entropy-surface-light/80 backdrop-blur-md rounded-2xl w-fit animate-in fade-in slide-in-from-bottom-2 duration-300 ml-4 mb-4 border border-entropy-border/5 shadow-sm">
+                    <div class="flex items-center space-x-2 p-2 px-4 py-2.5 bg-entropy-surface-light/80 backdrop-blur-md rounded-2xl w-fit animate-in fade-in slide-in-from-bottom-2 duration-300 ml-4 mb-4 shadow-sm">
                         <div class="flex space-x-1">
                             <div class="w-1.5 h-1.5 bg-entropy-primary rounded-full animate-bounce [animation-delay:-0.3s]"></div>
                             <div class="w-1.5 h-1.5 bg-entropy-primary rounded-full animate-bounce [animation-delay:-0.15s]"></div>
@@ -201,12 +245,12 @@
             {#if showScrollToBottom}
                 <button 
                     onclick={scrollToBottom}
-                    class="absolute bottom-24 right-6 p-3 bg-entropy-surface/90 backdrop-blur-xl border border-entropy-border/10 rounded-full shadow-2xl text-entropy-primary hover:scale-110 active:scale-95 transition-all z-20 group"
+                    class="absolute bottom-32 right-8 p-2 bg-entropy-surface/90 backdrop-blur-2xl border border-entropy-primary/20 rounded-full shadow-2xl text-entropy-primary hover:scale-110 active:scale-95 transition-all z-[999] group ring-4 ring-black/5 animate-in fade-in slide-in-from-bottom-2 duration-300"
                     aria-label="Scroll to bottom"
                 >
-                    <LucideChevronDown size={24} strokeWidth={2.5} />
+                    <LucideChevronDown size={20} strokeWidth={3} />
                     {#if activeChat.unreadCount > 0}
-                        <span class="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full border-2 border-entropy-bg animate-bounce">
+                        <span class="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] font-black min-w-[18px] h-4.5 px-1 flex items-center justify-center rounded-full border-2 border-entropy-bg shadow-lg">
                             {activeChat.unreadCount}
                         </span>
                     {/if}

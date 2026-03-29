@@ -1,12 +1,13 @@
 import { writable } from 'svelte/store';
 import type { Chat, Message, PrivacySettings } from '../types';
+import { vaultSave } from '../persistence';
 
 /**
  * Primary state manifest for the Entropy desktop client.
  */
 export interface AppState {
     identityHash: string | null;
-    myAlias: string | null;
+    globalNickname: string | null;
     myPfp: string | null;
     chats: Record<string, Chat>;
     isConnected: boolean;
@@ -24,7 +25,7 @@ export interface AppState {
 
 const initialState: AppState = {
     identityHash: null,
-    myAlias: null,
+    globalNickname: null,
     myPfp: null,
     chats: {},
     isConnected: false,
@@ -57,3 +58,32 @@ export const userStore = writable<AppState>(initialState);
  * Holds messages only for loaded conversations to prevent OOM and store bloat.
  */
 export const messageStore = writable<Record<string, Message[]>>({});
+
+/**
+ * TRIGGERED PERSISTENCE
+ * Automatically serializes and saves metadata whenever the store changes.
+ * Debounced to 1000ms to prevent excessive disk I/O.
+ */
+let saveTimeout: any = null;
+
+async function performSave(state: AppState) {
+    if (!state.identityHash) return;
+    try {
+        const metadata = {
+            globalNickname: state.globalNickname,
+            myPfp: state.myPfp,
+            blockedHashes: state.blockedHashes,
+            privacySettings: state.privacySettings,
+            sessionToken: state.sessionToken
+        };
+        await vaultSave(`entropy_meta_${state.identityHash}`, JSON.stringify(metadata));
+    } catch (e) {
+        console.error("[Persistence] Auto-save failed:", e);
+    }
+}
+
+userStore.subscribe(state => {
+    if (!state.identityHash) return;
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => performSave(state), 1000);
+});

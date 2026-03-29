@@ -36,7 +36,7 @@
 Entropy Desktop is a native cross-platform desktop application with a security-first architecture:
 
 ### Technology Stack
-- **Backend**: Rust (Tauri v2) - Handles all cryptography, vault management, and network I/O. Memory-safe and fast.
+- **Backend**: Rust (Modern Tauri Framework) - Handles all cryptography, vault management, and network I/O. Memory-safe and fast.
 - **Frontend**: Svelte 5 + TypeScript - Reactive UI with type-safe message handling and state management.
 - **Storage**: SQLCipher - All conversation data, keys, and metadata are encrypted at rest with AES-256-CBC.
 - **Crypto Library**: `libsodium` (via sodium-native bindings) + custom Rust implementations for Ed25519, X25519, and Kyber1024.

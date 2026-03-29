@@ -1,8 +1,7 @@
 <script lang="ts">
     import type { Message } from '../lib/types';
     import { 
-        LucideCheck, LucideCheckCheck, LucideStar, 
-        LucideExternalLink 
+        LucideCheck, LucideCheckCheck, LucideStar 
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import AttachmentRenderer from './AttachmentRenderer.svelte';
@@ -21,7 +20,17 @@
         scrollToMessage?: (id: string) => void;
     }>();
 
-    const isReplyToMine = msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash;
+    const isReplyToMine = $derived(msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash);
+
+    const linkify = (text: string) => {
+        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        return text.split(urlRegex).map(part => {
+            if (part.match(urlRegex)) {
+                return `<a href="${part}" target="_blank" rel="noopener noreferrer" class="underline decoration-1 underline-offset-2 hover:text-entropy-accent transition-colors">${part}</a>`;
+            }
+            return part;
+        }).join('');
+    };
 </script>
 
 <div class="relative w-full">
@@ -61,12 +70,12 @@
         {/if}
     {:else}
         <div class="text-[14px] leading-snug whitespace-pre-wrap break-words relative overflow-hidden pb-0.5">
-            {msg.content}
+            {@html linkify(msg.content)}
             <!-- Native float wrap for the timestamp block -->
             {#if !compactMode}
                 <div class="float-right flex items-center space-x-0.5 select-none pointer-events-none pt-[8px] pl-1.5 mt-[-1px]">
                     {#if msg.isStarred}
-                        <LucideStar size={9} class="{isMine ? 'text-white/50 fill-white/30' : 'text-yellow-500/80 fill-yellow-500/40'}" />
+                        <LucideStar size={9} class={isMine ? 'text-white/50 fill-white/30' : 'text-yellow-500/80 fill-yellow-500/40'} />
                     {/if}
                     <span class="text-[9px] font-bold tabular-nums opacity-60 {isMine ? 'text-white' : 'text-entropy-text-dim'} whitespace-nowrap">
                         {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
@@ -87,24 +96,12 @@
         </div>
     {/if}
 
-    {#if msg.linkPreview}
-        <a href={msg.linkPreview.url} target="_blank" rel="noopener noreferrer" class="block mt-2 bg-black/10 dark:bg-white/10 rounded-xl overflow-hidden hover:bg-black/20 dark:hover:bg-white/20 transition no-underline">
-            <div class="p-3">
-                <div class="text-[10px] font-bold {isMine ? 'text-white/60' : 'text-entropy-accent'} mb-1 flex items-center space-x-1 uppercase tracking-wide">
-                    <span>{msg.linkPreview.siteName}</span>
-                    <LucideExternalLink size={10} />
-                </div>
-                <div class="text-[13px] font-bold {isMine ? 'text-white' : 'text-entropy-text-primary'} truncate mb-1">{msg.linkPreview.title}</div>
-                <div class="text-[11px] {isMine ? 'text-white/70' : 'text-entropy-text-secondary'} line-clamp-2 leading-snug">{msg.linkPreview.url}</div>
-            </div>
-        </a>
-    {/if}
 
     <!-- Compact Mode Status Cluster -->
     {#if compactMode}
         <div class="mt-1 flex items-center space-x-2 select-none pointer-events-none">
             {#if msg.isStarred}
-                <LucideStar size={9} class="{isMine ? 'text-white/40 fill-white/20' : 'text-yellow-500/60 fill-yellow-500/20'}" />
+                <LucideStar size={9} class={isMine ? 'text-white/40 fill-white/20' : 'text-yellow-500/60 fill-yellow-500/20'} />
             {/if}
             <span class="text-[8.5px] font-bold tabular-nums {isMine ? 'text-white/60' : 'text-entropy-text-secondary/70'}">
                 {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}

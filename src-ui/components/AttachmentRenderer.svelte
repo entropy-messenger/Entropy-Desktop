@@ -1,18 +1,18 @@
-
 <script lang="ts">
-    import { attachmentStore } from '../lib/attachment_store';
     import { LucideMic, LucidePaperclip, LucideDownload, LucideLoader, LucideCheck, LucideImage } from 'lucide-svelte';
-    import { convertFileSrc } from '@tauri-apps/api/core';
+    import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+    import { getAttachment, markAsDownloaded } from '../lib/actions/chat';
+    import { fromBase64 } from '../lib/crypto';
+    import VoiceNotePlayer from './VoiceNotePlayer.svelte';
 
-    import { markAsDownloaded } from '../lib/actions/message_utils';
-
-    let { msg, chatId } = $props();
+    let { msg, chatId } = $props<{ msg: any, chatId: string }>();
 
     let blobUrl = $state<string | null>(null);
     let loading = $state(false);
     let error = $state(false);
     let isDownloading = $state(false);
     let downloadSuccess = $state(false);
+
     $effect(() => {
         downloadSuccess = msg.attachment?.isDownloaded || false;
     });
@@ -27,12 +27,6 @@
             }
         }
     });
-
-    import VoiceNotePlayer from './VoiceNotePlayer.svelte';
-    import { signalManager } from '../lib/signal_manager';
-    import { toHex, fromBase64 } from '../lib/crypto';
-    import { invoke } from '@tauri-apps/api/core';
-    import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 
     async function showInFolder() {
         const path = msg.attachment?.vaultPath || msg.attachment?.originalPath;
@@ -54,12 +48,27 @@
             return;
         }
 
-        // Step 2: Fallback for in-memory data (Small fragments/Legacy)
+        // Step 2: Handle in-memory data (Small fragments/Standard)
         if (msg.attachment.data) {
             let bytes = msg.attachment.data;
             if (typeof bytes === 'string') bytes = fromBase64(bytes);
             blobUrl = URL.createObjectURL(new Blob([bytes], {type: msg.attachment.fileType}));
             return;
+        }
+
+        // Step 3: Fetch from vault (Cold storage retrieval)
+        loading = true;
+        try {
+            const data = await getAttachment(msg.id);
+            if (data) {
+                blobUrl = URL.createObjectURL(new Blob([data], {type: msg.attachment.fileType}));
+            } else {
+                error = true;
+            }
+        } catch (e) {
+            error = true;
+        } finally {
+            loading = false;
         }
     }
 

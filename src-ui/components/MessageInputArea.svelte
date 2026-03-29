@@ -1,9 +1,7 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
-  import { 
-    sendMessage, sendVoiceNote, 
-    sendTypingStatus, setReplyingTo, toggleBlock
-  } from '../lib/store';
+  import { sendMessage, setReplyingTo, sendFile } from '../lib/actions/chat';
+  import { sendTypingStatus, toggleBlock } from '../lib/actions/contacts';
   import { 
     LucideSend, LucideMic, LucidePaperclip, LucideX, LucideBan
   } from 'lucide-svelte';
@@ -63,8 +61,8 @@
         const parts = path.split(/[/\\]/);
         const fileName = parts[parts.length - 1];
         
-        const { sendLargeFile } = await import('../lib/store');
-        sendLargeFile(activeChat.peerHash, path, fileName);
+        const { sendFile } = await import('../lib/actions/chat');
+        sendFile(activeChat.peerHash, { name: fileName, type: 'file', path }, 'file');
     }
   }
 
@@ -164,7 +162,7 @@
             {#if isRecording}
                 <RecordingBar 
                     onSend={(blob) => {
-                        sendVoiceNote(activeChat!.peerHash, blob);
+                        sendFile(activeChat!.peerHash, new File([blob], 'voice_note.opus'), 'voice_note');
                         isRecording = false;
                     }}
                     onCancel={() => isRecording = false}

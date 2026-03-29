@@ -1,13 +1,11 @@
-
 import { get } from 'svelte/store';
 import { userStore } from '../stores/user';
 import { invoke } from '@tauri-apps/api/core';
 import { signalManager } from '../signal_manager';
 import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
-import { minePoW, initCrypto, toBase64, fromHex } from '../crypto';
 import { broadcastProfile } from './contacts';
-import { initVault, vaultLoad, vaultSave } from '../secure_storage';
+import { initVault, vaultLoad } from '../persistence';
 import type { Chat } from '../types';
 
 /**
@@ -20,7 +18,6 @@ let isAuthInProgress = false;
  */
 export const initApp = async (password: string) => {
     userStore.update(s => ({ ...s, authError: null }));
-    await initCrypto();
     try {
         await initVault(password);
     } catch (e: any) {
@@ -31,14 +28,14 @@ export const initApp = async (password: string) => {
 
     let idHash: string | null = null;
     try {
-        idHash = await signalManager.init(password);
+        idHash = await signalManager.init();
     } catch (e) {
         console.error("Signal init failed:", e);
     }
 
     if (idHash) {
         let chats: Record<string, Chat> = {};
-        let myAlias: string | null = null;
+        let globalNickname: string | null = null;
         let myPfp: string | null = null;
         let sessionToken: string | null = null;
         let blockedHashes: string[] = [];
@@ -54,7 +51,7 @@ export const initApp = async (password: string) => {
         if (savedMeta) {
             try {
                 const meta = JSON.parse(savedMeta);
-                myAlias = meta.myAlias || null;
+                globalNickname = meta.globalNickname || meta.myAlias || null;
                 myPfp = meta.myPfp || null;
                 sessionToken = meta.sessionToken || null;
                 privacySettings = meta.privacySettings || privacySettings;
@@ -73,7 +70,7 @@ export const initApp = async (password: string) => {
                 chats[c.address] = {
                     peerHash: c.address,
                     isGroup: c.isGroup,
-                    peerAlias: c.alias,
+                    peerNickname: c.alias,
                     pfp: c.pfp,
                     members: c.members || undefined,
                     messages: [],
@@ -98,7 +95,7 @@ export const initApp = async (password: string) => {
             ...s,
             identityHash: idHash,
             chats,
-            myAlias,
+            globalNickname,
             myPfp,
             sessionToken,
             blockedHashes,
@@ -116,7 +113,6 @@ export const initApp = async (password: string) => {
  */
 export const createIdentity = async (password: string) => {
     try {
-        await initCrypto();
         await initVault(password);
     } catch (e: any) {
         console.error("Vault initialization failed:", e);
@@ -125,7 +121,7 @@ export const createIdentity = async (password: string) => {
 
     let idHash;
     try {
-        idHash = await signalManager.init(password);
+        idHash = await signalManager.init();
         console.debug("Identity generated:", idHash);
     } catch (e: any) {
         console.error("Identity generation failed:", e);
@@ -155,41 +151,24 @@ export const createIdentity = async (password: string) => {
  * Permanently purges the local vault and sends a signed burn request to the relay.
  * Requires solving a high-difficulty PoW to authorize the network-wide erasure.
  */
-export const burnAccount = async (serverUrl: string) => {
+export const burnAccount = async () => {
     if (await showConfirm("DANGER: This will permanently purge your account from the network and your local data. This cannot be undone. Are you sure?", "Nuclear Burn")) {
         const state = get(userStore);
         if (state.identityHash) {
             try {
-                addToast("Authenticating burn request...", 'info');
-
-                // Get challenge via WebSocket
-                const challenge = await network.request('pow_challenge', { identity_hash: state.identityHash, intent: 'burn' });
-                const { seed, difficulty } = challenge;
-
-                // 1. Solve PoW
-                const { nonce } = await minePoW(seed, 4, state.identityHash);
-
-                // 2. Sign the canonical string "BURN_ACCOUNT:<hash>" (consistent with server)
-                const signature = await signalManager.signMessage("BURN_ACCOUNT:" + state.identityHash);
-
-                // 3. Send burn request via WebSocket
-                const response = await network.request('account_burn', {
-                    identity_hash: state.identityHash,
-                    signature,
-                    seed,
-                    nonce
-                });
+                addToast("Authenticating burn request (Native)...", 'info');
+                const response = await invoke<any>('burn_account');
 
                 if (response.status === 'success') {
-                    console.log("Network account burn successful.");
+                    console.log("[Account] Network burn successful.");
                     addToast("Server account deleted.", 'success');
                 } else {
-                    console.error("Network account burn failed:", response.error);
+                    console.error("[Account] Network burn failed:", response.error);
                     addToast("Server deletion failed: " + response.error, 'error');
                     if (!await showConfirm("Server-side deletion failed. Wipe local data and restart anyway?", "Relay Error")) return;
                 }
-            } catch (e) {
-                console.error("Failed to burn network account:", e);
+            } catch (e: any) {
+                console.error("[Account] Burn command failed:", e);
                 if (!await showConfirm("Relay burn failed (Network Error). Wipe local data anyway?", "Relay Error")) return;
             }
         }

@@ -14,7 +14,7 @@ export const createGroup = async (name: string, members: string[]) => {
     const allMembers = [state.identityHash, ...members];
 
     userStore.update(s => {
-        s.chats[groupId] = { peerHash: groupId, peerAlias: name, unreadCount: 0, isGroup: true, members: allMembers };
+        s.chats[groupId] = { peerHash: groupId, peerNickname: name, unreadCount: 0, isGroup: true, members: allMembers };
         return { ...s, activeChatHash: groupId };
     });
 
@@ -47,7 +47,7 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
     });
 
     const distMsg = await signalManager.createGroupDistribution(groupId);
-    const invite = { type: 'group_invite_v2', groupId, name: chat.peerAlias, members: uniqueMembers, distribution: distMsg };
+    const invite = { type: 'group_invite', groupId, name: chat.peerNickname, members: uniqueMembers, distribution: distMsg };
     const update = { type: 'group_update', groupId, members: uniqueMembers };
 
     // Invite new members

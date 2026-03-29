@@ -12,7 +12,7 @@
     msgs.filter(m => m.isStarred).map(m => ({
         ...m,
         peerHash,
-        peerAlias: $userStore.chats[peerHash]?.localNickname || $userStore.chats[peerHash]?.peerAlias || peerHash.slice(0, 8)
+        peerNickname: $userStore.chats[peerHash]?.localNickname || $userStore.chats[peerHash]?.peerNickname || peerHash.slice(0, 8)
     }))
   ).sort((a, b) => b.timestamp - a.timestamp));
 </script>
@@ -51,7 +51,7 @@
                         <div class="flex justify-between items-start mb-3">
                              <div class="flex items-center space-x-2">
                                 <LucideStar size={14} class="text-yellow-500 fill-yellow-500" />
-                                <span class="text-xs font-black uppercase text-entropy-primary tracking-tight">{msg.peerAlias}</span>
+                                <span class="text-xs font-black uppercase text-entropy-primary tracking-tight">{msg.peerNickname}</span>
                              </div>
                              <span class="text-[10px] font-bold text-entropy-text-dim">{new Date(msg.timestamp).toLocaleDateString()}</span>
                         </div>

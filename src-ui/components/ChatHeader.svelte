@@ -1,8 +1,8 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
-  import { 
-    leaveGroup, bulkDelete, bulkStar, toggleBlock, setLocalNickname 
-  } from '../lib/store';
+  import { bulkDelete, bulkStar } from '../lib/actions/chat';
+  import { leaveGroup } from '../lib/actions/groups';
+  import { toggleBlock, setLocalNickname } from '../lib/actions/contacts';
   import { 
     LucideMoreVertical, LucideSearch, LucideCheckCircle, LucideEdit2, 
     LucideStar, LucideTrash2, LucideInfo, LucideCheck as LucideCheckIcon, LucideBan, LucideShieldCheck, LucideX
@@ -13,7 +13,7 @@
   let { 
     activeChat, 
     selectionMode, 
-    selectedIds,
+    selectedIds = $bindable(),
     showMessageSearch,
     onViewImage,
     onCancelSelection,
@@ -51,7 +51,7 @@
   const handleSetLocalNickname = async () => {
       if (!activeChat) return;
       try {
-          const val = await showPrompt("Set a local nickname for this contact:", activeChat.localNickname || activeChat.peerAlias || "", "Local Nickname");
+          const val = await showPrompt("Set a local nickname for this contact:", activeChat.localNickname || activeChat.peerNickname || "", "Local Nickname");
           if (val !== null) {
               await setLocalNickname(activeChat.peerHash, val.trim() || null);
               addToast("Nickname updated", 'success');
@@ -71,13 +71,13 @@
             {#if activeChat.pfp}
                 <img src={activeChat.pfp} alt="" class="w-full h-full object-cover" />
             {:else}
-                {activeChat.peerAlias ? activeChat.peerAlias[0].toUpperCase() : '?'}
+                {activeChat.peerNickname ? activeChat.peerNickname[0].toUpperCase() : '?'}
             {/if}
         </button>
         <div class="min-w-0">
             <div class="flex items-center space-x-2">
                 <div class="font-bold text-entropy-text-primary leading-tight truncate">
-                    {activeChat.localNickname || activeChat.peerAlias || activeChat.peerHash.slice(0, 12)}
+                    {activeChat.localNickname || activeChat.peerNickname || activeChat.peerHash.slice(0, 12)}
                 </div>
                 {#if activeChat.isVerified}
                     <LucideShieldCheck size={14} class="text-entropy-accent" />

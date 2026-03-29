@@ -1,8 +1,7 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
-  import { 
-    leaveGroup, addToGroup, toggleBlock, toggleVerification 
-  } from '../lib/store';
+  import { leaveGroup, addToGroup } from '../lib/actions/groups';
+  import { toggleBlock, toggleVerification } from '../lib/actions/contacts';
   import { signalManager } from '../lib/signal_manager';
   import { 
     LucideX, LucideShieldCheck, LucideShieldAlert, LucideInfo,
@@ -41,7 +40,6 @@
   });
 
   let mediaMessages = $derived(activeChat ? ($messageStore[activeChat.peerHash] || []).filter((m: any) => m.attachment && (m.type === 'file' || m.type === 'voice_note')) : []);
-  let linkMessages = $derived(activeChat ? ($messageStore[activeChat.peerHash] || []).filter((m: any) => m.linkPreview?.url) : []);
   
   let inviteCopied = $state(false);
   const copyInvite = () => {
@@ -62,17 +60,17 @@
     <div class="p-6 flex-1 overflow-y-auto custom-scrollbar space-y-8">
         <div class="flex flex-col items-center space-y-4">
             <div class="w-24 h-24 rounded-3xl bg-entropy-surface flex items-center justify-center text-entropy-primary text-3xl font-bold shadow-xl">
-                {#if activeChat.pfp}<img src={activeChat.pfp} alt="" class="w-full h-full object-cover rounded-3xl" />{:else}{(activeChat.localNickname || activeChat.peerAlias || '?')[0].toUpperCase()}{/if}
+                {#if activeChat.pfp}<img src={activeChat.pfp} alt="" class="w-full h-full object-cover rounded-3xl" />{:else}{(activeChat.localNickname || activeChat.peerNickname || '?')[0].toUpperCase()}{/if}
             </div>
             <div class="text-center">
                 <div class="flex items-center justify-center space-x-2">
-                    <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerAlias || 'Peer'}</h3>
+                    <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerNickname || 'Peer'}</h3>
                     {#if !activeChat.isGroup && activeChat.isVerified}
                         <LucideShieldCheck size={18} class="text-entropy-accent" />
                     {/if}
                 </div>
-                {#if activeChat.localNickname && activeChat.peerAlias}
-                    <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Alias: {activeChat.peerAlias}</p>
+                {#if activeChat.localNickname && activeChat.peerNickname}
+                    <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Alias: {activeChat.peerNickname}</p>
                 {/if}
                 <p class="text-[11px] font-mono text-entropy-text-secondary break-all opacity-80">{activeChat.peerHash}</p>
             </div>
@@ -195,32 +193,6 @@
             {/if}
         </div>
 
-        <div class="space-y-4">
-            <div class="flex justify-between items-center">
-                <h4 class="text-xs font-bold text-entropy-text-dim uppercase tracking-wider">Shared Links</h4>
-                <LucideLink size={14} class="text-entropy-text-dim" />
-            </div>
-            {#if linkMessages.length === 0}
-                <div class="bg-entropy-surface-light rounded-2xl h-24 flex items-center justify-center text-xs text-entropy-text-dim">No links shared yet</div>
-            {:else}
-                <div class="space-y-2">
-                     {#each linkMessages.slice(0, 5) as m}
-                        <a href={m.linkPreview!.url} target="_blank" rel="noopener noreferrer" class="block p-3 bg-entropy-surface-light hover:bg-entropy-surface rounded-xl transition duration-200 group/link">
-                            <div class="flex items-start space-x-2">
-                                <LucideExternalLink size={12} class="text-entropy-accent shrink-0 mt-0.5 group-hover/link:text-entropy-primary transition" />
-                                <div class="flex-1 min-w-0">
-                                    <div class="text-[11px] font-bold text-entropy-text-primary truncate">{m.linkPreview!.title || m.linkPreview!.url}</div>
-                                    <div class="text-[10px] text-entropy-text-secondary truncate mt-0.5">{m.linkPreview!.url}</div>
-                                    {#if m.linkPreview!.description}
-                                        <div class="text-[9px] text-entropy-text-dim line-clamp-2 mt-1 leading-relaxed">{m.linkPreview!.description}</div>
-                                    {/if}
-                                </div>
-                            </div>
-                        </a>
-                     {/each}
-                </div>
-            {/if}
-        </div>
 
         {#if activeChat.isGroup}
             <div class="pt-4 border-t border-entropy-border/10">

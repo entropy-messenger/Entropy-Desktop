@@ -1,33 +1,29 @@
-
-import { invoke } from '@tauri-apps/api/core';
-import { minePoW, toBase64, fromBase64, toHex, fromHex } from './crypto';
-import { secureStore, secureLoad, vaultLoad, vaultSave } from './secure_storage';
-
 import { get } from 'svelte/store';
+import { invoke } from '@tauri-apps/api/core';
+import { toHex } from './crypto';
+import { vaultLoad, vaultSave } from './persistence';
 import { userStore } from './stores/user';
 
 /**
  * Orchestrates the Signal Protocol lifecycle, including key management,
  * E2EE session establishment, and media encryption.
+ * Now manages integrity session tracking previously handled by SignalStore.
  */
 export class SignalManager {
     private userIdentity: string = "";
 
-    constructor() {
-    }
-
     /**
      * Initializes the native Signal state and retrieves the identity fingerprint.
      */
-    async init(password: string): Promise<string | null> {
+    async init(): Promise<string | null> {
         try {
             await invoke<string>('signal_init');
             const idHash = await invoke<string>('signal_get_identity_hash');
             this.userIdentity = idHash;
-            console.log("Initialized Signal Protocol. Identity Hash:", this.userIdentity);
-            return this.userIdentity;
+            console.log("[Signal] Protocol Initialized. Identity:", idHash);
+            return idHash;
         } catch (e) {
-            console.error("Signal init failed:", e);
+            console.error("[Signal] Init failed:", e);
             return null;
         }
     }
@@ -36,28 +32,20 @@ export class SignalManager {
         return this.userIdentity;
     }
 
-    /**
-     * Synchronizes local pre-key bundles with the relay server.
-     * Includes X3DH bundle preparation and Proof-of-Work to satisfy anti-spam requirements.
-     */
-    async ensureKeysUploaded(serverUrl: string, force: boolean = false) {
-        console.debug("[Signal] Synchronizing keys via native layer...");
+    async ensureKeysUploaded() {
+        // Save current status to restore after sync
+        const currentStatus = get(userStore).connectionStatus;
         try {
+            userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
             await invoke('signal_sync_keys');
-            userStore.update(s => ({ ...s, isSynced: true }));
-            console.log("Keys synchronized successfully.");
+            userStore.update(s => ({ ...s, isSynced: true, connectionStatus: 'connected' }));
         } catch (e: any) {
-            console.error("Key synchronization failed:", e);
+            console.error("[Signal] Key sync failed:", e);
             userStore.update(s => ({ ...s, isSynced: false, connectionStatus: 'sync_error' }));
             throw e;
         }
     }
 
-
-    /**
-     * Encrypts a message for a peer. Rust automatically handles session establishment (smart negotiation)
-     * including Decoy Mode for privacy.
-     */
     async encrypt(recipientHash: string, message: string): Promise<any> {
         try {
             return await invoke<any>('signal_encrypt', {
@@ -65,7 +53,7 @@ export class SignalManager {
                 message
             });
         } catch (e: any) {
-            console.error("Signal encryption failed:", e);
+            console.error("[Signal] Encryption failed:", e);
             throw e;
         }
     }
@@ -82,7 +70,7 @@ export class SignalManager {
             });
             return new Uint8Array(result);
         } catch (e: any) {
-            console.error("Media decryption failed:", e);
+            console.error("[Signal] Media decryption failed:", e);
             throw e;
         }
     }
@@ -90,14 +78,14 @@ export class SignalManager {
     async getFingerprint(recipientHash: string): Promise<{ digits: string, isVerified: boolean }> {
         try {
             const result = await invoke<any>('signal_get_fingerprint', {
-                remoteHash: recipientHash
+                remote_hash: recipientHash
             });
             return {
                 digits: result.digits,
                 isVerified: !!result.isVerified
             };
         } catch (e: any) {
-            console.error("Fingerprint retrieval failed:", e);
+            console.error("[Signal] Fingerprint retrieval failed:", e);
             throw e;
         }
     }
@@ -105,21 +93,41 @@ export class SignalManager {
     async verifySession(peerHash: string, isVerified: boolean): Promise<void> {
         try {
             await invoke('signal_set_peer_trust', {
-                address: `${peerHash}:1`,
-                trustLevel: isVerified ? 1 : 0
+                address: peerHash,
+                trust_level: isVerified ? 2 : 0 // 2=verified, 0=unverified
             });
         } catch (e: any) {
-            console.error("Session verification failed:", e);
+            console.error("[Signal] Session verification failed:", e);
             throw e;
         }
     }
 
-    /**
-     * Group sessions in this architecture use Multi-Recipient Unicast via 1:1 sessions.
-     * groupInit and createGroupDistribution provide unique context for group invites.
-     */
+    // --- INTEGRITY & SESSION PERSISTENCE (Merged from SignalStore) ---
+
+    async getLastMessageHash(localHash: string, peerHash: string, type: 'sent' | 'received'): Promise<string | null> {
+        return await vaultLoad(`signal_integrity_${type}_${localHash}_${peerHash}`);
+    }
+
+    async putLastMessageHash(localHash: string, peerHash: string, type: 'sent' | 'received', hash: string): Promise<void> {
+        await vaultSave(`signal_integrity_${type}_${localHash}_${peerHash}`, hash);
+    }
+
+    async isBlankSlate(): Promise<boolean> {
+        const rustId = await vaultLoad('protocol_identity');
+        return !rustId || rustId === 'null';
+    }
+
+    async deleteAllData(): Promise<void> {
+        try {
+            await invoke('clear_vault');
+        } catch (e) {
+            console.error("[Signal] Data purge failed:", e);
+        }
+    }
+
+    // --- GROUP CONTEXT HELPERS ---
+
     async groupInit(groupId: string): Promise<string> {
-        // We generate a deterministic but unique key for the group session context
         const seed = crypto.getRandomValues(new Uint8Array(16));
         return toHex(seed);
     }

@@ -1,12 +1,4 @@
 
-export interface LinkPreview {
-    url: string;
-    title?: string;
-    description?: string;
-    siteName?: string;
-    image?: string;
-}
-
 /**
  * Represents an individual message in a conversation.
  * Handles both plain text and encrypted media attachments.
@@ -27,7 +19,6 @@ export interface Message {
         isDownloaded?: boolean;
         originalPath?: string;
         bundle?: any;
-        isV2?: boolean;
     };
     groupId?: string;
     isMine: boolean;
@@ -41,7 +32,6 @@ export interface Message {
         senderAlias?: string;
         type: Message['type'];
     };
-    linkPreview?: LinkPreview;
 }
 
 /**
@@ -61,7 +51,7 @@ export interface PrivacySettings {
  */
 export interface Chat {
     peerHash: string;
-    peerAlias?: string;
+    peerNickname?: string;
     pfp?: string;
     messages?: Message[];
     hasMore?: boolean;

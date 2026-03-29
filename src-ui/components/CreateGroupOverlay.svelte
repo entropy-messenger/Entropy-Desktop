@@ -1,6 +1,7 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
-  import { createGroup, lookupNickname } from '../lib/store';
+  import { lookupNickname } from '../lib/actions/contacts';
+  import { createGroup } from '../lib/actions/groups';
   import { addToast } from '../lib/stores/ui';
   import { LucideUsers, LucideX, LucidePlus, LucideCheckCircle2 } from 'lucide-svelte';
 
@@ -75,10 +76,10 @@
                     >
                         <div class="flex items-center space-x-3">
                             <div class="w-8 h-8 rounded-full bg-entropy-surface flex items-center justify-center text-[10px] font-bold text-entropy-primary">
-                                {(contact.localNickname || contact.peerAlias || "?")[0].toUpperCase()}
+                                {(contact.localNickname || contact.peerNickname || "?")[0].toUpperCase()}
                             </div>
                             <div class="text-left">
-                                <div class="text-xs font-bold text-entropy-text-primary">{contact.localNickname || contact.peerAlias || contact.peerHash.slice(0, 8)}</div>
+                                <div class="text-xs font-bold text-entropy-text-primary">{contact.localNickname || contact.peerNickname || contact.peerHash.slice(0, 8)}</div>
                                 <div class="text-[9px] font-mono text-entropy-text-dim">{contact.peerHash.slice(0, 16)}...</div>
                             </div>
                         </div>
@@ -99,7 +100,7 @@
         </div>
     </div>
 </div>
-<div class="p-6 bg-entropy-surface/50">
-    <button onclick={handleCreateGroup} disabled={!groupName || groupMembers.length === 0} class="w-full py-4 bg-entropy-primary text-white rounded-2xl font-bold shadow-lg active:scale-[0.98] transition disabled:opacity-50 disabled:active:scale-100">Create Group Chat</button>
-</div>
+    <div class="p-6 bg-entropy-surface/50">
+        <button onclick={handleCreateGroup} disabled={!groupName || groupMembers.length === 0} class="w-full py-4 bg-entropy-primary text-white rounded-2xl font-bold shadow-lg active:scale-[0.98] transition disabled:opacity-50 disabled:active:scale-100">Create Group Chat</button>
+    </div>
 </div>

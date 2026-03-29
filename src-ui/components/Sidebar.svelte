@@ -1,8 +1,9 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
   import { 
-    startChat, togglePin, toggleArchive, lookupNickname, loadChatMessages
-  } from '../lib/store';
+    startChat, togglePin, toggleArchive, lookupNickname, updatePrivacy
+  } from '../lib/actions/contacts';
+  import { loadChatMessages } from '../lib/actions/chat';
   import {
     LucidePlus, LucideSettings, LucideSearch,
     LucideCheck, LucideCheckCheck, LucideUsers,
@@ -30,7 +31,7 @@
     msgs.filter(m => m.isStarred).map(m => ({
         ...m,
         peerHash,
-        peerAlias: $userStore.chats[peerHash]?.localNickname || $userStore.chats[peerHash]?.peerAlias || peerHash.slice(0, 8)
+        peerNickname: $userStore.chats[peerHash]?.localNickname || $userStore.chats[peerHash]?.peerNickname || peerHash.slice(0, 8)
     }))
   ).sort((a, b) => b.timestamp - a.timestamp));
   
@@ -62,7 +63,6 @@
   let showSettings = $state(false);
   const toggleSettings = () => showSettings = !showSettings;
   
-  import { updatePrivacy } from '../lib/store';
   const toggleTheme = () => {
       const current = $userStore.privacySettings.theme || 'dark';
       updatePrivacy({ theme: current === 'dark' ? 'light' : 'dark' });
@@ -80,7 +80,7 @@
                 const results = await invoke<any[]>('db_search_messages', { query });
                 searchMessages = results.map(m => ({
                     ...m,
-                    peerAlias: $userStore.chats[m.chatAddress]?.peerAlias || m.chatAddress.slice(0, 8)
+                    peerNickname: $userStore.chats[m.chatAddress]?.peerNickname || m.chatAddress.slice(0, 8)
                 }));
             } catch (e) {
                 console.error("Search failed:", e);
@@ -95,7 +95,7 @@
 
   let filteredChats = $derived(Object.values($userStore.chats).filter(chat => {
     const query = searchQuery.toLowerCase();
-    const chatName = (chat.localNickname || chat.peerAlias || "").toLowerCase();
+    const chatName = (chat.localNickname || chat.peerNickname || "").toLowerCase();
     const matchesName = chatName.includes(query) || chat.peerHash.toLowerCase().includes(query);
     if (filter === 'archived' && !chat.isArchived) return false;
     if (filter === 'all' && chat.isArchived) return false;
@@ -161,9 +161,9 @@
         {#each searchMessages as msg}
             <div class="p-4 hover:bg-entropy-surface/50 cursor-pointer border-b border-entropy-border/5 transition group/search" onclick={() => selectChat(msg.chatAddress)} onkeypress={(e) => e.key === 'Enter' && selectChat(msg.chatAddress)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3 mb-3">
-                    <div class="w-6 h-6 rounded-md bg-entropy-primary/20 flex items-center justify-center font-black text-[10px] text-entropy-primary uppercase shadow-sm">{msg.peerAlias[0]}</div>
+                    <div class="w-6 h-6 rounded-md bg-entropy-primary/20 flex items-center justify-center font-black text-[10px] text-entropy-primary uppercase shadow-sm">{msg.peerNickname[0]}</div>
                     <div class="flex justify-between items-baseline flex-1 min-w-0">
-                        <span class="text-xs font-black text-entropy-text-primary tracking-tight truncate pr-2">{msg.peerAlias}</span>
+                        <span class="text-xs font-black text-entropy-text-primary tracking-tight truncate pr-2">{msg.peerNickname}</span>
                         <span class="text-[9px] font-bold text-entropy-text-dim text-right shrink-0">{new Date(msg.timestamp).toLocaleDateString()}</span>
                     </div>
                 </div>
@@ -188,7 +188,7 @@
                             <img src={chat.pfp} alt="" class="w-12 h-12 rounded-2xl object-cover shadow-sm" />
                         {:else}
                             <div class="w-12 h-12 rounded-2xl bg-gradient-to-br {chat.isGroup ? 'from-purple-500 to-indigo-600' : 'from-blue-400 to-blue-600'} flex items-center justify-center text-white font-bold text-lg shadow-sm">
-                                {chat.peerAlias ? chat.peerAlias[0].toUpperCase() : '?'}
+                                {chat.peerNickname ? chat.peerNickname[0].toUpperCase() : '?'}
                             </div>
                         {/if}
                     </div>
@@ -197,7 +197,7 @@
                         <div class="flex justify-between items-baseline mb-0.5">
                             <div class="font-bold text-entropy-text-primary truncate flex items-center space-x-1">
                                 {#if chat.isGroup}<LucideUsers size={12} class="text-entropy-primary" />{/if}
-                                <span class="truncate">{chat.localNickname || chat.peerAlias || chat.peerHash.slice(0, 8)}</span>
+                                <span class="truncate">{chat.localNickname || chat.peerNickname || chat.peerHash.slice(0, 8)}</span>
                                 {#if chat.isPinned}<LucidePin size={10} class="text-entropy-primary fill-entropy-primary" />{/if}
                             </div>
                             {#if chat.lastTimestamp}

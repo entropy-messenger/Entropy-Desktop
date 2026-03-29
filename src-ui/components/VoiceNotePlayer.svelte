@@ -23,7 +23,7 @@
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       
       const rawData = audioBuffer.getChannelData(0);
-      const samples = 45; // Slightly fewer bars for better spacing
+      const samples = 45; 
       const blockSize = Math.floor(rawData.length / samples);
       const result = [];
       
@@ -37,7 +37,7 @@
       }
       
       const max = Math.max(...result);
-      waveformData = result.map(n => Math.max(0.1, n / max)); // Reduced min height to fix 'solid block' look
+      waveformData = result.map(n => Math.max(0.1, n / max));
       drawWaveform();
     } catch (e) {
       console.error("Waveform generation failed:", e);
@@ -52,7 +52,7 @@
 
     const width = canvasEl.width;
     const height = canvasEl.height;
-    const padding = 2.5; // Increased gap for distinction
+    const padding = 2.5; 
     const barWidth = (width / waveformData.length) - padding;
     
     ctx.clearRect(0, 0, width, height);
@@ -65,9 +65,6 @@
       const progress = currentTime / (duration || 1);
       const isPlayed = (i / waveformData.length) < progress;
       
-      // COLORS:
-      // If Mine: Bubble is Purple, so use White/Transparent White
-      // If Peer: Bubble is Light/Gray, so use Purple/Transparent Purple
       if (isPlayed) {
         ctx.fillStyle = isMine ? '#ffffff' : '#8b5cf6';
       } else {
@@ -88,7 +85,11 @@
       playingVoiceNoteId.set(null);
     } else {
       playingVoiceNoteId.set(id);
-      audioEl.play();
+      audioEl.play().catch(err => {
+          console.error("Playback failed:", err);
+          isPlaying = false;
+          playingVoiceNoteId.set(null);
+      });
       isPlaying = true;
     }
   }
@@ -174,6 +175,7 @@
             width="180" 
             height="32" 
             class="w-full h-full opacity-90"
+            style="image-rendering: pixelated; image-rendering: -moz-crisp-edges; image-rendering: crisp-edges;"
           ></canvas>
       </div>
       <div class="flex justify-between items-center px-0.5">
@@ -201,9 +203,3 @@
     hidden
   ></audio>
 </div>
-
-<style>
-  canvas {
-    image-rendering: crisp-edges;
-  }
-</style>

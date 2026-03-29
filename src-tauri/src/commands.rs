@@ -148,7 +148,7 @@ fn internal_decode_key(s: &str) -> Result<Vec<u8>, String> {
     if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(s) {
         return Ok(b);
     }
-    // Fallback: Try Hex anyway
+    // Verify with secondary derivation
     hex::decode(s).map_err(|e| format!("Failed to decode key as Base64 or Hex: {} -> {}", s, e))
 }
 
@@ -364,6 +364,13 @@ pub async fn crypto_encrypt_file(path: String) -> Result<serde_json::Value, Stri
 }
 
 #[tauri::command]
+pub fn signal_decrypt_media(data: Vec<u8>, bundle: serde_json::Value) -> Result<Vec<u8>, String> {
+    let key_b64 = bundle.get("key").and_then(|k| k.as_str()).ok_or("No decryption key in bundle")?;
+    let ciphertext_hex = hex::encode(data);
+    crypto_decrypt_media(ciphertext_hex, key_b64.to_string())
+}
+
+#[tauri::command]
 pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<Vec<u8>, String> {
     let combined = hex::decode(ciphertext_hex).map_err(|e| e.to_string())?;
     if combined.len() < 12 {
@@ -432,18 +439,6 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
                  println!("[!] Panic password triggered. Wiping and restarting...");
                  app.restart();
             }
-        }
-    } else {
-        // Fallback default "panic" if no custom set (optional, maybe unsafe if user doesn't know)
-        if passphrase == "panic" {
-             let filename = get_db_filename();
-             let _ = std::fs::remove_file(app_data_dir.join(&filename));
-             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
-             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-             let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
-             let _ = std::fs::remove_file(&attempts_file);
-             println!("[!] Default panic triggered. Wiping and restarting...");
-             app.restart();
         }
     }
 
@@ -612,6 +607,12 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
         [],
     ).map_err(|e| format!("Failed to create chats: {}", e))?;
 
+    // Phase 2 Migrations: Ensure all required columns exist in chats for sidebar metadata
+    let _ = conn.execute("ALTER TABLE chats ADD COLUMN last_msg TEXT", []);
+    let _ = conn.execute("ALTER TABLE chats ADD COLUMN last_timestamp INTEGER", []);
+    let _ = conn.execute("ALTER TABLE chats ADD COLUMN last_sender_hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE chats ADD COLUMN last_status TEXT", []);
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -633,6 +634,18 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
 
     // Migration
     let _ = conn.execute("ALTER TABLE messages ADD COLUMN reply_to_json TEXT;", []);
+
+    // Phase 3 Metadata Reconciliation: Pull latest message for each chat into the sidebar record if missing
+    // Guaranteed to work now that messages table exists.
+    let _ = conn.execute(
+        "UPDATE chats 
+         SET last_msg = (SELECT SUBSTR(content, 1, 100) FROM messages WHERE chat_address = chats.address ORDER BY timestamp DESC LIMIT 1),
+             last_timestamp = (SELECT timestamp FROM messages WHERE chat_address = chats.address ORDER BY timestamp DESC LIMIT 1),
+             last_sender_hash = (SELECT sender_hash FROM messages WHERE chat_address = chats.address ORDER BY timestamp DESC LIMIT 1),
+             last_status = (SELECT status FROM messages WHERE chat_address = chats.address ORDER BY timestamp DESC LIMIT 1)
+         WHERE last_msg IS NULL OR last_timestamp IS NULL",
+        []
+    ).map_err(|e| format!("Reconciliation failed: {}", e))?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chat_members (
@@ -982,7 +995,7 @@ pub fn process_outgoing_media(
                 file_path.to_string_lossy().to_string()
             };
 
-            // 4. Construct Signal-layer payload (Fragmentation-only, no fallbacks)
+            // 4. Construct Signal-layer payload (Fragmentation-only)
             let transfer_id: u32 = rand::random();
             
             let bundle = json!({
@@ -1058,7 +1071,6 @@ pub fn process_outgoing_media(
                     "fileType": payload.file_type,
                     "size": data.len(),
                     "bundle": bundle,
-                    "isV2": true,
                     "data": if data.len() < 1024 * 1024 { Some(base64::engine::general_purpose::STANDARD.encode(&data)) } else { None },
                     "originalPath": payload.file_path,
                     "vaultPath": local_file_path
@@ -1398,6 +1410,145 @@ pub async fn db_set_contact_blocked(state: State<'_, DbState>, hash: String, is_
          ON CONFLICT(hash) DO UPDATE SET is_blocked = excluded.is_blocked",
         params![hash, is_blocked as i32],
     ).map_err(|e| format!("Failed to update block status: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn burn_account(
+    handle: tauri::AppHandle,
+    state: State<'_, NetworkState>
+) -> Result<serde_json::Value, String> {
+    let id_hash = {
+        let lock = state.identity_hash.lock().unwrap();
+        lock.clone().ok_or("No identity hash in network state")?
+    };
+
+    println!("[Account] Initiating Atomic Burn for {}...", id_hash);
+    
+    // 1. Fetch challenge with burn intent
+    let challenge = internal_request(&state, "pow_challenge", json!({
+        "identity_hash": id_hash,
+        "intent": "burn"
+    })).await?;
+
+    let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
+    let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
+    let modulus = challenge.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
+
+    // 2. Solve PoW (higher difficulty usually)
+    println!("[Account] Solving Burn PoW (diff={})...", difficulty);
+    let pow_result = internal_mine_pow(seed.clone(), difficulty, id_hash.clone(), modulus).await;
+
+    // 3. Sign the Burn Intent Proof
+    println!("[Account] Signing burn proof...");
+    let proof_msg = format!("BURN_ACCOUNT:{}", id_hash);
+    
+    let handle_clone = handle.clone();
+    let signature = tauri::async_runtime::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let store = SqliteSignalStore::new(handle_clone);
+            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            let sig = kp.private_key().calculate_signature(proof_msg.as_bytes(), &mut rng)
+                .map_err(|e| e.to_string())?;
+            Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(sig))
+        })
+    }).await.map_err(|e| e.to_string())??;
+
+    // 4. Submit Burn Request
+    println!("[Account] Submitting burn request to relay...");
+    let response = internal_request(&state, "account_burn", json!({
+        "identity_hash": id_hash,
+        "signature": signature,
+        "seed": seed,
+        "nonce": pow_result["nonce"]
+    })).await?;
+
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn register_nickname(
+    handle: tauri::AppHandle,
+    state: State<'_, NetworkState>,
+    nickname: String
+) -> Result<serde_json::Value, String> {
+    let id_hash = {
+        let lock = state.identity_hash.lock().unwrap();
+        lock.clone().ok_or("No identity hash in network state")?
+    };
+
+    println!("[Nickname] Requesting challenge for '{}'...", nickname);
+    
+    // 1. Fetch challenge
+    let challenge = internal_request(&state, "pow_challenge", json!({
+        "nickname": nickname,
+        "identity_hash": id_hash
+    })).await?;
+
+    let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
+    let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
+    let modulus = challenge.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
+
+    // 2. Solve PoW
+    println!("[Nickname] Solving PoW (diff={})...", difficulty);
+    let pow_result = internal_mine_pow(seed.clone(), difficulty, nickname.clone(), modulus).await;
+
+    // 3. Sign Nickname for proof of identity
+    println!("[Nickname] Signing nickname proof...");
+    
+    let handle_clone = handle.clone();
+    let nickname_clone = nickname.clone();
+    let signature = tauri::async_runtime::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let store = SqliteSignalStore::new(handle_clone);
+            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            let sig = kp.private_key().calculate_signature(nickname_clone.as_bytes(), &mut rng)
+                .map_err(|e| e.to_string())?;
+            Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(sig))
+        })
+    }).await.map_err(|e| e.to_string())??;
+
+    // 4. Register
+    println!("[Nickname] Submitting registration...");
+    let response = internal_request(&state, "nickname_register", json!({
+        "nickname": nickname,
+        "identity_hash": id_hash,
+        "signature": signature,
+        "seed": seed,
+        "nonce": pow_result["nonce"]
+    })).await?;
+
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn db_set_contact_nickname(state: State<'_, DbState>, hash: String, alias: Option<String>) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "INSERT INTO contacts (hash, alias) VALUES (?1, ?2)
+         ON CONFLICT(hash) DO UPDATE SET alias = excluded.alias",
+        params![hash, alias],
+    ).map_err(|e| format!("Failed to update alias: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> Result<(), String> {
+    let lock = state.conn.lock().unwrap();
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    for id in ids {
+        conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to delete message {}: {}", id, e))?;
+    }
 
     Ok(())
 }
@@ -1780,10 +1931,6 @@ pub async fn internal_send_to_network(
                     // Explicit target hash provided (Normal Flow)
                     let h_padded = format!("{: <64}", h);
                     (h_padded.as_bytes().to_vec(), bytes)
-                } else if bytes.len() >= 64 {
-                    // Legacy Fallback: Extract from the first 64 bytes
-                    let (h, d) = bytes.split_at(64);
-                    (h.to_vec(), d.to_vec())
                 } else {
                     return Err("Missing target routing hash".into());
                 };
@@ -2012,7 +2159,7 @@ pub fn show_in_folder(path: String) -> Result<(), String> {
             ])
             .spawn();
         
-        // Simple fallback: open the folder itself
+        // Standard behavior: open the folder
         if let Some(parent) = std::path::Path::new(&path).parent() {
             let _ = Command::new("xdg-open")
                 .arg(parent)
@@ -2611,7 +2758,7 @@ pub async fn signal_get_identity_hash(
         }
     }
 
-    // Fallback to manual derivation
+    // Procedural Key Derivation
     let mut pub_key = signal_get_own_identity(db_state).await?;
     if pub_key.len() == 33 && pub_key[0] == 0x05 {
         pub_key.remove(0);
@@ -3289,7 +3436,7 @@ pub async fn process_incoming_binary(
 }
 
 async fn internal_send_volatile(app: AppHandle, net_state: &NetworkState, to: &str, payload: serde_json::Value) -> Result<(), String> {
-    // Legacy JSON volatile relay is removed. 
+    // Volatile signals (receipts, typing) are served via the Universal Binary Frame Type 0x01.
     // We now send 'volatile' signals (receipts, typing) through the Universal Binary Frame Type 0x01.
     // This provides metadata blindness and consistency.
     let payload_str = payload.to_string();

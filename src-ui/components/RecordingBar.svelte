@@ -59,14 +59,21 @@
       ctx.fill();
   };
 
+  let isStopping = false;
   const stopRecording = async () => {
-      if (recordingState === 'recording') {
+      if (recordingState === 'recording' && !isStopping) {
+          isStopping = true;
           try {
               const bytes = await invoke<number[]>('stop_native_recording');
-              recordedBlob = new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
-              previewUrl = URL.createObjectURL(recordedBlob);
+              if (bytes && bytes.length > 0) {
+                  recordedBlob = new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
+                  previewUrl = URL.createObjectURL(recordedBlob);
+                  recordingState = 'preview';
+              } else {
+                  addToast("Recording was empty", 'error');
+                  onCancel();
+              }
               
-              recordingState = 'preview';
               if (recordingInterval) clearInterval(recordingInterval);
               if (volumeUnlisten) {
                   volumeUnlisten();
@@ -75,6 +82,8 @@
           } catch (e) {
               console.error("Stop recording error:", e);
               onCancel();
+          } finally {
+              isStopping = false;
           }
       }
   };

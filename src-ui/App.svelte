@@ -1,17 +1,21 @@
-
 <script lang="ts">
   import { onMount } from 'svelte';
   import { userStore } from './lib/stores/user';
-  import { createIdentity, initApp } from './lib/store';
+  import { createIdentity, initApp } from './lib/actions/auth';
+  import { hasVault } from './lib/persistence';
   import { network } from './lib/network';
   import Sidebar from './components/Sidebar.svelte';
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
-  import { LucideWifiOff, LucideShieldCheck, LucideLock, LucideFingerprint, LucideEye, LucideEyeOff } from 'lucide-svelte';
+  import { LucideShieldCheck, LucideLock, LucideFingerprint, LucideEye, LucideEyeOff } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
-  import { hasVault } from './lib/secure_storage';
   import { signalManager } from './lib/signal_manager';
+  import Toast from './components/Toast.svelte';
+  import Modal from './components/Modal.svelte';
+  import { addToast, showConfirm } from './lib/stores/ui';
+  import { exportVault, importVault, nuclearReset } from './lib/actions/vault';
+
   
   $effect(() => {
     const isDark = $userStore.privacySettings.theme === 'dark';
@@ -26,10 +30,6 @@
    * Main application entry point.
    * Manages the high-level application state, identity bootstrapping, and global UI overlays.
    */
-  import Toast from './components/Toast.svelte';
-  import Modal from './components/Modal.svelte';
-  import { addToast, showConfirm } from './lib/stores/ui';
-
   let password = $state("");
   let confirmPassword = $state("");
   let showPassword = $state(false);
@@ -119,16 +119,7 @@
      */
     async function handleNuclearReset() {
         if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Nuclear Reset")) return;
-        try {
-            localStorage.clear();
-            addToast("Vault wiped. Restarting Entropy...", 'info');
-            // Allow toast to render
-            await new Promise(r => setTimeout(r, 2000));
-            await invoke('nuclear_reset');
-        } catch (e) {
-            console.error("Reset failed:", e);
-            addToast("Reset failed: " + e, 'error');
-        }
+        await nuclearReset();
     }
 
     /**
@@ -147,15 +138,13 @@
                 });
 
                 if (path) {
-                    await invoke('export_database', { targetPath: path });
-                    addToast("Backup exported successfully!", 'success');
+                    await exportVault(path);
                 }
             } else {
                 addToast("Export not supported in web mode.", 'warning');
             }
         } catch (e) {
-            console.error("Export failed:", e);
-            addToast("Export failed: " + e, 'error');
+            console.error("Export component UI error:", e);
         }
     }
 
@@ -177,16 +166,13 @@
                 });
 
                 if (path) {
-                    await invoke('import_database', { srcPath: path });
-                    addToast("Backup restored! The app will now reload.", 'success');
-                    setTimeout(() => window.location.reload(), 2000);
+                    await importVault(path);
                 }
             } else {
                 addToast("Import not supported in web mode.", 'warning');
             }
         } catch (e) {
-            console.error("Import failed:", e);
-            addToast("Import failed: " + e, 'error');
+            console.error("Import component UI error:", e);
         }
     }
 </script>

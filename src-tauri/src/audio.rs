@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct AudioRecorder {
     pub stream: Option<cpal::Stream>,
     pub recording_path: Option<std::path::PathBuf>,
+    pub writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
 }
 
 impl AudioRecorder {
@@ -13,6 +14,7 @@ impl AudioRecorder {
         Self {
             stream: None,
             recording_path: None,
+            writer: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -35,8 +37,12 @@ impl AudioRecorder {
         self.recording_path = Some(path.clone());
 
         let writer = WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-        let writer = Arc::new(Mutex::new(Some(writer)));
-        let writer_clone = writer.clone();
+        {
+            let mut guard = self.writer.lock().unwrap();
+            *guard = Some(writer);
+        }
+        
+        let writer_clone = self.writer.clone();
         let app_clone = app.clone();
 
         let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
@@ -89,7 +95,13 @@ impl AudioRecorder {
 
     pub fn stop_recording(&mut self) -> Result<Vec<u8>, String> {
         if let Some(stream) = self.stream.take() {
-            drop(stream); // This should stop the recording and drop the writer handle in the closure
+            drop(stream);
+        }
+
+        // Explicitly take and drop the writer to finalize the WAV header
+        {
+            let mut guard = self.writer.lock().unwrap();
+            let _ = guard.take(); // This drops the WavWriter, closing the file and finalizing the header
         }
 
         if let Some(path) = self.recording_path.take() {

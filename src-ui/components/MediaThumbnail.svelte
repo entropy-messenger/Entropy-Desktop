@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { attachmentStore } from '../lib/attachment_store';
+    import { getAttachment } from '../lib/actions/chat';
     import { LucideMic, LucideFile, LucideImage, LucideLoader } from 'lucide-svelte';
     import { signalManager } from '../lib/signal_manager';
 
@@ -20,12 +20,10 @@
                 return;
             }
 
-            const data = await attachmentStore.get(msg.id);
-            if (data) {
-                if (msg.attachment.isV2 && msg.attachment.bundle) {
-                    const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
-                    blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
-                }
+            const data = await getAttachment(msg.id);
+            if (data && msg.attachment.bundle) {
+                const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
+                blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
             }
         } catch (e) {
             console.error("[MediaThumbnail] Load error:", e);

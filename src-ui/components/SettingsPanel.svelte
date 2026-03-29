@@ -1,6 +1,7 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
-  import { updateMyProfile, toggleBlock, updatePrivacy, registerGlobalNickname, burnAccount } from '../lib/store';
+  import { updateMyProfile, toggleBlock, updatePrivacy, registerGlobalNickname } from '../lib/actions/contacts';
+  import { burnAccount } from '../lib/actions/auth';
   import { invoke } from '@tauri-apps/api/core';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import { network } from '../lib/network';
@@ -88,19 +89,23 @@
       if (file) {
           const reader = new FileReader();
           reader.onload = (ev) => {
-              updateMyProfile($userStore.myAlias || "Anonymous", ev.target?.result as string);
+              updateMyProfile(ev.target?.result as string);
               addToast("Profile picture updated!", 'success');
           };
           reader.readAsDataURL(file);
       }
   };
 
-  const handleUpdateAlias = async () => {
-      const next = await showPrompt("Update your display name:", $userStore.myAlias || "", "Display Name");
-      if (next !== null) {
-          updateMyProfile(next.trim() || "Anonymous", $userStore.myPfp);
-          addToast("Display name updated", 'success');
-      }
+  const handleRegisterNickname = async () => {
+      const nick = await showPrompt("Register a global nickname (min 3 chars):", $userStore.globalNickname || "", "Global Nickname");
+      if (nick && nick.length >= 3) {
+          isRegisteringNickname = true;
+          try {
+              const res = await registerGlobalNickname(nick);
+              if (res?.success) addToast("Nickname registered successfully!", 'success');
+              else addToast("Registration failed: " + (res?.error || "Unknown"), 'error');
+          } finally { isRegisteringNickname = false; }
+      } else if (nick) addToast("Nickname too short", 'error');
   };
 
 </script>
@@ -132,27 +137,16 @@
                     <input type="file" bind:this={pfpInput} onchange={onPfpSelect} accept="image/*" class="hidden" />
                 </div>
                 <div class="text-center space-y-1">
-                    <button onclick={handleUpdateAlias} class="text-xl font-bold text-entropy-text-primary hover:text-entropy-primary transition flex items-center justify-center space-x-2">
-                        <span>{$userStore.myAlias || 'Set Name'}</span>
-                        <LucidePlus size={16} class="opacity-50" />
-                    </button>
+                    <div class="text-xl font-bold text-entropy-text-primary flex items-center justify-center space-x-2">
+                        <span>{$userStore.globalNickname || 'Anonymous'}</span>
+                    </div>
                     <div class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest">Active Identity</div>
                 </div>
 
                 <div class="w-full flex flex-col space-y-2">
                     <button 
-                        disabled={isRegisteringNickname || $userStore.connectionStatus !== 'connected'}
-                        onclick={async () => {
-                            const nick = await showPrompt("Register a global nickname (min 3 chars):", $userStore.myAlias || "", "Global Nickname");
-                            if (nick && nick.length >= 3) {
-                                isRegisteringNickname = true;
-                                try {
-                                    const res = await registerGlobalNickname(nick);
-                                    if (res?.success) addToast("Nickname registered successfully!", 'success');
-                                    else addToast("Registration failed: " + (res?.error || "Unknown"), 'error');
-                                } finally { isRegisteringNickname = false; }
-                            } else if (nick) addToast("Nickname too short", 'error');
-                        }}
+                        disabled={isRegisteringNickname || $userStore.connectionStatus !== 'connected' || !!$userStore.globalNickname}
+                        onclick={handleRegisterNickname}
                         class="w-full py-3 bg-entropy-primary text-white rounded-xl text-sm font-bold shadow-lg hover:bg-entropy-primary-dim transition-all active:scale-95 flex flex-col items-center justify-center space-y-1 overflow-hidden disabled:opacity-50 disabled:grayscale"
                     >
                         {#if isRegisteringNickname}
@@ -160,7 +154,7 @@
                             <div class="text-[8px] font-black uppercase tracking-[0.2em] opacity-60">Solving Cryptographic Puzzle</div>
                             <div class="text-[7px] font-bold opacity-40 px-4 text-center leading-tight">Shorter names take longer to compute. Please wait.</div>
                         {:else}
-                            <div class="flex items-center space-x-2"><img src="/logo.png" alt="logo" class="w-6 h-6 object-contain invert opacity-40" /><span>Register Global Nickname</span></div>
+                            <div class="flex items-center space-x-2"><img src="/logo.png" alt="logo" class="w-6 h-6 object-contain invert opacity-40" /><span>{$userStore.globalNickname ? 'Nickname Registered' : 'Register Global Nickname'}</span></div>
                         {/if}
                     </button>
 
