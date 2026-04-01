@@ -9,7 +9,7 @@ use tokio_socks::tcp::Socks5Stream;
 use url::Url;
 use tokio::time::Duration;
 use tracing;
-use serde_json::json;
+use serde_json::{json, Value};
 use base64::Engine;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 use serde::{Serialize, Deserialize};
@@ -64,7 +64,6 @@ pub struct DbChat {
     #[serde(default)]
     pub is_group: bool,
     pub alias: Option<String>,
-    pub pfp: Option<String>,
     pub last_msg: Option<String>,
     pub last_timestamp: Option<i64>,
     pub last_sender_hash: Option<String>,
@@ -76,7 +75,7 @@ pub struct DbChat {
     #[serde(default)]
     pub is_pinned: bool,
     #[serde(default)]
-    pub is_verified: bool,
+    pub trust_level: i32,
     #[serde(default)]
     pub is_blocked: bool,
     pub members: Option<Vec<String>>,
@@ -87,14 +86,48 @@ pub struct DbChat {
 pub struct DbContact {
     pub hash: String,
     pub alias: Option<String>,
-    pub pfp: Option<String>,
     pub is_blocked: bool,
     pub trust_level: i32,
 }
 
 const PACKET_SIZE: usize = 1400; // MTU-Safe (Fits in single 1500 MTU frame)
-const MEDIA_CHUNK_SIZE: usize = 1300; 
 
+
+
+async fn send_paced_json(app: &tauri::AppHandle, val: serde_json::Value) -> Result<(), String> {
+    let json_str = serde_json::to_string(&val).unwrap();
+    let raw_len = json_str.len();
+
+    let net_state = app.state::<NetworkState>();
+    let tx_lock = net_state.sender.lock().unwrap();
+    let tx = tx_lock.as_ref().ok_or("Network not connected")?;
+
+    if raw_len > 1200 {
+        // Chunk it (Type 0x00)
+        let data_bytes = json_str.into_bytes();
+        let chunks = (data_bytes.len() as f32 / 1200.0).ceil() as usize;
+        let transfer_id: u32 = rand::random();
+        let zero_hash = vec![0u8; 64];
+
+        for i in 0..chunks {
+            let start = i * 1200;
+            let end = std::cmp::min(start + 1200, data_bytes.len());
+            let chunk_data = &data_bytes[start..end];
+            let mut envelope = Vec::with_capacity(1400);
+            envelope.extend_from_slice(&zero_hash);
+            envelope.push(0x00); 
+            envelope.extend_from_slice(&transfer_id.to_be_bytes());
+            envelope.extend_from_slice(&(i as u32).to_be_bytes());
+            envelope.extend_from_slice(&(chunks as u32).to_be_bytes());
+            envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
+            envelope.extend_from_slice(chunk_data);
+            tx.send(PacedMessage { msg: Message::Binary(envelope.into()), is_media: false }).map_err(|e| e.to_string())?;
+        }
+    } else {
+        tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(json_str)), is_media: false }).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 async fn internal_request(
     state: &NetworkState,
@@ -116,10 +149,37 @@ async fn internal_request(
         let sender_lock = state.sender.lock().unwrap();
         if let Some(ws_tx) = &*sender_lock {
             let text = full_payload.to_string();
-            let _ = ws_tx.send(PacedMessage {
-                msg: Message::Text(Utf8Bytes::from(text)),
-                is_media: false,
-            });
+            if text.len() > 1200 {
+                // Chunked control request
+                let data_bytes = text.into_bytes();
+                let total_len = data_bytes.len();
+                let chunk_capacity = 1319; 
+                let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
+                let transfer_id: u32 = rand::random();
+                let zero_hash = vec![0u8; 64];
+                println!("[Net] TX Internal Request (Chunked): raw_total={} total_chunks={} tid={}", total_len, chunks, transfer_id);
+                for i in 0..chunks {
+                    let start = i * chunk_capacity;
+                    let end = std::cmp::min(start + chunk_capacity, total_len);
+                    let chunk_data = &data_bytes[start..end];
+                    let mut env = Vec::with_capacity(PACKET_SIZE);
+                    env.extend_from_slice(&zero_hash);
+                    env.push(0x00);
+                    env.extend_from_slice(&transfer_id.to_be_bytes());
+                    env.extend_from_slice(&(i as u32).to_be_bytes());
+                    env.extend_from_slice(&(chunks as u32).to_be_bytes());
+                    env.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
+                    env.extend_from_slice(chunk_data);
+                    let _ = ws_tx.send(PacedMessage { msg: Message::Binary(env.into()), is_media: false });
+                }
+            } else {
+                let raw_len = text.len();
+                println!("[Net] TX Internal Request (Single): raw_size={} target=PACKET_SIZE", raw_len);
+                let _ = ws_tx.send(PacedMessage {
+                    msg: Message::Text(Utf8Bytes::from(text)),
+                    is_media: false,
+                });
+            }
         } else {
             let mut channels = state.response_channels.lock().unwrap();
             channels.remove(&req_id);
@@ -157,7 +217,7 @@ async fn internal_establish_session_logic(
     remote_hash: &str,
     bundle: serde_json::Value
 ) -> Result<(), String> {
-    let mut store = SqliteSignalStore::new(app);
+    let mut store = SqliteSignalStore::new(app.clone());
     let address = ProtocolAddress::new(remote_hash.to_string(), DeviceId::try_from(1u32).expect("valid ID"));
 
     let registration_id = bundle["registrationId"].as_u64().ok_or("Missing registrationId")? as u32;
@@ -165,6 +225,41 @@ async fn internal_establish_session_logic(
     let mut identity_key_bytes = internal_decode_key(identity_key_hex)?;
 
     println!("[Signal] Establishing session for {}. IdentityKeyLen={}", remote_hash, identity_key_bytes.len());
+
+    // --- IDENTITY CHANGE DETECTION ---
+    // Check if we already have a different identity key for this address
+    let mut existing_trust = 1; // Default to Trusted
+    {
+        let state = app.state::<DbState>();
+        let lock = state.conn.lock().unwrap();
+        if let Some(conn) = lock.as_ref() {
+            let res: Result<(Vec<u8>, i32), _> = conn.query_row(
+                "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
+                params![address.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?))
+            );
+
+            if let Ok((old_key, old_trust)) = res {
+                // If keys are different, reset trust to 0 (Untrusted)
+                // Note: stripping prefix for comparison
+                let old_key_stripped = if old_key.len() == 33 && old_key[0] == 0x05 { &old_key[1..] } else { &old_key };
+                let new_key_stripped = &identity_key_bytes;
+                
+                if old_key_stripped != new_key_stripped {
+                    println!("[Signal] IDENTITY CHANGED for {}! Resetting trust to 0.", remote_hash);
+                    existing_trust = 0;
+                    
+                    // Update contacts table immediately for UI
+                    let _ = conn.execute(
+                        "UPDATE contacts SET trust_level = 0 WHERE hash = ?1",
+                        params![remote_hash]
+                    );
+                } else {
+                    existing_trust = old_trust;
+                }
+            }
+        }
+    }
 
     // Standard Signal Identity Keys are 33 bytes (type 0x05 + 32-byte public key).
     // The Entropy relay stores them stripped (32 bytes) to match derivation of identity_hash.
@@ -251,6 +346,18 @@ async fn internal_establish_session_logic(
         std::time::SystemTime::now(),
         &mut rng,
     ).await.map_err(|e| e.to_string())?;
+
+    // Update the trust level in the remote identities table (if it was reset or found)
+    {
+        let state = app.state::<DbState>();
+        let lock = state.conn.lock().unwrap();
+        if let Some(conn) = lock.as_ref() {
+            let _ = conn.execute(
+                "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
+                params![existing_trust, address.to_string()]
+            );
+        }
+    }
 
     Ok(())
 }
@@ -556,7 +663,7 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
         "CREATE TABLE IF NOT EXISTS signal_identities_remote (
             address TEXT PRIMARY KEY,
             public_key BLOB NOT NULL,
-            trust_level INTEGER DEFAULT 0
+            trust_level INTEGER DEFAULT 1
         );",
         [],
     ).map_err(|e| e.to_string())?;
@@ -584,19 +691,22 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
         "CREATE TABLE IF NOT EXISTS contacts (
             hash TEXT PRIMARY KEY,
             alias TEXT,
-            pfp TEXT,
             is_blocked INTEGER DEFAULT 0,
-            trust_level INTEGER DEFAULT 0
+            trust_level INTEGER DEFAULT 1
         )",
         [],
     ).map_err(|e| format!("Failed to create contacts: {}", e))?;
+
+    // SELF-HEALING MIGRATION: 0 was accidentally used as default, which means mismatch. Reset to 1 (Trusted).
+    let _ = conn.execute("UPDATE contacts SET trust_level = 1 WHERE trust_level = 0", []);
+    let _ = conn.execute("UPDATE signal_identities_remote SET trust_level = 1 WHERE trust_level = 0", []);
+
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS chats (
             address TEXT PRIMARY KEY,
             is_group INTEGER DEFAULT 0,
             alias TEXT,
-            pfp TEXT,
             last_msg TEXT,
             last_timestamp INTEGER,
             last_sender_hash TEXT,
@@ -753,15 +863,6 @@ pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(),
 }
 
 #[tauri::command]
-pub fn clear_vault(state: State<'_, DbState>) -> Result<(), String> {
-    let conn_lock = state.conn.lock().unwrap();
-    if let Some(conn) = conn_lock.as_ref() {
-        conn.execute("DELETE FROM kv_store;", []).map_err(|e: rusqlite::Error| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
 pub fn vault_save(state: State<'_, DbState>, key: String, value: String) -> Result<(), String> {
     let lock = state.conn.lock().unwrap();
     if let Some(conn) = lock.as_ref() {
@@ -845,8 +946,8 @@ pub fn process_outgoing_text(
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            if payload.content.chars().count() > 4000 {
-                return Err("Message too long (max 4000 characters)".into());
+            if payload.content.chars().count() > 16000 {
+                return Err("Message too long (max 16000 characters)".into());
             }
 
             let msg_id = uuid::Uuid::new_v4().to_string();
@@ -1273,13 +1374,12 @@ pub async fn internal_db_upsert_chat(db_state: &DbState, chat: DbChat) -> Result
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     conn.execute(
-        "INSERT OR REPLACE INTO chats (address, is_group, alias, pfp, last_msg, last_timestamp, last_sender_hash, last_status, unread_count, is_archived, is_pinned) 
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT OR REPLACE INTO chats (address, is_group, alias, last_msg, last_timestamp, last_sender_hash, last_status, unread_count, is_archived, is_pinned) 
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             chat.address, 
             chat.is_group as i32, 
             chat.alias, 
-            chat.pfp, 
             chat.last_msg, 
             chat.last_timestamp, 
             chat.last_sender_hash,
@@ -1316,28 +1416,27 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
 
     let mut stmt = conn.prepare(
         "SELECT 
-            c.address, c.is_group, c.alias, c.pfp, c.last_msg, c.last_timestamp, 
+            c.address, c.is_group, c.alias, c.last_msg, c.last_timestamp, 
             c.unread_count, c.is_archived, c.last_sender_hash, c.last_status, c.is_pinned,
-            COALESCE((SELECT trust_level FROM signal_identities_remote WHERE address LIKE c.address || ':%' LIMIT 1), 1) >= 2 as is_verified,
+            COALESCE((SELECT trust_level FROM signal_identities_remote WHERE address LIKE c.address || ':%' LIMIT 1), 1) as trust_level,
             COALESCE((SELECT is_blocked FROM contacts WHERE hash = c.address), 0) != 0 as is_blocked
         FROM chats c"
     ).map_err(|e| e.to_string())?;
-
+    
     let chat_rows = stmt.query_map([], |row| {
         Ok(DbChat {
             address: row.get(0)?,
             is_group: row.get::<_, i32>(1)? != 0,
             alias: row.get(2)?,
-            pfp: row.get(3)?,
-            last_msg: row.get(4)?,
-            last_timestamp: row.get(5)?,
-            unread_count: row.get(6)?,
-            is_archived: row.get::<_, i32>(7)? != 0,
-            last_sender_hash: row.get(8)?,
-            last_status: row.get(9)?,
-            is_pinned: row.get::<_, i32>(10)? != 0,
-            is_verified: row.get(11)?,
-            is_blocked: row.get(12)?,
+            last_msg: row.get(3)?,
+            last_timestamp: row.get(4)?,
+            unread_count: row.get(5)?,
+            is_archived: row.get::<_, i32>(6)? != 0,
+            last_sender_hash: row.get(7)?,
+            last_status: row.get(8)?,
+            is_pinned: row.get::<_, i32>(9)? != 0,
+            trust_level: row.get(10)?,
+            is_blocked: row.get(11)?,
             members: None, // Will fill below
         })
     }).map_err(|e| e.to_string())?;
@@ -1363,32 +1462,18 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
 }
 
 #[tauri::command]
-pub async fn db_upsert_contact(state: State<'_, DbState>, contact: DbContact) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
-
-    conn.execute(
-        "INSERT OR REPLACE INTO contacts (hash, alias, pfp, is_blocked, trust_level) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![contact.hash, contact.alias, contact.pfp, contact.is_blocked as i32, contact.trust_level],
-    ).map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
     let lock = state.conn.lock().unwrap();
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
-    let mut stmt = conn.prepare("SELECT hash, alias, pfp, is_blocked, trust_level FROM contacts").map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT hash, alias, is_blocked, trust_level FROM contacts").map_err(|e| e.to_string())?;
 
     let rows = stmt.query_map([], |row| {
         Ok(DbContact {
             hash: row.get(0)?,
             alias: row.get(1)?,
-            pfp: row.get(2)?,
-            is_blocked: row.get::<_, i32>(3)? != 0,
-            trust_level: row.get(4)?,
+            is_blocked: row.get::<_, i32>(2)? != 0,
+            trust_level: row.get(3)?,
         })
     }).map_err(|e| e.to_string())?;
 
@@ -1414,117 +1499,6 @@ pub async fn db_set_contact_blocked(state: State<'_, DbState>, hash: String, is_
     Ok(())
 }
 
-#[tauri::command]
-pub async fn burn_account(
-    handle: tauri::AppHandle,
-    state: State<'_, NetworkState>
-) -> Result<serde_json::Value, String> {
-    let id_hash = {
-        let lock = state.identity_hash.lock().unwrap();
-        lock.clone().ok_or("No identity hash in network state")?
-    };
-
-    println!("[Account] Initiating Atomic Burn for {}...", id_hash);
-    
-    // 1. Fetch challenge with burn intent
-    let challenge = internal_request(&state, "pow_challenge", json!({
-        "identity_hash": id_hash,
-        "intent": "burn"
-    })).await?;
-
-    let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
-    let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
-    let modulus = challenge.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
-
-    // 2. Solve PoW (higher difficulty usually)
-    println!("[Account] Solving Burn PoW (diff={})...", difficulty);
-    let pow_result = internal_mine_pow(seed.clone(), difficulty, id_hash.clone(), modulus).await;
-
-    // 3. Sign the Burn Intent Proof
-    println!("[Account] Signing burn proof...");
-    let proof_msg = format!("BURN_ACCOUNT:{}", id_hash);
-    
-    let handle_clone = handle.clone();
-    let signature = tauri::async_runtime::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async move {
-            let store = SqliteSignalStore::new(handle_clone);
-            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
-            let mut rng = rand::rngs::StdRng::from_os_rng();
-            let sig = kp.private_key().calculate_signature(proof_msg.as_bytes(), &mut rng)
-                .map_err(|e| e.to_string())?;
-            Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(sig))
-        })
-    }).await.map_err(|e| e.to_string())??;
-
-    // 4. Submit Burn Request
-    println!("[Account] Submitting burn request to relay...");
-    let response = internal_request(&state, "account_burn", json!({
-        "identity_hash": id_hash,
-        "signature": signature,
-        "seed": seed,
-        "nonce": pow_result["nonce"]
-    })).await?;
-
-    Ok(response)
-}
-
-#[tauri::command]
-pub async fn register_nickname(
-    handle: tauri::AppHandle,
-    state: State<'_, NetworkState>,
-    nickname: String
-) -> Result<serde_json::Value, String> {
-    let id_hash = {
-        let lock = state.identity_hash.lock().unwrap();
-        lock.clone().ok_or("No identity hash in network state")?
-    };
-
-    println!("[Nickname] Requesting challenge for '{}'...", nickname);
-    
-    // 1. Fetch challenge
-    let challenge = internal_request(&state, "pow_challenge", json!({
-        "nickname": nickname,
-        "identity_hash": id_hash
-    })).await?;
-
-    let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
-    let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
-    let modulus = challenge.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
-
-    // 2. Solve PoW
-    println!("[Nickname] Solving PoW (diff={})...", difficulty);
-    let pow_result = internal_mine_pow(seed.clone(), difficulty, nickname.clone(), modulus).await;
-
-    // 3. Sign Nickname for proof of identity
-    println!("[Nickname] Signing nickname proof...");
-    
-    let handle_clone = handle.clone();
-    let nickname_clone = nickname.clone();
-    let signature = tauri::async_runtime::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async move {
-            let store = SqliteSignalStore::new(handle_clone);
-            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
-            let mut rng = rand::rngs::StdRng::from_os_rng();
-            let sig = kp.private_key().calculate_signature(nickname_clone.as_bytes(), &mut rng)
-                .map_err(|e| e.to_string())?;
-            Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(sig))
-        })
-    }).await.map_err(|e| e.to_string())??;
-
-    // 4. Register
-    println!("[Nickname] Submitting registration...");
-    let response = internal_request(&state, "nickname_register", json!({
-        "nickname": nickname,
-        "identity_hash": id_hash,
-        "signature": signature,
-        "seed": seed,
-        "nonce": pow_result["nonce"]
-    })).await?;
-
-    Ok(response)
-}
 
 #[tauri::command]
 pub async fn db_set_contact_nickname(state: State<'_, DbState>, hash: String, alias: Option<String>) -> Result<(), String> {
@@ -1629,33 +1603,37 @@ async fn internal_connect(
                     let mut msg_to_send = paced.msg;
                     match &mut msg_to_send {
                         Message::Text(text) => {
-                            if !paced.is_media {
-                                let mut val: serde_json::Value = serde_json::from_str(text.as_str()).unwrap_or(json!({"type": "raw", "data": text.as_str()}));
-                                TrafficNormalizer::pad_json(&mut val);
-                                msg_to_send = Message::Text(Utf8Bytes::from(val.to_string()));
+                            if !paced.is_media && text.len() != PACKET_SIZE {
+                                let mut final_json: String = text.to_string();
+                                TrafficNormalizer::pad_json_str(&mut final_json, PACKET_SIZE);
+                                msg_to_send = Message::Text(Utf8Bytes::from(final_json));
                             }
                         },
                         Message::Binary(data) => {
-                            let mut data_vec = data.to_vec();
-                            TrafficNormalizer::pad_binary(&mut data_vec);
-                            msg_to_send = Message::Binary(data_vec.into());
+                            if data.len() != PACKET_SIZE {
+                                let mut data_vec = data.to_vec();
+                                TrafficNormalizer::pad_binary(&mut data_vec, PACKET_SIZE);
+                                msg_to_send = Message::Binary(data_vec.into());
+                            }
                         },
                         _ => {}
                     }
+                    let frame_len = match &msg_to_send {
+                        Message::Text(t) => t.len(),
+                        Message::Binary(b) => b.len(),
+                        _ => 0
+                    };
+                    println!("[Net] RX Background Paced send: framesize={}", frame_len);
                     if let Err(_) = write.send(msg_to_send).await { break; }
                 }
                 _ = &mut next_dummy_sleep => {
-                    let is_auth = *app_handle.state::<NetworkState>().is_authenticated.lock().unwrap();
-                    if is_auth {
-                        let mut dummy_vec = vec![0u8; PACKET_SIZE];
-                        dummy_vec[0] = 0x03;
-                        TrafficNormalizer::pad_binary(&mut dummy_vec);
-                        if let Err(_) = write.send(Message::Binary(dummy_vec.into())).await { break; }
-                    } else {
-                        let mut dummy_val = json!({"type": "dummy_pacing"});
-                        TrafficNormalizer::pad_json(&mut dummy_val);
-                        if let Err(_) = write.send(Message::Text(Utf8Bytes::from(dummy_val.to_string()))).await { break; }
-                    }
+                    let mut dummy_vec = vec![0u8; PACKET_SIZE];
+                    dummy_vec[0] = 0x03; // Type 0x03 Binary Dummy
+                    TrafficNormalizer::pad_binary(&mut dummy_vec, PACKET_SIZE);
+                    
+                    println!("[Net] TX Dummy Pacing: Binary Type 0x03 (1400B)");
+                    if let Err(_) = write.send(Message::Binary(dummy_vec.into())).await { break; }
+                    
                     next_dummy_sleep = Box::pin(tokio::time::sleep(Duration::from_millis(rand::random::<u64>() % 9000 + 1000)));
                 }
             }
@@ -1671,9 +1649,21 @@ async fn internal_connect(
     let app_read = app.clone();
     let read_token = token;
     tokio::spawn(async move {
-        if let Some(id_hash) = app_read.state::<NetworkState>().identity_hash.lock().unwrap().clone() {
+        // 🦾 AGGRESSIVE SESSION RESUMPTION: Skip PoW if we have a valid token
+        let id_hash = app_read.state::<NetworkState>().identity_hash.lock().unwrap().clone();
+        let session_token = app_read.state::<NetworkState>().session_token.lock().unwrap().clone();
+        
+        if let (Some(id), Some(token)) = (id_hash.clone(), session_token) {
             if let Some(tx) = &*app_read.state::<NetworkState>().sender.lock().unwrap() {
-                let challenge_req = json!({"type": "pow_challenge", "identity_hash": id_hash, "id": "auto_challenge"});
+                let payload = json!({ "identity_hash": id, "session_token": token });
+                let auth_req = json!({"type": "auth", "payload": payload});
+                println!("[Net] Resuming session with token for {}...", id);
+                let _ = tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(auth_req.to_string())), is_media: false });
+            }
+        } else if let Some(id) = id_hash {
+            if let Some(tx) = &*app_read.state::<NetworkState>().sender.lock().unwrap() {
+                let challenge_req = json!({"type": "pow_challenge", "identity_hash": id, "id": "auto_challenge"});
+                println!("[Net] No session token found. Requesting PoW challenge for {}...", id);
                 let _ = tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())), is_media: false });
             }
         }
@@ -1689,9 +1679,8 @@ async fn internal_connect(
                                     let text_str = text.to_string();
                                     let mut handled = false;
                                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
-                                        let state = app_read.state::<NetworkState>();
                                         if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
-                                            if let Some(tx) = state.response_channels.lock().unwrap().remove(req_id) {
+                                            if let Some(tx) = app_read.state::<NetworkState>().response_channels.lock().unwrap().remove(req_id) {
                                                 let _ = tx.send(val.clone());
                                                 handled = true;
                                             }
@@ -1699,16 +1688,90 @@ async fn internal_connect(
                                         if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
                                             match msg_type {
                                                 "auth_success" => {
-                                                    *state.is_authenticated.lock().unwrap() = true;
+                                                    let net_state = app_read.state::<NetworkState>();
+                                                    *net_state.is_authenticated.lock().unwrap() = true;
+                                                    
                                                     if let Some(token) = val.get("session_token").and_then(|t| t.as_str()) {
-                                                        *state.session_token.lock().unwrap() = Some(token.to_string());
+                                                        *net_state.session_token.lock().unwrap() = Some(token.to_string());
+                                                        
+                                                        // 🔐 ETERNAL SESSION: Persist new token back to the encrypted vault's KV store
+                                                        if let Some(id_hash) = net_state.identity_hash.lock().unwrap().as_ref() {
+                                                            let key = format!("entropy_meta_{}", id_hash);
+                                                            let token_str = token.to_string();
+                                                            
+                                                            // We must update the JSON structure used by the frontend
+                                                            let app_inner = app_read.clone();
+                                                            tokio::spawn(async move {
+                                                                let db_state = app_inner.state::<DbState>();
+                                                                let lock = db_state.conn.lock().unwrap();
+                                                                if let Some(conn) = lock.as_ref() {
+                                                                    let stmt = conn.prepare("SELECT value FROM kv_store WHERE key = ?1").ok();
+                                                                    if let Some(mut s) = stmt {
+                                                                        let existing_json: Option<String> = s.query_row(params![&key], |r| r.get(0)).ok();
+                                                                        let mut meta: Value = if let Some(j) = existing_json {
+                                                                            serde_json::from_str(&j).unwrap_or(json!({}))
+                                                                        } else {
+                                                                            json!({})
+                                                                        };
+                                                                        
+                                                                        meta["sessionToken"] = json!(token_str);
+                                                                        let updated_json = meta.to_string();
+                                                                        let _ = conn.execute(
+                                                                            "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?1, ?2)",
+                                                                            params![&key, &updated_json]
+                                                                        );
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
                                                     }
-                                                    let _ = app_read.emit("network-status", "authenticated");
+                                                    
+                                                    // Signal Hardening: Auto-replenish keys if they drop below threshold
+                                                    let count = val.get("otk_count").and_then(|c| c.as_u64()).unwrap_or(0);
+                                                    if count < 50 {
+                                                        let mut refill_lock = net_state.is_refilling.lock().unwrap();
+                                                        if !*refill_lock {
+                                                            *refill_lock = true;
+                                                            let delta = 100_u32.saturating_sub(count as u32);
+                                                            if delta > 0 {
+                                                                println!("[Signal] One-time prekeys are low ({}). Triggering smart refill (delta={})...", count, delta);
+                                                                let app_sync = app_read.clone();
+                                                                tokio::spawn(async move {
+                                                                    let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                                    *app_sync.state::<NetworkState>().is_refilling.lock().unwrap() = false;
+                                                                });
+                                                            } else {
+                                                                *refill_lock = false;
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    let _ = app_read.emit("network-status", json!({ "status": "authenticated", "token": net_state.session_token.lock().unwrap().clone() }));
+                                                    handled = true;
+                                                },
+                                                "keys_low" => {
+                                                    let count = val.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+                                                    let net_state = app_read.state::<NetworkState>();
+                                                    let mut refill_lock = net_state.is_refilling.lock().unwrap();
+                                                    if !*refill_lock {
+                                                        *refill_lock = true;
+                                                        let delta = 100_u32.saturating_sub(count as u32);
+                                                        if delta > 0 {
+                                                            tracing::warn!("[Signal] MOTK Pool Alert! Only {} keys remaining. Triggering smart refill (delta={})...", count, delta);
+                                                            let app_sync = app_read.clone();
+                                                            tokio::spawn(async move {
+                                                                let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                                *app_sync.state::<NetworkState>().is_refilling.lock().unwrap() = false;
+                                                            });
+                                                        } else {
+                                                            *refill_lock = false;
+                                                        }
+                                                    }
                                                     handled = true;
                                                 },
                                                 "delivery_error" => {
                                                     if let Some(t) = val.get("target").and_then(|t| t.as_str()) {
-                                                        state.halted_targets.lock().unwrap().insert(t.to_string());
+                                                        app_read.state::<NetworkState>().halted_targets.lock().unwrap().insert(t.to_string());
                                                     }
                                                     let _ = app_read.emit("network-warning", json!({ "type": val.get("reason"), "target": val.get("target") }));
                                                     handled = true;
@@ -1717,32 +1780,46 @@ async fn internal_connect(
                                                     if val.get("req_id").is_none() {
                                                         let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
                                                         let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
-                                                        let id = state.identity_hash.lock().unwrap().clone();
+                                                        let id = app_read.state::<NetworkState>().identity_hash.lock().unwrap().clone();
                                                         let modulus = val.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
+                                                        
                                                         if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
-                                                            let app_pow = app_read.clone();
-                                                            tokio::spawn(async move {
-                                                                let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                let app_inner = app_pow.clone();
-                                                                let sig_res = tauri::async_runtime::spawn_blocking(move || {
-                                                                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                                                                    rt.block_on(async move { SqliteSignalStore::new(app_inner).get_identity_key_pair().await })
-                                                                }).await.map_err(|e| e.to_string());
-                                                                let mut payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
-                                                                if let Ok(Ok(kp)) = sig_res {
-                                                                    let mut rng = rand::rngs::StdRng::from_os_rng();
-                                                                    let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
-                                                                    if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
-                                                                        payload["signature"] = json!(hex::encode(sig));
-                                                                        let mut pk = kp.identity_key().serialize().to_vec();
-                                                                        if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
-                                                                        payload["public_key"] = json!(hex::encode(pk));
+                                                            let app_inner = app_read.clone();
+                                                            
+                                                            // 🦾 Session Resumption: Try using token to bypass PoW
+                                                            let existing_token = app_inner.state::<NetworkState>().session_token.lock().unwrap().clone();
+                                                            if let Some(token) = existing_token {
+                                                                let app_inner = app_read.clone();
+                                                                tokio::spawn(async move {
+                                                                    let payload = json!({ "identity_hash": i, "session_token": token });
+                                                                    let auth_val = json!({"type": "auth", "payload": payload});
+                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
+                                                                });
+                                                            } else {
+                                                                // No token available -> Mining PoW
+                                                                tokio::spawn(async move {
+                                                                    let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
+                                                                    let app_sig = app_inner.clone();
+                                                                    let sig_res = tauri::async_runtime::spawn_blocking(move || {
+                                                                        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                                                                        rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await })
+                                                                    }).await.map_err(|e| e.to_string());
+                                                                    
+                                                                    let mut payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
+                                                                    if let Ok(Ok(kp)) = sig_res {
+                                                                        let mut rng = rand::rngs::StdRng::from_os_rng();
+                                                                        let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
+                                                                        if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
+                                                                            payload["signature"] = json!(hex::encode(sig));
+                                                                            let mut pk = kp.identity_key().serialize().to_vec();
+                                                                            if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
+                                                                            payload["public_key"] = json!(hex::encode(pk));
+                                                                        }
                                                                     }
-                                                                }
-                                                                if let Some(tx) = &*app_pow.state::<NetworkState>().sender.lock().unwrap() {
-                                                                    let _ = tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(json!({"type": "auth", "payload": payload}).to_string())), is_media: false });
-                                                                }
-                                                            });
+                                                                    let auth_val = json!({"type": "auth", "payload": payload});
+                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
+                                                                });
+                                                            }
                                                         }
                                                         handled = true;
                                                     }
@@ -1750,12 +1827,12 @@ async fn internal_connect(
                                                 "error" => {
                                                     if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
                                                         if code == "auth_failed" {
-                                                            *state.is_authenticated.lock().unwrap() = false;
+                                                            *app_read.state::<NetworkState>().is_authenticated.lock().unwrap() = false;
                                                             let _ = app_read.emit("network-status", "auth_failed");
                                                             handled = true;
                                                         }
                                                     }
-                                                }
+                                                },
                                                 _ => {}
                                             }
                                         }
@@ -1914,9 +1991,12 @@ pub async fn internal_send_to_network(
     is_binary: bool,
     is_media: bool
 ) -> Result<(), String> {
-    let sender_lock = state.sender.lock().unwrap();
-    if let Some(tx) = &*sender_lock {
+    let is_connected = state.sender.lock().unwrap().is_some();
+
+    if is_connected {
         if is_binary {
+            let sender_lock = state.sender.lock().unwrap();
+            let tx = sender_lock.as_ref().unwrap();
             let bytes = if let Some(d) = data {
                 d
             } else if let Some(m) = msg {
@@ -1929,97 +2009,69 @@ pub async fn internal_send_to_network(
                 // Determine Routing Hash and Payload Data
                 let (hash_bytes, data_bytes) = if let Some(h) = target_hash {
                     // Explicit target hash provided (Normal Flow)
-                    let h_padded = format!("{: <64}", h);
-                    (h_padded.as_bytes().to_vec(), bytes)
+                    let mut h_padded = vec![0u8; 64];
+                    let h_bytes = h.as_bytes();
+                    let len = std::cmp::min(h_bytes.len(), 64);
+                    h_padded[..len].copy_from_slice(&h_bytes[..len]);
+                    (h_padded, bytes)
                 } else {
-                    return Err("Missing target routing hash".into());
+                    // Control Transfer context (already binary wrapped/padded)
+                    (vec![0u8; 64], bytes)
                 };
-                
-                let target_hash_str = String::from_utf8_lossy(&hash_bytes).trim().to_string();
-                println!("[Network] Outgoing Binary Frame to: {} (Type: {})", target_hash_str, if is_media { "0x02" } else { "0x01" });
-                
-                 if is_media {
-                    // Reset halt state for this target before starting a new media transfer
-                    state.halted_targets.lock().unwrap().remove(&target_hash_str);
 
-                    // Universal Binary Frame for Media Fragments (Type 0x02)
-                    let total_len = data_bytes.len();
-                    let chunks = (total_len as f64 / (MEDIA_CHUNK_SIZE - 24) as f64).ceil() as usize;
-                    let transfer_id: u32 = rand::random();
-                    
+                let total_len = data_bytes.len();
+                let chunk_capacity = 1319; 
+                let transfer_id: u32 = rand::random();
+
+                if is_media {
+                    let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
+                    let target_hash_str = hex::encode(&hash_bytes);
+                    println!("[Media] Starting Paced Fragmented Send: size={} chunks={} tid={}", total_len, chunks, transfer_id);
+
                     for i in 0..chunks {
-                        // Check if we should halt due to a server-side delivery error
-                        if state.halted_targets.lock().unwrap().contains(&target_hash_str) {
-                            println!("[Network] Halting media transfer to {} due to delivery error.", target_hash_str);
-                            break;
-                        }
+                        if state.halted_targets.lock().unwrap().contains(&target_hash_str) { break; }
 
-                        let start = i * (MEDIA_CHUNK_SIZE - 24);
-                        let end = std::cmp::min(start + (MEDIA_CHUNK_SIZE - 24), total_len);
+                        let start = i * chunk_capacity;
+                        let end = std::cmp::min(start + chunk_capacity, total_len);
                         let chunk_data = &data_bytes[start..end];
                         
-                        let mut envelope = Vec::with_capacity(64 + 1 + 16 + chunk_data.len());
+                        let mut envelope = Vec::with_capacity(1400);
                         envelope.extend_from_slice(&hash_bytes); 
-                        envelope.push(0x02); // Type 0x02: Media
+                        envelope.push(0x02); 
                         envelope.extend_from_slice(&transfer_id.to_be_bytes());
                         envelope.extend_from_slice(&(i as u32).to_be_bytes());
                         envelope.extend_from_slice(&(chunks as u32).to_be_bytes());
                         envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
                         envelope.extend_from_slice(chunk_data);
                         
-                        TrafficNormalizer::pad_binary(&mut envelope);
-                        
-                        tx.send(PacedMessage {
-                            msg: Message::Binary(envelope.into()),
-                            is_media: true
-                        }).map_err(|e| e.to_string())?;
+                        tx.send(PacedMessage { msg: Message::Binary(envelope.into()), is_media: true }).map_err(|e| e.to_string())?;
                     }
                 } else {
-                    // Universal Binary Frame for Text/Handshake (Type 0x01)
-                    // NOW FRAGMENTED to ensure receiver stable reassembly for large payloads
-                    let total_len = data_bytes.len();
-                    let chunk_capacity = MEDIA_CHUNK_SIZE - 24; // (1400 - 24 = 1376 bytes per frame)
                     let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
-                    let transfer_id: u32 = rand::random();
+                    println!("[Net] Starting Relay Transfer (Type 0x01): size={} total_chunks={} tid={}", total_len, chunks, transfer_id);
 
                     for i in 0..chunks {
                         let start = i * chunk_capacity;
                         let end = std::cmp::min(start + chunk_capacity, total_len);
                         let chunk_data = &data_bytes[start..end];
                         
-                        let mut envelope = Vec::with_capacity(64 + 1 + 16 + chunk_data.len());
+                        let mut envelope = Vec::with_capacity(1400);
                         envelope.extend_from_slice(&hash_bytes); 
-                        envelope.push(0x01); // Type 0x01: Text
+                        envelope.push(0x01); 
                         envelope.extend_from_slice(&transfer_id.to_be_bytes());
                         envelope.extend_from_slice(&(i as u32).to_be_bytes());
                         envelope.extend_from_slice(&(chunks as u32).to_be_bytes());
                         envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
                         envelope.extend_from_slice(chunk_data);
                         
-                        TrafficNormalizer::pad_binary(&mut envelope);
-                        
-                        tx.send(PacedMessage {
-                            msg: Message::Binary(envelope.into()),
-                            is_media: false
-                        }).map_err(|e| e.to_string())?;
+                        tx.send(PacedMessage { msg: Message::Binary(envelope.into()), is_media: false }).map_err(|e| e.to_string())?;
                     }
                 }
             }
         } else {
             let actual_msg = msg.ok_or("Missing message text")?;
-            
-            // Re-fetch recipient from metadata or context if possible, 
-            // but for text relay 'process_outgoing_text' already passed the routing hash in 'data'
-            // if this is a direct call to send_to_network from elsewhere, we need the hash.
-            // For now, assume this is only for control messages (auth, pow) which STILL USE JSON.
-            
-            let mut val: serde_json::Value = serde_json::from_str(&actual_msg).map_err(|e| e.to_string())?;
-            TrafficNormalizer::pad_json(&mut val);
-            
-            tx.send(PacedMessage {
-                msg: Message::Text(Utf8Bytes::from(serde_json::to_string(&val).unwrap())),
-                is_media: false
-            }).map_err(|e| e.to_string())?;
+            let val: serde_json::Value = serde_json::from_str(&actual_msg).map_err(|e| e.to_string())?;
+            send_paced_json(&app, val).await?;
         }
         Ok(())
     } else {
@@ -2232,22 +2284,14 @@ pub async fn vault_load_media(app: tauri::AppHandle, state: State<'_, DbState>, 
 }
 
 #[tauri::command]
-pub fn vault_delete(app: tauri::AppHandle, state: State<'_, DbState>, key: String) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
-    if let Some(conn) = lock.as_ref() {
-        conn.execute("DELETE FROM kv_store WHERE key = ?1;", [key.clone()])
-            .map_err(|e: rusqlite::Error| e.to_string())?;
-    }
-
-    // Media clean up if prefixed with "att_"
-    if key.starts_with("att_") {
-        let id = &key[4..];
-        if let Ok(media_dir) = get_media_dir(&app, &state) {
-            let file_path = media_dir.join(id);
-            if file_path.exists() {
-                let _ = std::fs::remove_file(file_path);
-            }
-        }
+pub async fn vault_delete_media(app:  tauri::AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<DbState>();
+    let media_dir = get_media_dir(&app, &state)?;
+    let safe_id = id.replace("/", "").replace("..", "");
+    let file_path = media_dir.join(&safe_id);
+    
+    if file_path.exists() {
+        std::fs::remove_file(file_path).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -2285,12 +2329,10 @@ pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, t
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o755);
 
-    // 3. Add Database File
-    let mut buffer = Vec::new();
-    let mut f = std::fs::File::open(&src_path).map_err(|e| e.to_string())?;
-    f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+    // 3. Add Database File (Streaming copy to prevent memory exhaustion)
+    let mut f = std::fs::File::open(&src_path).map_err(|e| format!("Failed to open DB for export: {}", e))?;
     zip.start_file(filename, options).map_err(|e| e.to_string())?;
-    zip.write_all(&buffer).map_err(|e| e.to_string())?;
+    std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to stream DB to zip: {}", e))?;
 
     // 4. Add Media Folder Recursively
     let media_path = app_dir.join("media");
@@ -2387,6 +2429,12 @@ pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, s
         }
     }
 
+    // 4. Re-initialize database state
+    println!("[Import] Restore complete. Re-opening connection...");
+    let new_conn = rusqlite::Connection::open(&dest_path).map_err(|e| format!("Failed to re-open DB: {}", e))?;
+    let mut state_lock = state.conn.lock().unwrap();
+    *state_lock = Some(new_conn);
+    
     Ok(())
 }
 
@@ -2445,8 +2493,8 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
     Ok(pub_key_hex)
 }
 
-#[tauri::command]
-pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn signal_get_bundle(handle: tauri::AppHandle, count: Option<u32>) -> Result<serde_json::Value, String> {
+    let key_count = count.unwrap_or(100).min(200); // Limit to 200 max to prevent server abuse
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
@@ -2456,17 +2504,23 @@ pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, 
             let identity_key_pair = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
             let registration_id: u32 = store.get_local_registration_id().await.map_err(|e: SignalProtocolError| e.to_string())?;
 
-            println!("[Signal] Creating bundle for local user. RegistrationId: {}", registration_id);
+            println!("[Signal] Creating bundle for local user (keys_requested={}). RegistrationId: {}", key_count, registration_id);
 
-            // Generate PreKey
-            let pre_key_id = PreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
-            let pre_key_pair = KeyPair::generate(&mut rng);
-            let pre_key_record = PreKeyRecord::new(pre_key_id, &pre_key_pair);
-            println!("[Signal] Generated new PreKey: {}", u32::from(pre_key_id));
-            store.save_pre_key(pre_key_id, &pre_key_record).await.map_err(|e: SignalProtocolError| e.to_string())?;
+            // Generate X25519 PreKey Batch (Smart Top-up)
+            let mut pre_keys_json = Vec::new();
+            for _ in 0..key_count {
+                let id = PreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
+                let pair = KeyPair::generate(&mut rng);
+                let record = PreKeyRecord::new(id, &pair);
+                store.save_pre_key(id, &record).await.map_err(|e: SignalProtocolError| e.to_string())?;
+                pre_keys_json.push(serde_json::json!({
+                    "id": u32::from(id),
+                    "publicKey": hex::encode(pair.public_key.serialize())
+                }));
+            }
 
             // Generate Signed PreKey
-            let signed_pre_key_id = SignedPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
+            let signed_pre_key_id = SignedPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
             let signed_pre_key_pair = KeyPair::generate(&mut rng);
             let timestamp = Timestamp::from_epoch_millis(
                 std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
@@ -2478,7 +2532,7 @@ pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, 
             store.save_signed_pre_key(signed_pre_key_id, &signed_pre_key_record).await.map_err(|e: SignalProtocolError| e.to_string())?;
 
             // Generate Kyber PreKey
-            let kyber_pre_key_id = KyberPreKeyId::from(rand::random::<u32>() & 0x00FFFFFF);
+            let kyber_pre_key_id = KyberPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
             let kyber_pre_key_record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, kyber_pre_key_id, identity_key_pair.private_key())
                 .map_err(|e: SignalProtocolError| e.to_string())?;
             println!("[Signal] Generated new KyberPreKey: {}", u32::from(kyber_pre_key_id));
@@ -2487,10 +2541,7 @@ pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, 
             Ok(serde_json::json!({
                 "registrationId": registration_id,
                 "identityKey": hex::encode(identity_key_pair.identity_key().serialize()),
-                "preKey": {
-                    "id": u32::from(pre_key_id),
-                    "publicKey": hex::encode(pre_key_pair.public_key.serialize())
-                },
+                "preKeys": pre_keys_json,
                 "signedPreKey": {
                     "id": u32::from(signed_pre_key_id),
                     "publicKey": hex::encode(signed_pre_key_pair.public_key.serialize()),
@@ -2509,14 +2560,16 @@ pub fn signal_get_bundle(handle: tauri::AppHandle) -> Result<serde_json::Value, 
 #[tauri::command]
 pub fn signal_sync_keys(
     handle: AppHandle,
+    count: Option<u32>
 ) -> Result<(), String> {
     let handle_clone = handle.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
             let state = handle_clone.state::<NetworkState>();
-            // 1. Generate/Get Bundle (Using existing logic internally)
-            let raw_bundle = signal_get_bundle(handle_clone.clone()).map_err(|e| e.to_string())?;
+            
+            // 1. Generate/Get Bundle with precise top-up count
+            let raw_bundle = signal_get_bundle(handle_clone.clone(), count).map_err(|e| e.to_string())?;
             
             let id_hash = {
                 let lock = state.identity_hash.lock().unwrap();
@@ -2537,10 +2590,7 @@ pub fn signal_sync_keys(
                     "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
                     "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap()).unwrap()),
                 },
-                "preKeys": [{
-                    "id": raw_bundle["preKey"]["id"],
-                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["preKey"]["publicKey"].as_str().unwrap()).unwrap())
-                }],
+                "preKeys": raw_bundle["preKeys"],
                 "kyberPreKey": {
                     "id": raw_bundle["kyberPreKey"]["id"],
                     "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
@@ -2548,70 +2598,36 @@ pub fn signal_sync_keys(
                 }
             });
 
-            // 3. Fetch challenge via internal system request
-            println!("[Signal] Fetching PoW challenge for key upload...");
-            let challenge = internal_request(&state, "pow_challenge", json!({ "identity_hash": id_hash })).await?;
-            
-            let seed = challenge["seed"].as_str().ok_or("Missing seed in challenge")?.to_string();
-            let difficulty = challenge["difficulty"].as_u64().ok_or("Missing difficulty")? as u32;
-
-            // 4. Solve PoW
-            println!("[Signal] Solving PoW (diff={})...", difficulty);
-            let result = internal_mine_pow(seed.clone(), difficulty, id_hash.clone(), challenge.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string())).await;
-            println!("[Signal] PoW Solved. seed={} diff={} modulus={:?}", result["seed"], difficulty, result.get("modulus"));
-
-            // 5. Sign the challenge seed for proof of ownership
+            // 3. ZERO-POW: Skip challenge/mining, go straight to signing the ID hash
             let store = SqliteSignalStore::new(handle_clone.clone());
             let kp = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
             let mut rng = rand::rngs::StdRng::from_os_rng();
-            let seed_bytes = hex::decode(&seed).unwrap_or_else(|_| seed.as_bytes().to_vec());
-            let sig = kp.private_key().calculate_signature(&seed_bytes, &mut rng)
+            
+            // Signature is over the identity_hash to prove intent
+            let sig = kp.private_key().calculate_signature(id_hash.as_bytes(), &mut rng)
                 .map_err(|e| e.to_string())?;
 
-            // 6. Upload Keys
-            println!("[Signal] Uploading signed keys...");
+            // 4. Upload Keys with ownership proof
             let mut final_upload = bundle;
-            final_upload["seed"] = result["seed"].clone();
-            final_upload["nonce"] = result["nonce"].clone();
-            final_upload["modulus"] = result["modulus"].clone();
-            final_upload["difficulty"] = json!(difficulty);
-            final_upload["signature"] = json!(hex::encode(&sig));
-            
             let mut pk_bytes = kp.identity_key().serialize().to_vec();
             if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 {
                 pk_bytes.remove(0);
             }
             final_upload["identityKey"] = json!(hex::encode(&pk_bytes));
+            final_upload["signature"] = json!(hex::encode(&sig));
             
             let final_str = final_upload.to_string();
-            println!("[Signal] Uploading keys (size={} bytes)...", final_str.len());
+            let delta = count.unwrap_or(100);
+            println!("[Signal] Syncing keys (delta={}, size={} bytes)...", delta, final_str.len());
             
             let response = internal_request(&state, "keys_upload", final_upload).await?;
-            println!("[Signal] Key upload response received: {:?}", response);
-            
             if response["status"].as_str() == Some("success") {
-                println!("[Signal] Keys uploaded successfully.");
+                println!("[Signal] Keys synced successfully ({} added).", delta);
                 Ok(())
             } else {
                 let err = response["error"].as_str().unwrap_or("Unknown upload error");
-                println!("[Signal] Key upload failed: {}", err);
-                Err(err.to_string())
+                Err(format!("Key upload failed: {}", err))
             }
-        })
-    }).join().map_err(|_| "Thread panicked".to_string())?
-}
-
-#[tauri::command]
-pub fn signal_establish_session(
-    handle: tauri::AppHandle,
-    remote_hash: String,
-    bundle: serde_json::Value,
-) -> Result<(), String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async move {
-            let _db_state = handle.state::<DbState>();
-            internal_establish_session_logic(handle.clone(), &remote_hash, bundle).await
         })
     }).join().map_err(|_| "Thread panicked".to_string())?
 }
@@ -2628,55 +2644,6 @@ pub fn signal_encrypt(
             let _db_state = handle.state::<DbState>();
             let _net_state = handle.state::<NetworkState>();
             internal_signal_encrypt(handle.clone(), &_net_state, &remote_hash, message).await
-        })
-    }).join().map_err(|_| "Thread panicked".to_string())?
-}
-
-#[tauri::command]
-pub fn signal_decrypt(
-    handle: tauri::AppHandle,
-    remote_hash: String,
-    msg_obj: serde_json::Value,
-) -> Result<String, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async move {
-            let mut store = SqliteSignalStore::new(handle.clone());
-        let address = ProtocolAddress::new(remote_hash.clone(), DeviceId::try_from(1u32).expect("valid ID"));
-        let mut rng = StdRng::from_os_rng();
-
-        let message_type = msg_obj["type"].as_u64().ok_or("Missing type")? as u8;
-        let body_str = msg_obj["body"].as_str().ok_or("Missing body")?;
-        let message_body = base64::engine::general_purpose::STANDARD.decode(body_str)
-            .map_err(|e| format!("Base64 decode failed: {}", e))?;
-
-        println!("[Signal] Decrypting message from {} (type={})", remote_hash, message_type);
-
-        let ciphertext_type = CiphertextMessageType::try_from(message_type)
-            .map_err(|_| "Invalid message type")?;
-
-        let ciphertext = match ciphertext_type {
-            CiphertextMessageType::Whisper => CiphertextMessage::SignalMessage(
-                libsignal_protocol::SignalMessage::try_from(message_body.as_slice()).map_err(|e: SignalProtocolError| e.to_string())?
-            ),
-            CiphertextMessageType::PreKey => CiphertextMessage::PreKeySignalMessage(
-                libsignal_protocol::PreKeySignalMessage::try_from(message_body.as_slice()).map_err(|e: SignalProtocolError| e.to_string())?
-            ),
-            _ => return Err("Unsupported ciphertext type".into()),
-        };
-
-        let ptext = message_decrypt(
-            &ciphertext,
-            &address,
-            &mut store.clone(),
-            &mut store.clone(),
-            &mut store.clone(),
-            &store.clone(),
-            &mut store,
-            &mut rng,
-        ).await.map_err(|e: SignalProtocolError| e.to_string())?;
-
-        String::from_utf8(ptext).map_err(|e| e.to_string())
         })
     }).join().map_err(|_| "Thread panicked".to_string())?
 }
@@ -2723,9 +2690,18 @@ pub async fn signal_set_peer_trust(state: tauri::State<'_, DbState>, address: St
     let lock = state.conn.lock().unwrap();
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
+    // 1. Update Signal Identity Store (Standard Signal address format)
+    let signal_addr = if !address.contains(':') { format!("{}:1", address) } else { address.clone() };
     conn.execute(
         "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
-        params![trust_level, address],
+        params![trust_level, signal_addr],
+    ).map_err(|e| e.to_string())?;
+
+    // 2. Sync to Contacts Table (UI address format)
+    let contact_hash = address.split(':').next().unwrap_or(&address);
+    conn.execute(
+        "UPDATE contacts SET trust_level = ?1 WHERE hash = ?2",
+        params![trust_level, contact_hash],
     ).map_err(|e| e.to_string())?;
 
     Ok(())
@@ -2830,7 +2806,7 @@ pub async fn signal_get_fingerprint(
 
     Ok(json!({
         "digits": digits,
-        "isVerified": trust_level == 1
+        "trustLevel": trust_level
     }))
 }
 
@@ -2865,6 +2841,118 @@ pub async fn db_set_message_starred(state: tauri::State<'_, DbState>, id: String
         (if is_starred { 1 } else { 0 }, id),
     ).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn db_delete_chat(
+    app: AppHandle,
+    state: State<'_, DbState>,
+    address: String
+) -> Result<(), String> {
+    let mut conn_lock = state.conn.lock().unwrap();
+    let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
+    
+    // 1. Fetch message IDs to clean media
+    let mut stmt = conn.prepare("SELECT id FROM messages WHERE chat_address = ?")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([&address], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    
+        for id in rows.flatten() {
+            let id_clone = id.clone();
+            let app_h = app.clone();
+            tokio::spawn(async move {
+                let _ = vault_delete_media(app_h, id_clone).await;
+            });
+        }
+
+    // 2. Wipe everything from Disk
+    conn.execute("DELETE FROM messages WHERE chat_address = ?", [&address])
+        .map_err(|e| e.to_string())?;
+        
+    conn.execute("DELETE FROM chats WHERE address = ?", [&address])
+        .map_err(|e| e.to_string())?;
+        
+    Ok(())
+}
+
+#[tauri::command]
+pub fn register_nickname(
+    handle: tauri::AppHandle,
+    nickname: String
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = handle.state::<NetworkState>();
+            let id_hash = {
+                let lock = state.identity_hash.lock().unwrap();
+                lock.clone().ok_or("No identity hash in network state")?
+            };
+
+            println!("[Identity] Requesting Global Nickname '{}' for ID {}", nickname, id_hash);
+            
+            // 🛡️ SIGNATURE REQUIRED: Proving ownership of the hash without PoW
+            let store = SqliteSignalStore::new(handle.clone());
+            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            
+            let payload = format!("NICKNAME_REGISTER:{}", nickname);
+            let sig = kp.private_key().calculate_signature(payload.as_bytes(), &mut rng)
+                .map_err(|e| e.to_string())?;
+                
+            let mut pk_bytes = kp.identity_key().serialize().to_vec();
+            if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 { pk_bytes.remove(0); }
+
+            let res = internal_request(&state, "nickname_register", json!({
+                "identity_hash": id_hash,
+                "nickname": nickname,
+                "public_key": hex::encode(&pk_bytes),
+                "signature": hex::encode(&sig)
+            })).await?;
+            
+            Ok(res)
+        })
+    }).join().map_err(|_| "Thread panic during nickname registration".to_string())?
+}
+
+#[tauri::command]
+pub fn burn_account(
+    handle: tauri::AppHandle
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = handle.state::<NetworkState>();
+            let id_hash = {
+                let lock = state.identity_hash.lock().unwrap();
+                lock.clone().ok_or("No identity hash in network state")?
+            };
+
+            println!("[Identity] Requesting Nuclear Burn for ID {}", id_hash);
+            
+            // 🚀 SIGNATURE REQUIRED: Server needs proof of ownership for Nuke
+            let store = SqliteSignalStore::new(handle.clone());
+            let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+            
+            let payload = format!("BURN_ACCOUNT:{}", id_hash);
+            let sig = kp.private_key().calculate_signature(payload.as_bytes(), &mut rng)
+                .map_err(|e| e.to_string())?;
+                
+            let mut pk_bytes = kp.identity_key().serialize().to_vec();
+            if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 { pk_bytes.remove(0); }
+
+            // Call the relay's account_burn
+            let res = internal_request(&state, "account_burn", json!({
+                "identity_hash": id_hash,
+                "public_key": hex::encode(&pk_bytes),
+                "signature": hex::encode(&sig)
+            })).await?;
+            
+            Ok(res)
+        })
+    }).join().map_err(|_| "Thread panic during account burn".to_string())?
 }
 
 #[tauri::command]
@@ -2920,14 +3008,12 @@ pub fn send_profile_update(
     _db_state: State<'_, crate::app_state::DbState>,
     net_state: State<'_, crate::app_state::NetworkState>,
     peer_hash: String,
-    alias: Option<String>,
-    pfp: Option<String>
+    alias: Option<String>
 ) -> Result<(), String> {
     tauri::async_runtime::block_on(async move {
         let message = json!({
             "type": "profile_update",
-            "alias": alias,
-            "pfp": pfp
+            "alias": alias
         }).to_string();
         if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
             let _ = internal_send_volatile(app.clone(), &net_state, &peer_hash, encrypted).await;
@@ -3083,8 +3169,13 @@ pub async fn process_incoming_binary(
     // Reassembly will handle the exact byte counts from fragments.
     let trimmed = &payload; 
 
-    if trimmed.len() < 64 {
-        return Ok(()); // Invalid or dummy
+    if trimmed.len() < 65 {
+        return Ok(()); // Invalid
+    }
+
+    // FAST-DROP 0x03 (Dummy Pacing from Relay)
+    if trimmed[64] == 0x03 {
+        return Ok(()); 
     }
 
     // 1. Extract Sender (Space-padded from server)
@@ -3132,6 +3223,12 @@ pub async fn process_incoming_binary(
         let total = u32::from_be_bytes(total_bytes.try_into().unwrap());
         let chunk_len = u32::from_be_bytes(len_bytes.try_into().unwrap()) as usize;
 
+        // Security: Prevent Fragment Bombing (Limit to ~10MB reassembly)
+        if total > 7680 {
+            tracing::warn!("[Security] Dropped Oversized Fragmented Payload from peer {} (total={} > max=7680)", sender, total);
+            return Err("Payload exceeds peer-to-peer reassembly limit".into());
+        }
+
         if raw_chunk_data.len() < chunk_len {
             eprintln!("[Network] Fragment truncated: expected {} bytes, got {}", chunk_len, raw_chunk_data.len());
             return Err("Fragment data too short".into());
@@ -3152,10 +3249,10 @@ pub async fn process_incoming_binary(
         entry.chunks.insert(index, chunk_data.to_vec());
         entry.last_activity = std::time::Instant::now();
         
-        if entry.chunks.len() >= total as usize {
+        if entry.chunks.len() >= entry.total as usize {
             // Reassembly complete
             let mut complete_data = Vec::new();
-            for i in 0..total {
+            for i in 0..entry.total {
                 if let Some(chunk) = entry.chunks.get(&i) {
                     complete_data.extend_from_slice(chunk);
                 }
@@ -3196,7 +3293,6 @@ pub async fn process_incoming_binary(
                                     address: gid.clone(),
                                     is_group: true,
                                     alias: Some(name.clone()),
-                                    pfp: None,
                                     last_msg: Some(format!("Group invite: {}", name)),
                                     last_timestamp: Some(chrono::Utc::now().timestamp_millis()),
                                     last_sender_hash: Some(sender.clone()),
@@ -3204,7 +3300,7 @@ pub async fn process_incoming_binary(
                                     unread_count: 1,
                                     is_archived: false,
                                     is_pinned: false,
-                                    is_verified: false,
+                                    trust_level: 1,
                                     is_blocked: false,
                                     members,
                                 };

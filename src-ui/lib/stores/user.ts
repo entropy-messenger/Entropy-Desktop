@@ -8,7 +8,6 @@ import { vaultSave } from '../persistence';
 export interface AppState {
     identityHash: string | null;
     globalNickname: string | null;
-    myPfp: string | null;
     chats: Record<string, Chat>;
     isConnected: boolean;
     activeChatHash: string | null;
@@ -26,7 +25,6 @@ export interface AppState {
 const initialState: AppState = {
     identityHash: null,
     globalNickname: null,
-    myPfp: null,
     chats: {},
     isConnected: false,
     activeChatHash: null,
@@ -36,7 +34,6 @@ const initialState: AppState = {
     privacySettings: {
         readReceipts: true,
         typingStatus: 'everyone',
-        profilePhoto: 'everyone',
         routingMode: 'direct',
         proxyUrl: 'socks5://127.0.0.1:9050',
         theme: 'dark'
@@ -71,7 +68,6 @@ async function performSave(state: AppState) {
     try {
         const metadata = {
             globalNickname: state.globalNickname,
-            myPfp: state.myPfp,
             blockedHashes: state.blockedHashes,
             privacySettings: state.privacySettings,
             sessionToken: state.sessionToken

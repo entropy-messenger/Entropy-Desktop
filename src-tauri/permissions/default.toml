@@ -13,9 +13,7 @@ commands.allow = [
     "flush_outbox",
     "nuclear_reset",
     "crypto_mine_pow",
-    "clear_vault",
     "vault_exists",
-    "vault_delete",
     "start_native_recording",
     "stop_native_recording",
     "save_file",
@@ -27,6 +25,7 @@ commands.allow = [
     "set_panic_password",
     "vault_save_media",
     "vault_load_media",
+    "vault_delete_media",
     "signal_sign_message",
     "signal_set_peer_trust",
     "signal_get_identity_hash",
@@ -45,11 +44,20 @@ commands.allow = [
     "db_set_contact_blocked",
     "db_set_contact_nickname",
     "db_delete_messages",
+    "db_delete_chat",
     "db_set_chat_pinned",
     "db_set_chat_archived",
     "db_set_message_starred",
+    "register_nickname",
+    "burn_account",
     "process_outgoing_text",
-    "process_outgoing_media"
+    "process_outgoing_media",
+    "signal_get_own_identity",
+    "signal_get_peer_identity",
+    "crypto_encrypt_media",
+    "crypto_encrypt_file",
+    "crypto_decrypt_media",
+    "crypto_sha256"
 ]
 
 [[set]]

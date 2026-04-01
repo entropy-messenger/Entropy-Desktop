@@ -41,7 +41,7 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
                 content,
                 replyTo: state.replyingTo ? {
                     id: state.replyingTo.id,
-                    content: state.replyingTo.content,
+                    content: state.replyingTo.content.length > 200 ? state.replyingTo.content.substring(0, 197) + '...' : state.replyingTo.content,
                     senderHash: state.replyingTo.senderHash,
                     senderAlias: state.replyingTo.senderAlias,
                     type: state.replyingTo.type
@@ -112,9 +112,17 @@ export const addMessage = async (peerHash: string, msg: Message) => {
     let updatedChatMetadata: Chat | null = null;
 
     // 2. Update Chat Metadata (Brain/Store)
+    let isNewChat = false;
     userStore.update(s => {
         if (!s.chats[peerHash]) {
-            s.chats[peerHash] = { peerHash, peerNickname: peerHash.slice(0, 8), unreadCount: 0, isGroup: !!msg.groupId };
+            isNewChat = true;
+            s.chats[peerHash] = {
+                peerHash,
+                peerNickname: peerHash.slice(0, 8),
+                unreadCount: 0,
+                isGroup: !!msg.groupId,
+                trustLevel: 1
+            };
         }
         const chat = { ...s.chats[peerHash] };
         chat.lastMsg = msg.content;
@@ -146,6 +154,23 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         syncChatToDb(updatedChatMetadata);
         const s = get(userStore);
         if (!msg.isMine && s.activeChatHash !== peerHash) triggerNativeNotification(updatedChatMetadata, msg);
+
+        // 5. Automated Identity Guard (New & Recurring)
+        const now = Date.now();
+        const lastCheck = (updatedChatMetadata as any).lastIdentityCheck || 0;
+        const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 Hour
+
+        if (!msg.groupId && (isNewChat || (now - lastCheck > REFRESH_INTERVAL))) {
+            // Update the check timestamp locally first to prevent triple-firing
+            userStore.update(st => {
+                if (st.chats[peerHash]) st.chats[peerHash].lastIdentityCheck = now;
+                return { ...st, chats: { ...st.chats } };
+            });
+
+            import('./contacts').then(({ resolveIdentity }) => {
+                resolveIdentity(peerHash);
+            });
+        }
     }
 };
 
@@ -157,7 +182,6 @@ export const syncChatToDb = async (chat: Chat) => {
                 address: chat.peerHash,
                 is_group: !!chat.isGroup,
                 alias: chat.peerNickname || null,
-                pfp: chat.pfp || null,
                 last_msg: chat.lastMsg || null,
                 last_timestamp: chat.lastTimestamp || null,
                 last_sender_hash: chat.lastSenderHash || null,
@@ -165,7 +189,6 @@ export const syncChatToDb = async (chat: Chat) => {
                 unread_count: chat.unreadCount || 0,
                 is_archived: !!chat.isArchived,
                 is_pinned: !!chat.isPinned,
-                is_verified: !!chat.isVerified,
                 is_blocked: !!chat.isBlocked,
                 members: chat.members || null
             }
@@ -179,10 +202,10 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
     const state = get(userStore);
     if (state.blockedHashes.includes(peerHash)) return;
     if (status === 'read' && !state.privacySettings.readReceipts) return;
-    
+
     try {
         await invoke('send_receipt', { peerHash, msgIds, status });
-        
+
         // Also update our own local state to reflect that we've read/received these
         messageStore.update(mStore => {
             if (!mStore[peerHash]) return mStore;
@@ -191,16 +214,15 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
         });
 
         if (status === 'read') {
-             userStore.update(s => {
+            userStore.update(s => {
                 const chat = s.chats[peerHash];
                 if (chat) {
-                    chat.unreadCount = 0;
-                    s.chats[peerHash] = { ...chat };
+                    s.chats[peerHash] = { ...chat, unreadCount: 0 };
                 }
                 return { ...s, chats: { ...s.chats } };
             });
             // Persist the status to DB
-            invoke('db_update_messages_status', { chat_address: peerHash, ids: msgIds, status: 'read' }).catch(console.error);
+            invoke('db_update_messages_status', { chatAddress: peerHash, ids: msgIds, status: 'read' }).catch(console.error);
         }
     } catch (e) {
         console.error("[Chat] Send receipt failed:", e);
@@ -243,7 +265,7 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
             ...mStore,
             [peerHash]: messages.sort((a, b) => a.timestamp - b.timestamp)
         }));
-        
+
         return messages.length;
     } catch (e) {
         console.error("[Chat] Load failed:", e);
@@ -254,13 +276,26 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
 export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
     msgIds.forEach(id => {
         attachmentCache.delete(id);
-        invoke('vault_delete_media', { id }).catch(() => {});
+        invoke('vault_delete_media', { id }).catch(() => { });
     });
     messageStore.update(mStore => {
         if (mStore[peerHash]) mStore[peerHash] = mStore[peerHash].filter(m => !msgIds.includes(m.id));
         return { ...mStore };
     });
     await invoke('db_delete_messages', { ids: msgIds });
+};
+
+export const deleteChat = async (peerHash: string) => {
+    userStore.update(s => {
+        delete s.chats[peerHash];
+        if (s.activeChatHash === peerHash) s.activeChatHash = null;
+        return { ...s, chats: { ...s.chats } };
+    });
+    messageStore.update(mStore => {
+        delete mStore[peerHash];
+        return { ...mStore };
+    });
+    await invoke('db_delete_chat', { address: peerHash });
 };
 
 export const bulkDelete = deleteMessage;
@@ -295,8 +330,10 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
     });
     userStore.update(s => {
         if (s.chats[peerHash]) {
-            // Updated status for last message if it's in the list
-            s.chats[peerHash].lastStatus = status;
+            s.chats[peerHash] = {
+                ...s.chats[peerHash],
+                lastStatus: status
+            };
         }
         return { ...s, chats: { ...s.chats } };
     });
@@ -308,7 +345,7 @@ export const markAsDownloaded = async (peerHash: string, msgId: string) => {
         const msgs = mStore[peerHash].map(m => {
             if (m.id === msgId && m.attachment) {
                 const updatedMsg = { ...m, attachment: { ...m.attachment, isDownloaded: true } };
-                invoke('db_save_message', { 
+                invoke('db_save_message', {
                     msg: {
                         id: updatedMsg.id,
                         chatAddress: peerHash,

@@ -7,6 +7,7 @@
     LucideMoreVertical, LucideSearch, LucideCheckCircle, LucideEdit2, 
     LucideStar, LucideTrash2, LucideInfo, LucideCheck as LucideCheckIcon, LucideBan, LucideShieldCheck, LucideX
   } from 'lucide-svelte';
+  import Avatar from './Avatar.svelte';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import type { Chat } from '../lib/types';
 
@@ -61,19 +62,14 @@
           addToast("Failed to set nickname", 'error');
       }
   };
+
+  const currentTypingStatus = $derived($userStore.privacySettings.typingStatus);
+  const canSeeTyping = $derived(currentTypingStatus !== 'nobody');
 </script>
 
 <div class="bg-entropy-surface/95 backdrop-blur-md p-3 px-4 flex justify-between items-center shadow-sm z-30">
     <div class="flex items-center space-x-3 overflow-hidden cursor-pointer" onclick={onViewImage} onkeydown={(e) => e.key === 'Enter' && onViewImage()} role="button" tabindex="0">
-        <button 
-            class="w-10 h-10 rounded-xl bg-gradient-to-tr {activeChat.isGroup ? 'from-purple-500 to-indigo-600' : 'from-blue-400 to-blue-600'} shrink-0 flex items-center justify-center text-white font-bold shadow-sm relative overflow-hidden active:scale-95 transition-transform"
-        >
-            {#if activeChat.pfp}
-                <img src={activeChat.pfp} alt="" class="w-full h-full object-cover" />
-            {:else}
-                {activeChat.peerNickname ? activeChat.peerNickname[0].toUpperCase() : '?'}
-            {/if}
-        </button>
+        <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" />
         <div class="min-w-0">
             <div class="flex items-center space-x-2">
                 <div class="font-bold text-entropy-text-primary leading-tight truncate">
@@ -83,8 +79,8 @@
                     <LucideShieldCheck size={14} class="text-entropy-accent" />
                 {/if}
             </div>
-            <div class="text-[11px] font-medium h-4 truncate {activeChat.isTyping ? 'text-entropy-accent animate-pulse' : 'text-entropy-text-dim'}">
-                {activeChat.isTyping ? "typing..." : ""}
+            <div class="text-[11px] font-medium h-4 truncate {activeChat.isTyping && canSeeTyping ? 'text-entropy-accent animate-pulse' : 'text-entropy-text-dim'}">
+                {activeChat.isTyping && canSeeTyping ? "typing..." : ""}
             </div>
         </div>
     </div>

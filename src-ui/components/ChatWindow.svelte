@@ -148,7 +148,7 @@
                 {selectionMode}
                 bind:selectedIds
                 {showMessageSearch}
-                onViewImage={() => activeChat && activeChat.pfp && (viewingImage = activeChat.pfp)}
+                onViewImage={() => {}}
                 onCancelSelection={() => {selectionMode = false; selectedIds = [];}}
                 onToggleSearch={() => showMessageSearch = !showMessageSearch}
                 onShowGallery={() => showGallery = true}
@@ -231,7 +231,7 @@
                     {/if}
                 {/each}
 
-                {#if activeChat.isTyping}
+                {#if activeChat.isTyping && $userStore.privacySettings.typingStatus !== 'nobody'}
                     <div class="flex items-center space-x-2 p-2 px-4 py-2.5 bg-entropy-surface-light/80 backdrop-blur-md rounded-2xl w-fit animate-in fade-in slide-in-from-bottom-2 duration-300 ml-4 mb-4 shadow-sm">
                         <div class="flex space-x-1">
                             <div class="w-1.5 h-1.5 bg-entropy-primary rounded-full animate-bounce [animation-delay:-0.3s]"></div>

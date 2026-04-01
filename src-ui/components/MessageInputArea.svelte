@@ -147,7 +147,7 @@
                         <div class="text-[10px] font-black text-entropy-primary truncate uppercase tracking-widest mb-0.5">
                             {replyingTo.isMine ? 'You' : (replyingTo.senderAlias || replyingTo.senderHash.slice(0, 8))}
                         </div>
-                        <div class="text-xs text-entropy-text-secondary truncate opacity-80">{replyingTo.content}</div>
+                        <div class="text-xs text-entropy-text-secondary line-clamp-2 opacity-80 break-words">{replyingTo.content}</div>
                     </div>
                     <button onclick={() => setReplyingTo(null)} class="p-1.5 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-red-500 transition-colors">
                         <LucideX size={16} />

@@ -40,6 +40,7 @@ fn main() {
             halted_targets: Mutex::new(std::collections::HashSet::new()),
             media_assembler: Mutex::new(std::collections::HashMap::new()),
             pending_media_links: Mutex::new(std::collections::HashMap::new()),
+            is_refilling: Mutex::new(false),
         })
         .manage(AudioState {
             recorder: Mutex::new(AudioRecorder::new()),
@@ -61,9 +62,7 @@ fn main() {
             commands::flush_outbox,
             commands::nuclear_reset,
             commands::crypto_mine_pow,
-            commands::clear_vault,
             commands::vault_exists,
-            commands::vault_delete,
             commands::start_native_recording,
             commands::stop_native_recording,
             commands::save_file,
@@ -76,6 +75,7 @@ fn main() {
             commands::set_panic_password,
             commands::vault_save_media,
             commands::vault_load_media,
+            commands::vault_delete_media,
             commands::signal_sign_message,
             commands::signal_get_peer_identity,
             commands::signal_set_peer_trust,
@@ -92,6 +92,7 @@ fn main() {
             commands::db_update_messages_status,
             commands::db_upsert_chat,
             commands::db_get_chats,
+            commands::db_delete_chat,
             commands::db_get_contacts,
             commands::db_set_contact_blocked,
             commands::db_set_contact_nickname,
@@ -99,6 +100,8 @@ fn main() {
             commands::db_set_chat_archived,
             commands::db_set_message_starred,
             commands::db_delete_messages,
+            commands::register_nickname,
+            commands::burn_account,
             commands::process_outgoing_text,
             commands::process_outgoing_media
         ])

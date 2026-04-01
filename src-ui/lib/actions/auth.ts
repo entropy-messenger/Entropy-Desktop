@@ -36,7 +36,6 @@ export const initApp = async (password: string) => {
     if (idHash) {
         let chats: Record<string, Chat> = {};
         let globalNickname: string | null = null;
-        let myPfp: string | null = null;
         let sessionToken: string | null = null;
         let blockedHashes: string[] = [];
         let privacySettings: any = {
@@ -52,8 +51,7 @@ export const initApp = async (password: string) => {
             try {
                 const meta = JSON.parse(savedMeta);
                 globalNickname = meta.globalNickname || meta.myAlias || null;
-                myPfp = meta.myPfp || null;
-                sessionToken = meta.sessionToken || null;
+                sessionToken = meta.sessionToken || meta.session_token || null;
                 privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
                 console.error("Failed to parse vault metadata:", e);
@@ -69,22 +67,21 @@ export const initApp = async (password: string) => {
             for (const c of dbChats) {
                 chats[c.address] = {
                     peerHash: c.address,
-                    isGroup: c.isGroup,
+                    isGroup: c.is_group || c.isGroup || false,
                     peerNickname: c.alias,
-                    pfp: c.pfp,
                     members: c.members || undefined,
                     messages: [],
-                    unreadCount: c.unreadCount,
-                    isArchived: c.isArchived,
-                    isPinned: c.isPinned,
-                    isVerified: c.isVerified,
-                    isBlocked: c.isBlocked,
+                    unreadCount: c.unread_count || c.unreadCount || 0,
+                    isArchived: c.is_archived || c.isArchived || false,
+                    isPinned: c.is_pinned || c.isPinned || false,
+                    trustLevel: c.trust_level || c.trustLevel || 1,
+                    isBlocked: c.is_blocked || c.isBlocked || false,
                     isTyping: false,
-                    lastMsg: c.lastMsg,
-                    lastTimestamp: c.lastTimestamp,
-                    lastStatus: c.lastStatus,
-                    lastIsMine: c.lastSenderHash === idHash,
-                    lastSenderHash: c.lastSenderHash
+                    lastMsg: c.last_msg || c.lastMsg,
+                    lastTimestamp: c.last_timestamp || c.lastTimestamp,
+                    lastStatus: c.last_status || c.lastStatus,
+                    lastIsMine: (c.last_sender_hash || c.lastSenderHash) === idHash,
+                    lastSenderHash: c.last_sender_hash || c.lastSenderHash
                 };
             }
         } catch (e) {
@@ -96,7 +93,6 @@ export const initApp = async (password: string) => {
             identityHash: idHash,
             chats,
             globalNickname,
-            myPfp,
             sessionToken,
             blockedHashes,
             privacySettings,
@@ -152,36 +148,25 @@ export const createIdentity = async (password: string) => {
  * Requires solving a high-difficulty PoW to authorize the network-wide erasure.
  */
 export const burnAccount = async () => {
-    if (await showConfirm("DANGER: This will permanently purge your account from the network and your local data. This cannot be undone. Are you sure?", "Nuclear Burn")) {
-        const state = get(userStore);
-        if (state.identityHash) {
-            try {
-                addToast("Authenticating burn request (Native)...", 'info');
-                const response = await invoke<any>('burn_account');
+    if (!await showConfirm("TOTAL SCORCHED EARTH: This will permanently purge your local database and attempt to wipe your network presence. This CANNOT be undone. Are you sure?", "Nuclear Burn")) return;
 
-                if (response.status === 'success') {
-                    console.log("[Account] Network burn successful.");
-                    addToast("Server account deleted.", 'success');
-                } else {
-                    console.error("[Account] Network burn failed:", response.error);
-                    addToast("Server deletion failed: " + response.error, 'error');
-                    if (!await showConfirm("Server-side deletion failed. Wipe local data and restart anyway?", "Relay Error")) return;
-                }
-            } catch (e: any) {
-                console.error("[Account] Burn command failed:", e);
-                if (!await showConfirm("Relay burn failed (Network Error). Wipe local data anyway?", "Relay Error")) return;
-            }
-        }
+    const state = get(userStore);
+    
+    // 1. Silent Background server burn
+    if (state.identityHash) {
+        invoke('burn_account').catch(() => {});
     }
 
+    // 2. Immediate Local Wipe
     try {
         localStorage.clear();
-        addToast("Local data wiped. Restarting Entropy...", 'info');
-        await new Promise(r => setTimeout(r, 2000));
+        
+        // 1s buffer for the network packet
+        await new Promise(r => setTimeout(r, 1000));
+        
         await invoke('nuclear_reset');
     } catch (err) {
-        console.error("Local wipe/restart failed:", err);
-        addToast("Critical: Local reset failed - " + err, 'error');
+        console.error("[Account] Burn Failed:", err);
     }
 }
 

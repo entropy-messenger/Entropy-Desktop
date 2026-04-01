@@ -42,10 +42,10 @@
             tabindex="0" 
             class="bg-black/10 dark:bg-white/5 backdrop-blur-sm p-2 px-3 rounded-lg border-l-2 border-entropy-primary mb-2 cursor-pointer hover:bg-black/15 dark:hover:bg-white/10 transition-all active:scale-[0.98] overflow-hidden"
         >
-            <div class="text-[10px] font-black {isMine ? 'text-white/90' : 'text-entropy-primary'} truncate leading-tight uppercase tracking-widest mb-0.5">
+            <div class="text-[10px] font-black {isMine ? 'text-white/90' : 'text-entropy-primary'} line-clamp-1 leading-tight uppercase tracking-widest mb-0.5">
                 {isReplyToMine ? 'You' : (msg.replyTo.senderAlias || msg.replyTo.senderHash?.slice(0, 8) || 'Peer')}
             </div>
-            <div class="{isMine ? 'text-white/80' : 'text-entropy-text-secondary'} text-[11px] truncate opacity-90 leading-tight">
+            <div class="{isMine ? 'text-white/80' : 'text-entropy-text-secondary'} text-[11px] line-clamp-2 opacity-90 leading-tight break-words">
                 {msg.replyTo.content}
             </div>
         </div>
@@ -60,9 +60,10 @@
                     {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </span>
                 {#if isMine}
+                    {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
                     <div class="flex items-center scale-90 translate-y-[0.5px]">
-                        {#if msg.status === 'read'}<LucideCheckCheck size={11} class="text-cyan-400" />
-                        {:else if msg.status === 'delivered'}<LucideCheckCheck size={11} class="text-white/90" />
+                        {#if msg.status === 'read' && canSeeReceipts}<LucideCheckCheck size={11} class="text-cyan-400" />
+                        {:else if msg.status === 'read' || msg.status === 'delivered'}<LucideCheckCheck size={11} class="text-white/90" />
                         {:else}<LucideCheck size={11} class="text-white/90" />{/if}
                     </div>
                 {/if}
@@ -81,10 +82,11 @@
                         {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                     </span>
                     {#if isMine}
+                        {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
                         <div class="flex items-center scale-90 translate-y-[0.5px] opacity-70">
-                            {#if msg.status === 'read'}
+                            {#if msg.status === 'read' && canSeeReceipts}
                                 <LucideCheckCheck size={11} class="text-cyan-300" />
-                            {:else if msg.status === 'delivered'}
+                            {:else if msg.status === 'read' || msg.status === 'delivered'}
                                 <LucideCheckCheck size={11} class="text-white" />
                             {:else}
                                 <LucideCheck size={11} class="text-white" />

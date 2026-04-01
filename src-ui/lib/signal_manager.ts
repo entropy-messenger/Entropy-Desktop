@@ -75,14 +75,14 @@ export class SignalManager {
         }
     }
 
-    async getFingerprint(recipientHash: string): Promise<{ digits: string, isVerified: boolean }> {
+    async getFingerprint(recipientHash: string): Promise<{ digits: string, trustLevel: number }> {
         try {
             const result = await invoke<any>('signal_get_fingerprint', {
-                remote_hash: recipientHash
+                remoteHash: recipientHash
             });
             return {
                 digits: result.digits,
-                isVerified: !!result.isVerified
+                trustLevel: result.trustLevel
             };
         } catch (e: any) {
             console.error("[Signal] Fingerprint retrieval failed:", e);
@@ -90,11 +90,11 @@ export class SignalManager {
         }
     }
 
-    async verifySession(peerHash: string, isVerified: boolean): Promise<void> {
+    async verifySession(peerHash: string, trustLevel: number): Promise<void> {
         try {
             await invoke('signal_set_peer_trust', {
                 address: peerHash,
-                trust_level: isVerified ? 2 : 0 // 2=verified, 0=unverified
+                trustLevel // 0=untrusted, 1=trusted, 2=verified
             });
         } catch (e: any) {
             console.error("[Signal] Session verification failed:", e);

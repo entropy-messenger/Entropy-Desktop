@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
   import { leaveGroup, addToGroup } from '../lib/actions/groups';
-  import { toggleBlock, toggleVerification } from '../lib/actions/contacts';
+  import { toggleBlock, setTrustLevel } from '../lib/actions/contacts';
   import { signalManager } from '../lib/signal_manager';
   import { 
     LucideX, LucideShieldCheck, LucideShieldAlert, LucideInfo,
@@ -9,12 +9,13 @@
     LucideCopy, LucideLoader, LucideExternalLink
   } from 'lucide-svelte';
   import MediaThumbnail from './MediaThumbnail.svelte';
+  import Avatar from './Avatar.svelte';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import type { Chat } from '../lib/types';
   
   let { activeChat, onClose, onScrollToMessage } = $props<{ activeChat: Chat, onClose: () => void, onScrollToMessage: (id: string) => void }>();
 
-  let safetyNumber = $state<{ digits: string; isVerified: boolean } | null>(null);
+  let safetyNumber = $state<{ digits: string; trustLevel: number } | null>(null);
   let loadingSafetyNumber = $state(false);
 
   async function loadSafetyNumber() {
@@ -26,6 +27,13 @@
     try {
         const result = await signalManager.getFingerprint(activeChat.peerHash);
         safetyNumber = result;
+        // Keep store in sync if it's different
+        if (activeChat.trustLevel !== result.trustLevel) {
+            userStore.update(s => {
+                if (s.chats[activeChat.peerHash]) s.chats[activeChat.peerHash].trustLevel = result.trustLevel;
+                return s;
+            });
+        }
     } catch (e) {
         console.error("Error loading safety number:", e);
     } finally {
@@ -59,14 +67,18 @@
     
     <div class="p-6 flex-1 overflow-y-auto custom-scrollbar space-y-8">
         <div class="flex flex-col items-center space-y-4">
-            <div class="w-24 h-24 rounded-3xl bg-entropy-surface flex items-center justify-center text-entropy-primary text-3xl font-bold shadow-xl">
-                {#if activeChat.pfp}<img src={activeChat.pfp} alt="" class="w-full h-full object-cover rounded-3xl" />{:else}{(activeChat.localNickname || activeChat.peerNickname || '?')[0].toUpperCase()}{/if}
-            </div>
+            <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-24 h-24" textSize="text-3xl" rounded="rounded-3xl" />
             <div class="text-center">
                 <div class="flex items-center justify-center space-x-2">
                     <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerNickname || 'Peer'}</h3>
-                    {#if !activeChat.isGroup && activeChat.isVerified}
-                        <LucideShieldCheck size={18} class="text-entropy-accent" />
+                    {#if !activeChat.isGroup}
+                        {#if activeChat.trustLevel >= 2}
+                            <LucideShieldCheck size={18} class="text-green-500" />
+                        {:else if activeChat.trustLevel === 0}
+                            <LucideShieldAlert size={18} class="text-red-500" />
+                        {:else}
+                            <LucideShieldCheck size={18} class="text-entropy-text-dim opacity-50" />
+                        {/if}
                     {/if}
                 </div>
                 {#if activeChat.localNickname && activeChat.peerNickname}
@@ -77,18 +89,24 @@
         </div>
 
         {#if !activeChat.isGroup}
+            {@const currentTrust = $userStore.chats[activeChat.peerHash]?.trustLevel ?? 1}
             <div class="space-y-4 pt-2">
                  <div class="flex items-center justify-between">
-                    <h4 class="text-[10px] font-black text-entropy-text-dim uppercase tracking-[0.1em]">Identity Verification</h4>
-                     {#if activeChat.isVerified}
-                        <div class="flex items-center space-x-1 text-entropy-accent animate-in fade-in zoom-in duration-300">
+                     <h4 class="text-[10px] font-black text-entropy-text-dim uppercase tracking-[0.1em]">Identity Verification</h4>
+                     {#if currentTrust >= 2}
+                        <div class="flex items-center space-x-1 text-green-500 animate-in fade-in zoom-in duration-300">
                             <LucideShieldCheck size={12} />
-                            <span class="text-[9px] font-black uppercase">Verified</span>
+                            <span class="text-[9px] font-black uppercase tracking-widest">Verified Identity</span>
+                        </div>
+                    {:else if currentTrust === 0}
+                        <div class="flex items-center space-x-1 text-red-500 animate-pulse">
+                            <LucideShieldAlert size={12} />
+                            <span class="text-[9px] font-black uppercase tracking-widest text-red-500">Identity Mismatch</span>
                         </div>
                     {:else}
-                        <div class="flex items-center space-x-1 text-red-500/80">
-                            <LucideShieldAlert size={12} />
-                            <span class="text-[9px] font-black uppercase">Unverified</span>
+                        <div class="flex items-center space-x-1 text-orange-500/80">
+                            <LucideShieldCheck size={12} />
+                            <span class="text-[9px] font-black uppercase tracking-widest">Trusted</span>
                         </div>
                     {/if}
                  </div>
@@ -108,27 +126,29 @@
                             {/each}
                         </div>
 
-                        <div class="pt-2">
+                         <div class="pt-2">
                             <button 
                                 onclick={async () => {
-                                    const verified = !activeChat!.isVerified;
-                                    await toggleVerification(activeChat!.peerHash, verified);
-                                    if (safetyNumber) safetyNumber.isVerified = verified;
-                                    addToast(verified ? "Session Verified" : "Verification Removed", verified ? 'success' : 'info');
+                                    const nextLevel = currentTrust >= 2 ? 1 : 2;
+                                    await setTrustLevel(activeChat!.peerHash, nextLevel);
+                                    addToast(nextLevel === 2 ? "Identity Verified" : "Verification Reset", nextLevel === 2 ? 'success' : 'info');
                                 }}
                                 class="w-full py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-[0.98] shadow-lg
-                                {activeChat.isVerified 
+                                {currentTrust >= 2
                                     ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20' 
                                     : 'bg-entropy-accent text-white hover:bg-entropy-accent/90 shadow-entropy-accent/20'}"
                             >
-                                {activeChat.isVerified ? 'Remove Verification' : 'Verify Identity'}
+                                {currentTrust >= 2 ? 'Reset Verification' : 'Verify Identity'}
                             </button>
                             <p class="text-[9px] text-entropy-text-dim text-center mt-3 leading-relaxed px-2">
+                                {#if currentTrust === 0}
+                                    <span class="text-red-500 font-bold block mb-1">WARNING: The identity for this contact has changed.</span>
+                                {/if}
                                 Verify the safety number above with this contact via another secure channel.
                             </p>
                         </div>
                     {:else}
-                        <div class="text-[10px] text-center text-red-500/80 font-bold py-2">Encryption session not established.</div>
+                        <div class="text-[10px] text-center text-orange-500/80 font-bold py-2 uppercase tracking-tighter">Establishing Secure Session...</div>
                     {/if}
                  </div>
             </div>
@@ -164,9 +184,7 @@
                  <div class="space-y-1 max-h-40 overflow-y-auto custom-scrollbar pr-1">
                     {#each activeChat.members || [] as member}
                         <div class="flex items-center space-x-2 bg-entropy-surface-light p-2 rounded-lg">
-                            <div class="w-5 h-5 rounded-md bg-entropy-primary/20 flex items-center justify-center text-[8px] font-bold text-entropy-primary">
-                                {member.slice(0, 2).toUpperCase()}
-                            </div>
+                            <Avatar hash={member} alias={member.slice(0, 8)} size="w-5 h-5" textSize="text-[8px]" rounded="rounded-md" />
                             <span class="text-[10px] font-mono text-entropy-text-secondary truncate flex-1">{member.slice(0, 16)}...</span>
                             {#if member === $userStore.identityHash}
                                 <span class="text-[8px] font-black bg-entropy-primary/10 text-entropy-primary px-1 rounded">YOU</span>

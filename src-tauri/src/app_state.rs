@@ -38,6 +38,7 @@ pub struct NetworkState {
     pub halted_targets: Mutex<std::collections::HashSet<String>>,
     pub media_assembler: Mutex<std::collections::HashMap<String, FragmentBuffer>>,
     pub pending_media_links: Mutex<std::collections::HashMap<String, String>>, // transfer_key -> msg_id
+    pub is_refilling: Mutex<bool>,
 }
 
 pub struct AudioState {

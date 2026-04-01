@@ -2,6 +2,7 @@
   import { LucidePlay, LucidePause, LucideMic } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
+  import { invoke } from '@tauri-apps/api/core';
 
   let { src, id, isMine = false } = $props();
 
@@ -12,13 +13,21 @@
   let duration = $state(0);
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
+  let blobUrl = $state<string | null>(null);
   const speeds = [1, 1.5, 2];
 
   async function generateWaveform() {
-    if (!src) return;
+    if (!id) return;
     try {
-      const response = await fetch(src);
-      const arrayBuffer = await response.arrayBuffer();
+      // 🛡️ SECURITY BYPASS: Use native bridge to load media bytes directly.
+      // fetch() blocks asset:// URLs due to CORS, but invoke() works anywhere.
+      const bytes = await invoke<number[]>('vault_load_media', { id });
+      const arrayBuffer = new Uint8Array(bytes).buffer;
+      
+      // Cleanup previous blob if exists
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      blobUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: 'audio/wav' }));
+
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       
@@ -30,13 +39,13 @@
       for (let i = 0; i < samples; i++) {
         let blockStart = blockSize * i;
         let sum = 0;
-        for (let j = 0; j < blockSize; j++) {
+        for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
           sum = sum + Math.abs(rawData[blockStart + j]);
         }
-        result.push(sum / blockSize);
+        result.push(sum / (blockSize || 1));
       }
       
-      const max = Math.max(...result);
+      const max = Math.max(...result) || 1;
       waveformData = result.map(n => Math.max(0.1, n / max));
       drawWaveform();
     } catch (e) {
@@ -142,6 +151,7 @@
     generateWaveform();
     return () => {
       if (audioEl) audioEl.pause();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   });
 
@@ -196,7 +206,7 @@
 
   <audio 
     bind:this={audioEl} 
-    src={src} 
+    src={blobUrl} 
     ontimeupdate={handleTimeUpdate} 
     onloadedmetadata={handleMetadata}
     onended={() => { isPlaying = false; currentTime = 0; playingVoiceNoteId.set(null); drawWaveform(); }}

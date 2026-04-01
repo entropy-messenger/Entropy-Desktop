@@ -23,7 +23,6 @@ export interface Message {
     groupId?: string;
     isMine: boolean;
     status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
-    pfp?: string;
     isStarred?: boolean;
     replyTo?: {
         id: string;
@@ -40,7 +39,6 @@ export interface Message {
 export interface PrivacySettings {
     readReceipts: boolean;
     typingStatus: 'everyone' | 'nobody';
-    profilePhoto: 'everyone' | 'nobody';
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
     theme?: 'light' | 'dark';
@@ -52,7 +50,6 @@ export interface PrivacySettings {
 export interface Chat {
     peerHash: string;
     peerNickname?: string;
-    pfp?: string;
     messages?: Message[];
     hasMore?: boolean;
     unreadCount: number,
@@ -62,7 +59,7 @@ export interface Chat {
     isPinned?: boolean;
     isArchived?: boolean;
     isBlocked?: boolean;
-    isVerified?: boolean;
+    trustLevel: number;
     localNickname?: string;
     inviteCode?: string;
     lastMsg?: string;
@@ -70,6 +67,7 @@ export interface Chat {
     lastStatus?: Message['status'];
     lastIsMine?: boolean;
     lastSenderHash?: string;
+    lastIdentityCheck?: number;
 }
 
 export interface ServerMessage {

@@ -1,31 +1,22 @@
-use serde_json::Value;
+
 
 pub struct TrafficNormalizer;
 
 impl TrafficNormalizer {
-    pub const FIXED_FRAME_SIZE: usize = 1400;
 
-    pub fn pad_json(val: &mut Value) {
-        let current_str = serde_json::to_string(val).unwrap();
-        let current_len = current_str.len();
-        
-        if current_len + 15 > Self::FIXED_FRAME_SIZE {
+    pub fn pad_json_str(json_str: &mut String, target_size: usize) {
+        let current_len = json_str.len();
+        if current_len >= target_size {
             return;
         }
 
-        let padding_size = Self::FIXED_FRAME_SIZE - current_len - 15;
-        let padding = " ".repeat(padding_size);
-        
-        if let Some(obj) = val.as_object_mut() {
-            obj.insert("padding".to_string(), Value::String(padding));
-        }
+        let padding_needed = target_size - current_len;
+        json_str.push_str(&" ".repeat(padding_needed));
     }
 
-    pub fn pad_binary(data: &mut Vec<u8>) {
-        let padding_needed = (Self::FIXED_FRAME_SIZE - (data.len() % Self::FIXED_FRAME_SIZE)) % Self::FIXED_FRAME_SIZE;
-        if padding_needed > 0 || data.is_empty() {
-             let pad_to = if data.is_empty() { Self::FIXED_FRAME_SIZE } else { data.len() + padding_needed };
-             data.resize(pad_to, 0);
+    pub fn pad_binary(data: &mut Vec<u8>, target_size: usize) {
+        if data.len() < target_size {
+            data.resize(target_size, 0);
         }
     }
 }

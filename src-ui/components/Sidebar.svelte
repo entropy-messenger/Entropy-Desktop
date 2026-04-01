@@ -17,6 +17,7 @@
 
   import SettingsPanel from './SettingsPanel.svelte';
   import CreateGroupOverlay from './CreateGroupOverlay.svelte';
+  import Avatar from './Avatar.svelte';
 
   let activeHash = $state<string | null>(null);
   let searchQuery = $state("");
@@ -108,6 +109,9 @@
     return bTime - aTime;
   }));
 
+  const canSeeTyping = $derived($userStore.privacySettings.typingStatus !== 'nobody');
+  const canSeeReceipts = $derived($userStore.privacySettings.readReceipts);
+
 </script>
 
 <div class="h-full w-80 bg-entropy-bg flex flex-col relative shrink-0">
@@ -161,7 +165,7 @@
         {#each searchMessages as msg}
             <div class="p-4 hover:bg-entropy-surface/50 cursor-pointer border-b border-entropy-border/5 transition group/search" onclick={() => selectChat(msg.chatAddress)} onkeypress={(e) => e.key === 'Enter' && selectChat(msg.chatAddress)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3 mb-3">
-                    <div class="w-6 h-6 rounded-md bg-entropy-primary/20 flex items-center justify-center font-black text-[10px] text-entropy-primary uppercase shadow-sm">{msg.peerNickname[0]}</div>
+                    <Avatar hash={msg.chatAddress} alias={msg.peerNickname} size="w-6 h-6" textSize="text-[10px]" rounded="rounded-md" />
                     <div class="flex justify-between items-baseline flex-1 min-w-0">
                         <span class="text-xs font-black text-entropy-text-primary tracking-tight truncate pr-2">{msg.peerNickname}</span>
                         <span class="text-[9px] font-bold text-entropy-text-dim text-right shrink-0">{new Date(msg.timestamp).toLocaleDateString()}</span>
@@ -183,15 +187,7 @@
     {#each filteredChats as chat (chat.peerHash)}
         <div class="group/item p-4 hover:bg-entropy-surface/50 cursor-pointer transition relative {activeHash === chat.peerHash ? 'bg-entropy-primary/10 shadow-[inset_4px_0_0_0_#8b5cf6]' : ''}" onclick={() => selectChat(chat.peerHash)} onkeypress={(e) => e.key === 'Enter' && selectChat(chat.peerHash)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3">
-                    <div class="relative">
-                        {#if chat.pfp}
-                            <img src={chat.pfp} alt="" class="w-12 h-12 rounded-2xl object-cover shadow-sm" />
-                        {:else}
-                            <div class="w-12 h-12 rounded-2xl bg-gradient-to-br {chat.isGroup ? 'from-purple-500 to-indigo-600' : 'from-blue-400 to-blue-600'} flex items-center justify-center text-white font-bold text-lg shadow-sm">
-                                {chat.peerNickname ? chat.peerNickname[0].toUpperCase() : '?'}
-                            </div>
-                        {/if}
-                    </div>
+                    <Avatar hash={chat.peerHash} alias={chat.localNickname || chat.peerNickname} />
                     
                     <div class="flex-1 min-w-0">
                         <div class="flex justify-between items-baseline mb-0.5">
@@ -208,14 +204,14 @@
                         </div>
                         
                         <div class="flex items-center justify-between mt-0.5">
-                            <div class="text-[12px] truncate pr-2 flex-1 {chat.isTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
-                                {#if chat.isTyping}
+                            <div class="text-[12px] truncate pr-2 flex-1 {chat.isTyping && canSeeTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
+                                {#if chat.isTyping && canSeeTyping}
                                     <span>typing...</span>
                                 {:else if chat.lastMsg}
                                     <div class="flex items-center space-x-1">
                                         {#if chat.lastIsMine}
-                                            {#if chat.lastStatus === 'read'}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
-                                            {:else if chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary" />
+                                            {#if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
+                                            {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary" />
                                             {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}
                                         {/if}
                                         <span class="truncate">

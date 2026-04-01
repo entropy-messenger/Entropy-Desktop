@@ -24,11 +24,17 @@ export class NetworkLayer {
     constructor() {
 
         listen('network-status', (event) => {
-            if (event.payload === 'disconnected') {
+            const payload = event.payload as any;
+            const status = typeof payload === 'string' ? payload : payload.status;
+            
+            if (status === 'disconnected') {
                 this.onDisconnect();
-            } else if (event.payload === 'authenticated') {
+            } else if (status === 'authenticated') {
+                if (payload.token) {
+                    userStore.update(s => ({ ...s, sessionToken: payload.token }));
+                }
                 this.onAuthenticated();
-            } else if (event.payload === 'auth_failed') {
+            } else if (status === 'auth_failed') {
                 this.onAuthFailed();
             }
         });
@@ -120,6 +126,19 @@ export class NetworkLayer {
         listen('msg://group_update', (event) => {
             const { groupId } = event.payload as any;
             // Native logic in Rust already updated DB; Svelte handles reload on next view
+        });
+
+        // 🔗 Relay Response Lock: Resolve pending identity/nickname requests
+        listen('network-msg', (event) => {
+            const val = event.payload as any;
+            if (val && val.req_id) {
+                const pending = this.pendingRequests.get(val.req_id);
+                if (pending) {
+                    clearTimeout(pending.timeout);
+                    this.pendingRequests.delete(val.req_id);
+                    pending.resolve(val);
+                }
+            }
         });
     }
 

@@ -11,13 +11,12 @@
     LucideBan, LucideEyeOff, LucideShieldAlert, LucideGlobe, LucideTrash2, 
     LucideSun, LucideMoon
   } from 'lucide-svelte';
+  import Avatar from './Avatar.svelte';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
   let settingsTab = $state<'profile' | 'privacy' | 'blocked'>('profile');
   let isRegisteringNickname = $state(false);
-  let pfpInput = $state<HTMLInputElement | null>(null);
-  let viewingImage = $state<string | null>(null);
   let qrCodeUrl = $state<string>("");
   let copied = $state(false);
 
@@ -84,17 +83,6 @@
     }
   };
 
-  const onPfpSelect = (e: Event) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-              updateMyProfile(ev.target?.result as string);
-              addToast("Profile picture updated!", 'success');
-          };
-          reader.readAsDataURL(file);
-      }
-  };
 
   const handleRegisterNickname = async () => {
       const nick = await showPrompt("Register a global nickname (min 3 chars):", $userStore.globalNickname || "", "Global Nickname");
@@ -125,17 +113,7 @@
     <div class="p-6 space-y-8 flex-1 overflow-y-auto custom-scrollbar">
         {#if settingsTab === 'profile'}
             <div class="flex flex-col items-center space-y-4">
-                <div class="relative group">
-                    {#if $userStore.myPfp}
-                        <img src={$userStore.myPfp} alt="Profile" class="w-24 h-24 rounded-3xl object-cover shadow-xl ring-4 ring-entropy-primary/10 hover:ring-entropy-primary/30 transition-all" />
-                    {:else}
-                        <div class="w-24 h-24 rounded-3xl bg-entropy-surface-light flex items-center justify-center text-entropy-primary shadow-xl">
-                            <LucideUser size={48} />
-                        </div>
-                    {/if}
-                    <button onclick={() => pfpInput?.click()} class="absolute -bottom-2 -right-2 p-2 bg-entropy-primary text-white rounded-xl shadow-lg hover:bg-entropy-primary-dim transition active:scale-95"><LucideCamera size={18} /></button>
-                    <input type="file" bind:this={pfpInput} onchange={onPfpSelect} accept="image/*" class="hidden" />
-                </div>
+                <Avatar hash={$userStore.identityHash || ''} alias={$userStore.globalNickname || 'Anonymous'} size="w-24 h-24" textSize="text-3xl" rounded="rounded-3xl" />
                 <div class="text-center space-y-1">
                     <div class="text-xl font-bold text-entropy-text-primary flex items-center justify-center space-x-2">
                         <span>{$userStore.globalNickname || 'Anonymous'}</span>
@@ -145,16 +123,15 @@
 
                 <div class="w-full flex flex-col space-y-2">
                     <button 
-                        disabled={isRegisteringNickname || $userStore.connectionStatus !== 'connected' || !!$userStore.globalNickname}
+                        disabled={isRegisteringNickname || $userStore.connectionStatus !== 'connected'}
                         onclick={handleRegisterNickname}
                         class="w-full py-3 bg-entropy-primary text-white rounded-xl text-sm font-bold shadow-lg hover:bg-entropy-primary-dim transition-all active:scale-95 flex flex-col items-center justify-center space-y-1 overflow-hidden disabled:opacity-50 disabled:grayscale"
                     >
                         {#if isRegisteringNickname}
                             <div class="flex items-center space-x-2 animate-pulse"><div class="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div><span>Authenticating Identity...</span></div>
-                            <div class="text-[8px] font-black uppercase tracking-[0.2em] opacity-60">Solving Cryptographic Puzzle</div>
-                            <div class="text-[7px] font-bold opacity-40 px-4 text-center leading-tight">Shorter names take longer to compute. Please wait.</div>
+                            <div class="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">Identity Verification</div>
                         {:else}
-                            <div class="flex items-center space-x-2"><img src="/logo.png" alt="logo" class="w-6 h-6 object-contain invert opacity-40" /><span>{$userStore.globalNickname ? 'Nickname Registered' : 'Register Global Nickname'}</span></div>
+                            <div class="flex items-center space-x-2"><img src="/logo.png" alt="logo" class="w-6 h-6 object-contain invert opacity-40" /><span>{$userStore.globalNickname ? 'Change Global Nickname' : 'Register Global Nickname'}</span></div>
                         {/if}
                     </button>
 

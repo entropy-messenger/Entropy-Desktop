@@ -71,27 +71,37 @@ impl IdentityKeyStore for SqliteSignalStore {
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let pub_bytes = identity.serialize();
 
-        // Check existing
-        let mut stmt = conn.prepare("SELECT public_key FROM signal_identities_remote WHERE address = ?1")
+        let mut stmt = conn.prepare("SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1")
             .map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
         let mut rows = stmt.query(params![address_str])
             .map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
 
-        let change = if let Some(row) = rows.next().map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))? {
+        let (change, target_trust) = if let Some(row) = rows.next().map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))? {
             let existing_pub: Vec<u8> = row.get::<_, Vec<u8>>(0).map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
+            let old_trust: i32 = row.get(1).unwrap_or(1);
+
             if existing_pub == pub_bytes.as_ref() {
-                IdentityChange::NewOrUnchanged
+                (IdentityChange::NewOrUnchanged, old_trust)
             } else {
-                IdentityChange::ReplacedExisting
+                println!("[SignalStore] IDENTITY CHANGED for {}. Setting trust to 0.", address_str);
+                (IdentityChange::ReplacedExisting, 0)
             }
         } else {
-            IdentityChange::NewOrUnchanged
+            (IdentityChange::NewOrUnchanged, 1)
         };
 
         conn.execute(
-            "INSERT OR REPLACE INTO signal_identities_remote (address, public_key) VALUES (?1, ?2)",
-            params![address_str, pub_bytes.as_ref()],
+            "INSERT INTO signal_identities_remote (address, public_key, trust_level) VALUES (?1, ?2, ?3)
+             ON CONFLICT(address) DO UPDATE SET public_key = excluded.public_key, trust_level = excluded.trust_level",
+            params![address_str, pub_bytes.as_ref(), target_trust],
         ).map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
+        
+        // Sync with contacts table for UI consistency
+        let hash = address.name();
+        let _ = conn.execute(
+            "UPDATE contacts SET trust_level = ?1 WHERE hash = ?2",
+            params![target_trust, hash]
+        );
         
         Ok(change)
     }
