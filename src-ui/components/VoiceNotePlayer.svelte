@@ -4,29 +4,40 @@
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { invoke } from '@tauri-apps/api/core';
 
-  let { src, id, isMine = false } = $props();
+  let { src, id, isMine = false, initialDuration = 0 } = $props();
+  const hasAuthoritativeDuration = $derived(initialDuration > 0);
 
   let audioEl = $state<HTMLAudioElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
   let isPlaying = $state(false);
   let currentTime = $state(0);
-  let duration = $state(0);
+  let duration = $state(initialDuration);
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
   let blobUrl = $state<string | null>(null);
   const speeds = [1, 1.5, 2];
 
+  let lastGeneratedId = $state<string | null>(null);
   async function generateWaveform() {
-    if (!id) return;
+    if (!id || (id === lastGeneratedId && waveformData.length > 0)) return;
     try {
-      // 🛡️ SECURITY BYPASS: Use native bridge to load media bytes directly.
-      // fetch() blocks asset:// URLs due to CORS, but invoke() works anywhere.
-      const bytes = await invoke<number[]>('vault_load_media', { id });
-      const arrayBuffer = new Uint8Array(bytes).buffer;
+      let arrayBuffer: ArrayBuffer;
       
-      // Cleanup previous blob if exists
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-      blobUrl = URL.createObjectURL(new Blob([arrayBuffer], { type: 'audio/wav' }));
+      if (id === 'preview' && src) {
+        // 🧪 PREVIEW MODE: Load directly from the blob URL
+        blobUrl = src; // MUST set this so the <audio> element has a source!
+        const response = await fetch(src);
+        arrayBuffer = await response.arrayBuffer();
+      } else {
+        // 🛡️ SECURITY BYPASS: Use native bridge to load media bytes directly.
+        // fetch() blocks asset:// URLs due to CORS, but invoke() works anywhere.
+        const bytes = await invoke<number[]>('vault_load_media', { id });
+        arrayBuffer = new Uint8Array(bytes).buffer;
+        
+        // Cleanup previous blob if exists
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        blobUrl = URL.createObjectURL(new Blob([arrayBuffer]));
+      }
 
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
@@ -47,6 +58,7 @@
       
       const max = Math.max(...result) || 1;
       waveformData = result.map(n => Math.max(0.1, n / max));
+      lastGeneratedId = id;
       drawWaveform();
     } catch (e) {
       console.error("Waveform generation failed:", e);
@@ -127,7 +139,14 @@
   }
 
   function handleMetadata() {
-    if (audioEl) duration = audioEl.duration;
+    if (hasAuthoritativeDuration) {
+        duration = initialDuration;
+        return; 
+    }
+    
+    if (audioEl && audioEl.duration !== Infinity && !isNaN(audioEl.duration)) {
+        duration = audioEl.duration;
+    }
   }
 
   function handleSeek(e: MouseEvent) {

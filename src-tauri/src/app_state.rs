@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-use crate::audio::AudioRecorder;
 
 use std::collections::VecDeque;
 
@@ -15,13 +14,17 @@ pub struct DbState {
 
 pub struct PacedMessage {
     pub msg: Message,
-    pub is_media: bool,
 }
 
 pub struct FragmentBuffer {
     pub total: u32,
     pub chunks: std::collections::HashMap<u32, Vec<u8>>,
     pub last_activity: std::time::Instant,
+}
+
+pub struct PendingMediaMetadata {
+    pub id: String,
+    pub key: String,
 }
 
 pub struct NetworkState {
@@ -37,12 +40,8 @@ pub struct NetworkState {
     pub session_token: Mutex<Option<String>>,
     pub halted_targets: Mutex<std::collections::HashSet<String>>,
     pub media_assembler: Mutex<std::collections::HashMap<String, FragmentBuffer>>,
-    pub pending_media_links: Mutex<std::collections::HashMap<String, String>>, // transfer_key -> msg_id
+    pub pending_media_links: Mutex<std::collections::HashMap<String, PendingMediaMetadata>>, // transfer_key -> (msg_id, dec_key)
+    pub binary_receiver: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     pub is_refilling: Mutex<bool>,
+    pub pending_transfers: Mutex<std::collections::HashMap<u32, String>>,
 }
-
-pub struct AudioState {
-    pub recorder: Mutex<AudioRecorder>,
-}
-
-

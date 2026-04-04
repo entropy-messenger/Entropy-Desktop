@@ -2,39 +2,86 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { LucideTrash, LucideSquare, LucideSend } from 'lucide-svelte';
+  import { LucideTrash, LucideSquare, LucideSend, LucideMicOff, LucideX } from 'lucide-svelte';
   import VoiceNotePlayer from './VoiceNotePlayer.svelte';
   import { addToast } from '../lib/stores/ui';
 
   let { onSend, onCancel } = $props<{ 
-      onSend: (blob: Blob) => void, 
+      onSend: (blob: Blob, duration: number) => void, 
       onCancel: () => void 
   }>();
 
-  let recordingState = $state<'recording' | 'preview'>('recording');
+  let recordingState = $state<'recording' | 'preview' | 'error'>('recording');
+  let errorMessage = $state<string | null>(null);
   let recordedBlob = $state<Blob | null>(null);
   let previewUrl = $state<string | null>(null);
+  let finalDurationSeconds = $state(0);
   let recordingSeconds = $state(0);
   let recordingInterval: any = null;
   let visualizerCanvas = $state<HTMLCanvasElement | null>(null);
-  let volumeUnlisten: (() => void) | null = null;
   let currentVolume = $state(0);
+  let mediaRecorder = $state<MediaRecorder | null>(null);
+  let audioContext = $state<AudioContext | null>(null);
+  let analyser = $state<AnalyserNode | null>(null);
+  let animationFrame: number | null = null;
 
   const startRecording = async () => {
     try {
-        await invoke('start_native_recording');
-        recordingSeconds = 0;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
-        volumeUnlisten = await listen<number>('recording-volume', (event) => {
-            currentVolume = event.payload;
-            drawNativeWaveform();
-        });
+        // 🧪 OPTIMIZATION: Use Web Audio for real-time visualization
+        audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+        analyser.fftSize = 256;
+        
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const updateVolume = () => {
+             if (analyser) {
+                 analyser.getByteFrequencyData(dataArray);
+                 const avg = dataArray.reduce((p, c) => p + c, 0) / dataArray.length;
+                 currentVolume = avg / 255.0; // Normalize to 0-1 range for the visualizer
+                 drawNativeWaveform();
+                 animationFrame = requestAnimationFrame(updateVolume);
+             }
+        };
+        updateVolume();
 
+        // 🎙️ OPUS ENCODING: Browser handles this natively
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+            ? 'audio/webm;codecs=opus' 
+            : 'audio/ogg;codecs=opus';
+        
+        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        const chunks: Blob[] = [];
+        
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
+        
+        mediaRecorder.onstop = () => {
+            recordedBlob = new Blob(chunks, { type: mimeType });
+            previewUrl = URL.createObjectURL(recordedBlob);
+            finalDurationSeconds = recordingSeconds;
+            if (recordingInterval) clearInterval(recordingInterval);
+            recordingState = 'preview';
+            isStopping = false;
+        };
+
+        mediaRecorder.start();
+        recordingSeconds = 0;
         recordingInterval = setInterval(() => { recordingSeconds++; }, 1000);
     } catch (e: any) { 
-        console.error("Recording error:", e); 
-        addToast("Microphone error: " + e, 'error');
-        onCancel();
+        console.error("[Voice] Start Error:", e);
+        recordingState = 'error';
+        if (e.name === 'NotAllowedError') {
+            errorMessage = "Microphone Permission Denied";
+        } else if (e.name === 'NotFoundError') {
+            errorMessage = "No Microphone Found";
+        } else {
+            errorMessage = e.message || "Failed to start recording";
+        }
     }
   };
 
@@ -52,7 +99,8 @@
       ctx.clearRect(0, 0, width, height);
       ctx.putImageData(imageData, 0, 0);
 
-      const barHeight = Math.max(4, currentVolume * height * 5);
+      // Boost gain visually for modern sleek look
+      const barHeight = Math.max(4, currentVolume * height * 1.5);
       ctx.fillStyle = '#ef4444';
       ctx.beginPath();
       ctx.roundRect(width - barWidth + 1, (height - barHeight) / 2, barWidth - 3, barHeight, 1.5);
@@ -61,49 +109,32 @@
 
   let isStopping = false;
   const stopRecording = async () => {
-      if (recordingState === 'recording' && !isStopping) {
+      if (recordingState === 'recording' && !isStopping && mediaRecorder) {
           isStopping = true;
-          try {
-              const bytes = await invoke<number[]>('stop_native_recording');
-              if (bytes && bytes.length > 0) {
-                  recordedBlob = new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
-                  previewUrl = URL.createObjectURL(recordedBlob);
-                  recordingState = 'preview';
-              } else {
-                  addToast("Recording was empty", 'error');
-                  onCancel();
-              }
-              
-              if (recordingInterval) clearInterval(recordingInterval);
-              if (volumeUnlisten) {
-                  volumeUnlisten();
-                  volumeUnlisten = null;
-              }
-          } catch (e) {
-              console.error("Stop recording error:", e);
-              onCancel();
-          } finally {
-              isStopping = false;
-          }
+          mediaRecorder.stop();
+          mediaRecorder.stream.getTracks().forEach(t => t.stop());
+          
+          if (recordingInterval) clearInterval(recordingInterval);
+          if (animationFrame) cancelAnimationFrame(animationFrame);
+          if (audioContext) audioContext.close();
       }
   };
 
   const cancelRecording = async () => {
-      if (recordingState === 'recording') {
-          await invoke('stop_native_recording').catch(() => {});
+      if (mediaRecorder && recordingState === 'recording') {
+          mediaRecorder.stop();
+          mediaRecorder.stream.getTracks().forEach(t => t.stop());
       }
       if (recordingInterval) clearInterval(recordingInterval);
-      if (volumeUnlisten) {
-          volumeUnlisten();
-          volumeUnlisten = null;
-      }
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+      if (audioContext) audioContext.close();
       if (previewUrl) URL.revokeObjectURL(previewUrl);
       onCancel();
   };
 
   const handleSend = () => {
       if (recordedBlob) {
-          onSend(recordedBlob);
+          onSend(recordedBlob, finalDurationSeconds);
       }
   };
 
@@ -116,11 +147,13 @@
   onMount(() => {
     startRecording();
     return () => {
-        if (recordingState === 'recording') {
-            invoke('stop_native_recording').catch(() => {});
+        if (mediaRecorder && recordingState === 'recording') {
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(t => t.stop());
         }
         if (recordingInterval) clearInterval(recordingInterval);
-        if (volumeUnlisten) volumeUnlisten();
+        if (animationFrame) cancelAnimationFrame(animationFrame);
+        if (audioContext) audioContext.close();
         if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   });
@@ -148,11 +181,26 @@
             </button>
         </div>
     </div>
+{:else if recordingState === 'error'}
+    <div class="flex-1 flex items-center justify-between bg-red-500/10 backdrop-blur-md px-5 py-2 rounded-[1.5rem] border border-red-500/40 shadow-xl shadow-red-500/10 animate-in slide-in-from-bottom-2 duration-300 h-[52px]">
+        <div class="flex items-center space-x-3 text-red-500 flex-1">
+            <div class="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center">
+                <LucideMicOff size={16} />
+            </div>
+            <div class="flex flex-col">
+                <span class="text-[9px] font-black uppercase tracking-[0.2em] leading-none mb-0.5">Recording Error</span>
+                <span class="text-xs font-black text-entropy-text-primary">{errorMessage}</span>
+            </div>
+        </div>
+        <button onclick={cancelRecording} class="w-10 h-10 flex items-center justify-center text-red-500 hover:bg-red-500/10 rounded-xl transition-all" title="Close">
+            <LucideX size={20} />
+        </button>
+    </div>
 {:else if previewUrl}
     <div class="flex-1 flex items-center space-x-3 bg-white/[0.03] backdrop-blur-md px-4 py-2.5 rounded-[1.5rem] border border-white/10 shadow-2xl animate-in zoom-in-95 duration-300">
         <button onclick={cancelRecording} class="w-10 h-10 flex items-center justify-center text-entropy-text-dim hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all" title="Discard"><LucideTrash size={20} /></button>
         <div class="flex-1">
-            <VoiceNotePlayer src={previewUrl} id="preview" isMine={true} />
+            <VoiceNotePlayer src={previewUrl} id="preview" isMine={true} initialDuration={finalDurationSeconds} />
         </div>
         <button onclick={handleSend} class="w-11 h-11 bg-entropy-primary text-white rounded-xl shadow-[0_8px_24px_rgba(139,92,246,0.3)] hover:bg-entropy-primary-dim active:scale-95 transition-all flex items-center justify-center group">
             <LucideSend size={22} class="translate-x-0.5 group-hover:translate-x-1 group-hover:-translate-y-0.5 transition-transform" />

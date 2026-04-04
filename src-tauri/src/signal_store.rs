@@ -19,6 +19,27 @@ impl SqliteSignalStore {
     pub fn new(app: AppHandle) -> Self {
         Self { app }
     }
+
+    pub async fn get_session_token(&self) -> Option<String> {
+        let db_state = self.app.state::<DbState>();
+        let lock = db_state.conn.lock().ok()?;
+        let conn = lock.as_ref()?;
+        
+        conn.query_row("SELECT session_token FROM signal_identity WHERE id = 0", [], |r| r.get::<_, Option<String>>(0)).ok().flatten()
+    }
+
+    pub async fn set_session_token(&self, token: Option<String>) -> Result<(), String> {
+        let db_state = self.app.state::<DbState>();
+        let lock = db_state.conn.lock().map_err(|e| e.to_string())?;
+        let conn = lock.as_ref().ok_or("DB not initialized")?;
+        
+        conn.execute(
+            "UPDATE signal_identity SET session_token = ?1 WHERE id = 0",
+            params![token],
+        ).map_err(|e| e.to_string())?;
+        
+        Ok(())
+    }
 }
 
 #[async_trait(?Send)]

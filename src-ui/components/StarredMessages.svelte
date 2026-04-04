@@ -43,20 +43,21 @@
         {:else}
             <div class="space-y-3 max-w-3xl mx-auto">
                 {#each allStarredMessages as msg (msg.id)}
-                    <button 
-                        onclick={() => onSelectChat(msg.peerHash, msg.id)}
-                        class="w-full text-left p-5 bg-entropy-surface/50 hover:bg-entropy-surface rounded-2xl transition-all group relative overflow-hidden"
-                        title="View in Chat"
+                    <div 
+                        class="w-full text-left p-5 bg-entropy-surface/50 hover:bg-entropy-surface rounded-2xl transition-all group relative overflow-hidden flex flex-col"
                     >
-                        <div class="flex justify-between items-start mb-3">
+                        <button 
+                            onclick={() => onSelectChat(msg.peerHash, msg.id)}
+                            class="flex justify-between items-start mb-3 cursor-pointer group/header"
+                        >
                              <div class="flex items-center space-x-2">
                                 <LucideStar size={14} class="text-yellow-500 fill-yellow-500" />
-                                <span class="text-xs font-black uppercase text-entropy-primary tracking-tight">{msg.peerNickname}</span>
+                                <span class="text-xs font-black uppercase text-entropy-primary tracking-tight group-hover/header:underline">{msg.peerNickname}</span>
                              </div>
                              <span class="text-[10px] font-bold text-entropy-text-dim">{new Date(msg.timestamp).toLocaleDateString()}</span>
-                        </div>
+                        </button>
                         
-                        <div class="pointer-events-none">
+                        <div class="relative z-20">
                             <MessageContent 
                                 {msg} 
                                 isMine={msg.isMine} 
@@ -65,10 +66,13 @@
                             />
                         </div>
 
-                        <div class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                            onclick={() => onSelectChat(msg.peerHash, msg.id)}
+                            class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-all hover:scale-105 active:scale-95"
+                        >
                             <div class="bg-entropy-primary text-white text-[9px] font-black px-2 py-1 rounded shadow-lg">VIEW IN CHAT</div>
-                        </div>
-                    </button>
+                        </button>
+                    </div>
                 {/each}
             </div>
         {/if}

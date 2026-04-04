@@ -14,7 +14,7 @@
   import Toast from './components/Toast.svelte';
   import Modal from './components/Modal.svelte';
   import { addToast, showConfirm } from './lib/stores/ui';
-  import { exportVault, importVault, nuclearReset } from './lib/actions/vault';
+  import { exportVault, importVault, resetDatabase as resetAccountAction } from './lib/actions/vault';
 
   
   $effect(() => {
@@ -117,9 +117,9 @@
     /**
      * Executes a destructive account wipe across both local storage and the native database.
      */
-    async function handleNuclearReset() {
-        if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Nuclear Reset")) return;
-        await nuclearReset();
+    async function handleResetAccount() {
+        if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Reset Identity")) return;
+        await resetAccountAction();
     }
 
     /**
@@ -339,10 +339,10 @@
                             </button>
                             {#if import.meta.env.DEV || $userStore.authError}
                                 <button 
-                                    onclick={handleNuclearReset}
+                                    onclick={handleResetAccount}
                                     class="text-[10px] font-bold text-red-500 uppercase tracking-wider hover:text-red-600 transition-colors"
                                 >
-                                    Wipe
+                                    Reset
                                 </button>
                             {/if}
                         </div>

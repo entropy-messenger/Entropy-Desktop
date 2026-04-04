@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
   import { toggleStar, toggleBlock } from '../lib/actions/contacts';
-  import { setReplyingTo, loadChatMessages, sendReceipt } from '../lib/actions/chat';
+  import { setReplyingTo, loadChatMessages, loadMoreMessages, sendReceipt } from '../lib/actions/chat';
   import { LucideSearch, LucideX, LucideInfo, LucideLoader, LucideChevronDown, LucideBan } from 'lucide-svelte';
   
   import MessageBubble from './MessageBubble.svelte';
@@ -79,12 +79,16 @@
     }
   });
 
+  let lastMessageCount = 0;
   $effect(() => {
-    if (activeMessages.length > 0) {
-      if (!isLoadingMore) {
-          scrollToBottom();
-      }
+    // Only auto-scroll if the NUMBER of messages increased (new message sent/received)
+    // Avoid jumps for background status updates or starring.
+    if (activeMessages.length > lastMessageCount) {
+        if (!isLoadingMore) {
+            scrollToBottom();
+        }
     }
+    lastMessageCount = activeMessages.length;
   });
 
   const handleScroll = async (e: Event) => {
@@ -126,10 +130,12 @@
 </script>
 
 {#if showStarredMessages}
-    <StarredMessages onClose={() => onCloseStarred && onCloseStarred()} onSelectChat={(hash, msgId) => {
+    <StarredMessages onClose={() => onCloseStarred && onCloseStarred()} onSelectChat={async (hash, msgId) => {
         userStore.update(s => ({ ...s, activeChatHash: hash }));
         if (onCloseStarred) onCloseStarred();
-        setTimeout(() => scrollToMessage(msgId), 150);
+        await loadChatMessages(hash); // 📦 Load history first!
+        await tick(); // 🎨 Wait for DOM to render
+        scrollToMessage(msgId); // 🚀 Then jump
     }}/>
 {:else if !activeChat}
     <div class="h-full w-full flex items-center justify-center bg-entropy-bg flex-col text-center p-8">
@@ -205,7 +211,7 @@
 
                 {#each groupedMessages as msg (msg.id)}
                     {#if msg.type === 'date_divider'}
-                        <div class="flex items-center justify-center my-4 px-12 sticky top-1 z-[20] pointer-events-none animate-in fade-in duration-500">
+                        <div class="flex items-center justify-center py-6 px-12 animate-in fade-in duration-500">
                             <div class="h-[1px] flex-1 bg-gradient-to-r from-transparent via-entropy-border/30 to-transparent"></div>
                             <span class="mx-6 text-[10px] font-black text-entropy-primary uppercase tracking-[0.2em]">{msg.content}</span>
                             <div class="h-[1px] flex-1 bg-gradient-to-r from-transparent via-entropy-border/30 to-transparent"></div>

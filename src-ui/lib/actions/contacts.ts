@@ -11,13 +11,6 @@ import type { PrivacySettings } from '../types';
  * Manages profile synchronization and contact metadata updates.
  */
 
-export const updateMyProfile = () => {
-    const state = get(userStore);
-    Object.keys(state.chats).forEach(peerHash => {
-        if (!state.chats[peerHash].isGroup) broadcastProfile(peerHash);
-    });
-};
-
 /**
  * Transmits current user profile (alias) to a specific peer.
  */
@@ -25,7 +18,6 @@ export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.globalNickname) return;
     if (state.blockedHashes.includes(peerHash)) return;
-    if (state.privacySettings.typingStatus !== 'everyone') return;
 
     try {
         await invoke('send_profile_update', {
@@ -33,7 +25,7 @@ export const broadcastProfile = async (peerHash: string) => {
             alias: state.globalNickname || undefined
         });
     } catch (e) {
-        console.error(`[Profile] Failed to broadcast to ${peerHash}:`, e);
+        console.warn(`[Profile] Failed to broadcast to ${peerHash}:`, e);
     }
 };
 
@@ -97,7 +89,7 @@ export const toggleStar = (peerHash: string, msgId: string) => {
         if (idx !== -1) {
             const nextStarred = !msgs[idx].isStarred;
             msgs[idx] = { ...msgs[idx], isStarred: nextStarred };
-            invoke('db_set_message_starred', { id: msgId, is_starred: nextStarred }).catch(console.error);
+            invoke('db_set_message_starred', { id: msgId, isStarred: nextStarred }).catch(console.error);
             return { ...mStore, [peerHash]: msgs };
         }
         return mStore;
@@ -145,7 +137,14 @@ export const registerGlobalNickname = async (nickname: string) => {
     try {
         const response = await invoke<any>('register_nickname', { nickname });
         if (response.status === 'success') {
-            userStore.update(s => ({ ...s, globalNickname: nickname }));
+            userStore.update(s => {
+                s.globalNickname = nickname;
+                // Broadcast to active chats instead of loop-all
+                Object.keys(s.chats).forEach(h => {
+                    if (!s.chats[h].isGroup) broadcastProfile(h);
+                });
+                return { ...s };
+            });
             return { success: true };
         }
         return { success: false, error: response.error };
@@ -210,16 +209,8 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
         s.chats[peerHash] = chat;
         return { ...s, activeChatHash: peerHash, chats: { ...s.chats } };
     });
+    // 📣 FIRST CONTACT: Tell the new peer who we are immediately
+    broadcastProfile(peerHashRaw);
 };
 
-export const handleProfileUpdate = (senderHash: string, payload: any) => {
-    userStore.update(s => {
-        if (s.chats[senderHash]) {
-            s.chats[senderHash] = {
-                ...s.chats[senderHash],
-                peerNickname: payload.alias || s.chats[senderHash].peerNickname
-            };
-        }
-        return { ...s, chats: { ...s.chats } };
-    });
-};
+// Profile updates are now automated via Rust Background Handlers + SQL persistence.

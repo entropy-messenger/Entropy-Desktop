@@ -2,9 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
 import { userStore } from './stores/user';
-import { addMessage, updateMessageStatusUI, handleTypingSignal } from './actions/chat';
-import { handleProfileUpdate, broadcastProfile } from './actions/contacts';
-import type { ServerMessage } from './types';
+import { addMessage, updateMessageStatusUI, updateSingleMessageStatusUI, handleTypingSignal } from './actions/chat';
 
 /**
  * Handles communication with the underlying Rust network node via Tauri's bridge.
@@ -14,7 +12,6 @@ export class NetworkLayer {
     private url: string = "";
     private isAuthenticated = false;
     private isConnected = false;
-    private lastActivity = Date.now();
     private isManualDisconnect = false;
     private lastWarningTime: Map<string, number> = new Map();
 
@@ -30,9 +27,6 @@ export class NetworkLayer {
             if (status === 'disconnected') {
                 this.onDisconnect();
             } else if (status === 'authenticated') {
-                if (payload.token) {
-                    userStore.update(s => ({ ...s, sessionToken: payload.token }));
-                }
                 this.onAuthenticated();
             } else if (status === 'auth_failed') {
                 this.onAuthFailed();
@@ -51,8 +45,12 @@ export class NetworkLayer {
             const { addToast } = await import('./stores/ui');
             if (type === 'media_offline') {
                 addToast("Recipient is offline. Media cannot be sent.", 'warning');
-            } else if (type === 'storage_full') {
+            } else if (type === 'storage_full' || type === 'Mailbox full') {
                 addToast("Recipient's offline storage is full (200 limit).", 'error');
+            } else if (type === 'sender_quota_exceeded' || type === 'Sender quota exceeded') {
+                addToast("You've hit your limit for this user's mailbox (5/5).", 'error');
+            } else if (type) {
+                addToast(`Relay Error: ${type}`, 'error');
             }
         });
 
@@ -74,10 +72,14 @@ export class NetworkLayer {
             addMessage(m.chatAddress, uiMsg);
         });
 
-        // Listen for message status updates (Read Receipts)
+        // Listen for message status updates (Confirmed Delivery & Read Receipts)
         listen('msg://status', (event) => {
-            const { chat_address, ids, status } = event.payload as any;
-            updateMessageStatusUI(chat_address, ids, status);
+            const payload = event.payload as any;
+            if (payload.id) {
+                updateSingleMessageStatusUI(payload.id, payload.status);
+            } else if (payload.ids) {
+                updateMessageStatusUI(payload.chat_address, payload.ids, payload.status);
+            }
         });
 
         // Listen for volatile UI-only signals
@@ -87,10 +89,6 @@ export class NetworkLayer {
         });
 
 
-        listen('msg://profile_update', (event) => {
-            const { sender, payload } = event.payload as any;
-            handleProfileUpdate(sender, payload);
-        });
 
         // Group Handlers
         listen('msg://invite', (event) => {
@@ -168,12 +166,10 @@ export class NetworkLayer {
                     }
                 }
 
-                console.log(`Commanding native connection to ${this.url} (Proxy: ${proxyUrl || 'none'})...`);
+                console.log(`Commanding autonomous native connection to ${this.url}...`);
                 await invoke('connect_network', {
                     url: this.url,
-                    proxyUrl,
-                    idHash: state.identityHash,
-                    sessionToken: state.sessionToken
+                    proxyUrl
                 });
                 // Note: isConnected will be set by the 'network-status' event listener
                 this.onConnect();
@@ -243,39 +239,25 @@ export class NetworkLayer {
         // 1. Sync connection status
         userStore.update((s: any) => ({
             ...s,
-            connectionStatus: 'connected'
+            connectionStatus: 'connected',
+            isSynced: true
         }));
 
         // 2. Automated Signal Key Sync (High Priority on connect)
-        const state = get(userStore) as any;
-        if (!state.isSynced) {
-            console.log("[Network] Triggering initial signal sync...");
-            import('./signal_manager').then(({ signalManager }) => {
-                signalManager.ensureKeysUploaded().catch(e => console.warn("[Network] Initial Signal sync failed:", e));
-            });
-        }
+        // Handled autonomously by Rust backend `auth_success` delta replenishment.
 
         // 3. Trigger pending outbox flush
-        invoke('flush_outbox').catch(e => console.error("[Network] Flush failed:", e));
+        // Handled autonomously by Rust backend on auth_success.
 
         // 4. Presence/Heartbeat logic removed as per privacy requirements.
 
-        // 5. Broadcast profile to peers if configured
-        if (state.privacySettings.typingStatus === 'everyone') {
-            Object.keys(state.chats).forEach(peerHash => {
-                if (!state.chats[peerHash].isGroup) {
-                    import('./actions/contacts').then(({ broadcastProfile }) => {
-                        broadcastProfile(peerHash);
-                    });
-                }
-            });
-        }
+        // 5. Profile Broadcast logic removed to prevent accidental Presence/Online leaks.
     }
 
     private onAuthFailed() {
         console.warn("[Network] Authentication failed by Rust. Resetting session.");
         this.isAuthenticated = false;
-        userStore.update((s: any) => ({ ...s, sessionToken: null, connectionStatus: 'disconnected' }));
+        userStore.update((s: any) => ({ ...s, connectionStatus: 'disconnected' }));
     }
 
     private onDisconnect() {
@@ -301,9 +283,8 @@ export class NetworkLayer {
                 isConnected: false,
                 connectionStatus: 'disconnected'
             };
-            if (!wasAuthenticated && s.sessionToken) {
-                console.log("[Network] Clearing session token on unauthenticated disconnect.");
-                newState.sessionToken = null;
+            if (!wasAuthenticated) {
+                console.log("[Network] Re-auth required on next connect.");
             }
             return newState;
         });

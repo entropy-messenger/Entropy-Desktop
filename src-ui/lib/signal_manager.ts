@@ -102,28 +102,7 @@ export class SignalManager {
         }
     }
 
-    // --- INTEGRITY & SESSION PERSISTENCE (Merged from SignalStore) ---
-
-    async getLastMessageHash(localHash: string, peerHash: string, type: 'sent' | 'received'): Promise<string | null> {
-        return await vaultLoad(`signal_integrity_${type}_${localHash}_${peerHash}`);
-    }
-
-    async putLastMessageHash(localHash: string, peerHash: string, type: 'sent' | 'received', hash: string): Promise<void> {
-        await vaultSave(`signal_integrity_${type}_${localHash}_${peerHash}`, hash);
-    }
-
-    async isBlankSlate(): Promise<boolean> {
-        const rustId = await vaultLoad('protocol_identity');
-        return !rustId || rustId === 'null';
-    }
-
-    async deleteAllData(): Promise<void> {
-        try {
-            await invoke('clear_vault');
-        } catch (e) {
-            console.error("[Signal] Data purge failed:", e);
-        }
-    }
+    // --- SESSION CONTEXT HELPERS ---
 
     // --- GROUP CONTEXT HELPERS ---
 

@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Message } from '../lib/types';
     import { 
-        LucideCheck, LucideCheckCheck, LucideStar 
+        LucideCheck, LucideCheckCheck, LucideStar, LucideClock, LucideX 
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import AttachmentRenderer from './AttachmentRenderer.svelte';
@@ -62,7 +62,9 @@
                 {#if isMine}
                     {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
                     <div class="flex items-center scale-90 translate-y-[0.5px]">
-                        {#if msg.status === 'read' && canSeeReceipts}<LucideCheckCheck size={11} class="text-cyan-400" />
+                        {#if msg.status === 'pending' || msg.status === 'sending'}<LucideClock size={10} class="text-white/70 animate-pulse" />
+                        {:else if msg.status === 'failed'}<LucideX size={11} class="text-red-400" />
+                        {:else if msg.status === 'read' && canSeeReceipts}<LucideCheckCheck size={11} class="text-cyan-400" />
                         {:else if msg.status === 'read' || msg.status === 'delivered'}<LucideCheckCheck size={11} class="text-white/90" />
                         {:else}<LucideCheck size={11} class="text-white/90" />{/if}
                     </div>
@@ -84,7 +86,11 @@
                     {#if isMine}
                         {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
                         <div class="flex items-center scale-90 translate-y-[0.5px] opacity-70">
-                            {#if msg.status === 'read' && canSeeReceipts}
+                            {#if msg.status === 'pending' || msg.status === 'sending'}
+                                <LucideClock size={10} class="{isMine ? 'text-white/70' : 'text-entropy-text-dim/70'} animate-pulse" />
+                            {:else if msg.status === 'failed'}
+                                <LucideX size={11} class="text-red-400" />
+                            {:else if msg.status === 'read' && canSeeReceipts}
                                 <LucideCheckCheck size={11} class="text-cyan-300" />
                             {:else if msg.status === 'read' || msg.status === 'delivered'}
                                 <LucideCheckCheck size={11} class="text-white" />

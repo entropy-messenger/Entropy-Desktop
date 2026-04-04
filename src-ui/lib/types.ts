@@ -17,6 +17,7 @@ export interface Message {
         size?: number;
         data?: Uint8Array;
         isDownloaded?: boolean;
+        exportedPath?: string;
         originalPath?: string;
         bundle?: any;
     };

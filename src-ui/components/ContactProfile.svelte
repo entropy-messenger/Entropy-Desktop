@@ -47,7 +47,7 @@
     }
   });
 
-  let mediaMessages = $derived(activeChat ? ($messageStore[activeChat.peerHash] || []).filter((m: any) => m.attachment && (m.type === 'file' || m.type === 'voice_note')) : []);
+  let mediaMessages = $derived(activeChat ? ($messageStore[activeChat.peerHash] || []).filter((m: any) => m.attachment && m.type === 'file') : []);
   
   let inviteCopied = $state(false);
   const copyInvite = () => {

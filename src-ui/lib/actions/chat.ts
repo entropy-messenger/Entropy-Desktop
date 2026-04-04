@@ -56,31 +56,35 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     }
 };
 
-export const sendFile = async (destIdRaw: string, file: File | { name: string, type: string, path: string }, type: 'file' | 'voice_note' = 'file') => {
+export const sendFile = async (destIdRaw: string, file: File | { name: string, type: string, path: string }, type: 'file' | 'voice_note' = 'file', duration?: number) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    let fileData: number[] | null = null;
     let filePath: string | null = null;
-
     if ('path' in file) {
         filePath = file.path;
     } else {
         const buffer = await file.arrayBuffer();
-        fileData = Array.from(new Uint8Array(buffer));
+        const uint8 = new Uint8Array(buffer);
+        // Avoid sending huge JSON number arrays across IPC. 
+        // Write to a temporary file via a dedicated command and send the path instead.
+        filePath = await invoke<string>('write_temp_media', { 
+            name: file.name || 'blob', 
+            data: Array.from(uint8) 
+        });
     }
 
     try {
         await invoke('process_outgoing_media', {
             payload: {
                 recipient: destId,
-                fileData: fileData,
                 filePath: filePath,
                 fileName: file.name,
                 fileType: file.type,
                 msgType: type,
+                duration: duration,
                 isGroup: !!chat?.isGroup,
                 groupMembers: chat?.members || null,
                 replyTo: state.replyingTo ? {
@@ -93,8 +97,10 @@ export const sendFile = async (destIdRaw: string, file: File | { name: string, t
             }
         });
         setReplyingTo(null);
-    } catch (e) {
+    } catch (e: any) {
         console.error("[Chat] Media send failed:", e);
+        const { addToast } = await import('../stores/ui');
+        addToast(e.toString(), 'error');
     }
 };
 
@@ -141,12 +147,20 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         return { ...s, chats: { ...s.chats } };
     });
 
-    // 3. Update History (Transient Store)
+    // 3. Update History (Transient Store) - Keep starred messages immune from slicing!
     messageStore.update(mStore => {
         const msgs = mStore[peerHash] || [];
         if (msgs.some(m => m.id === msg.id)) return mStore;
-        const updated = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp).slice(-100);
-        return { ...mStore, [peerHash]: updated };
+        
+        // Merge and sort
+        const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
+        
+        // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
+        const starredLimit = combined.filter(m => m.isStarred);
+        const mostRecent = combined.filter(m => !m.isStarred).slice(-100);
+        
+        const final = [...starredLimit, ...mostRecent].sort((a, b) => a.timestamp - b.timestamp);
+        return { ...mStore, [peerHash]: final };
     });
 
     // 4. Persistence & Notifications
@@ -180,16 +194,16 @@ export const syncChatToDb = async (chat: Chat) => {
         await invoke('db_upsert_chat', {
             chat: {
                 address: chat.peerHash,
-                is_group: !!chat.isGroup,
+                isGroup: !!chat.isGroup,
                 alias: chat.peerNickname || null,
-                last_msg: chat.lastMsg || null,
-                last_timestamp: chat.lastTimestamp || null,
-                last_sender_hash: chat.lastSenderHash || null,
-                last_status: chat.lastStatus || null,
-                unread_count: chat.unreadCount || 0,
-                is_archived: !!chat.isArchived,
-                is_pinned: !!chat.isPinned,
-                is_blocked: !!chat.isBlocked,
+                lastMsg: chat.lastMsg || null,
+                lastTimestamp: chat.lastTimestamp || null,
+                lastSenderHash: chat.lastSenderHash || null,
+                lastStatus: chat.lastStatus || null,
+                unreadCount: chat.unreadCount || 0,
+                isArchived: !!chat.isArchived,
+                isPinned: !!chat.isPinned,
+                isBlocked: !!chat.isBlocked,
                 members: chat.members || null
             }
         });
@@ -222,7 +236,7 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
                 return { ...s, chats: { ...s.chats } };
             });
             // Persist the status to DB
-            invoke('db_update_messages_status', { chatAddress: peerHash, ids: msgIds, status: 'read' }).catch(console.error);
+            invoke('db_update_messages', { ids: msgIds, status: 'read' }).catch(console.error);
         }
     } catch (e) {
         console.error("[Chat] Send receipt failed:", e);
@@ -246,7 +260,8 @@ const triggerNativeNotification = (chat: Chat, msg: Message) => {
 
 export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0) => {
     try {
-        const identityHash = get(userStore).identityHash;
+        const state = get(userStore);
+        const identityHash = state.identityHash;
         const rawMsgs = await invoke<any[]>('db_get_messages', { chatAddress: peerHash, limit, offset, includeAttachments: true });
         const messages: Message[] = rawMsgs.map(m => ({
             id: m.id,
@@ -261,16 +276,82 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
             replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
         }));
 
-        messageStore.update(mStore => ({
-            ...mStore,
-            [peerHash]: messages.sort((a, b) => a.timestamp - b.timestamp)
-        }));
+        messageStore.update(mStore => {
+            const existing = mStore[peerHash] || [];
+            
+            // Merge newly loaded messages with existing ones
+            const combined = [...existing];
+            messages.forEach(newMsg => {
+                if (!combined.some(m => m.id === newMsg.id)) {
+                    combined.push(newMsg);
+                }
+            });
+            
+            // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
+            const sorted = combined.sort((a, b) => a.timestamp - b.timestamp);
+            const starred = sorted.filter(m => m.isStarred);
+            const latestNonStarred = sorted.filter(m => !m.isStarred).slice(-100);
+            
+            const final = [...starred, ...latestNonStarred].sort((a, b) => a.timestamp - b.timestamp);
+            return {
+                ...mStore,
+                [peerHash]: final
+            };
+        });
 
         return messages.length;
     } catch (e) {
         console.error("[Chat] Load failed:", e);
         return 0;
     }
+};
+
+export const loadStarredMessages = async () => {
+    try {
+        const state = get(userStore);
+        const identityHash = state.identityHash;
+        const rawMsgs = await invoke<any[]>('db_get_starred_messages');
+        
+        messageStore.update(mStore => {
+            const newStore = { ...mStore };
+            rawMsgs.forEach(m => {
+                const peerHash = m.chatAddress;
+                const msg: Message = {
+                    id: m.id,
+                    timestamp: m.timestamp,
+                    senderHash: m.senderHash,
+                    content: m.content,
+                    type: m.type as any,
+                    isMine: m.senderHash === identityHash,
+                    status: m.status as any,
+                    attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
+                    isStarred: !!m.isStarred,
+                    replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
+                };
+                
+                if (!newStore[peerHash]) newStore[peerHash] = [];
+                if (!newStore[peerHash].some(existing => existing.id === msg.id)) {
+                    newStore[peerHash].push(msg);
+                }
+            });
+            // Resort all updated chats
+            Object.keys(newStore).forEach(hash => {
+                newStore[hash].sort((a, b) => a.timestamp - b.timestamp);
+            });
+            return newStore;
+        });
+        return rawMsgs.length;
+    } catch (e) {
+        console.error("[Chat] Load starred failed:", e);
+        return 0;
+    }
+};
+
+export const loadMoreMessages = async (peerHash: string) => {
+    const msgs = get(messageStore)[peerHash] || [];
+    // Calculate offset based on non-starred messages to maintain standard pagination windows
+    const nonStarredCount = msgs.filter(m => !m.isStarred).length;
+    return await loadChatMessages(peerHash, 50, nonStarredCount);
 };
 
 export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
@@ -310,7 +391,7 @@ export const bulkStar = async (peerHash: string, msgIds: string[]) => {
     for (const id of msgIds) {
         const msgs = get(messageStore)[peerHash];
         const msg = msgs?.find(m => m.id === id);
-        if (msg) invoke('db_set_message_starred', { id, isStarred: msg.isStarred }).catch(console.error);
+        if (msg) invoke('db_update_messages', { ids: [id], isStarred: msg.isStarred }).catch(console.error);
     }
 };
 
@@ -339,26 +420,41 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
     });
 };
 
-export const markAsDownloaded = async (peerHash: string, msgId: string) => {
+export const updateSingleMessageStatusUI = (msgId: string, status: any) => {
+    messageStore.update(mStore => {
+        for (const peerHash of Object.keys(mStore)) {
+            const index = mStore[peerHash].findIndex(m => m.id === msgId);
+            if (index !== -1) {
+                mStore[peerHash][index] = { ...mStore[peerHash][index], status };
+                userStore.update(s => {
+                    if (s.chats[peerHash]) {
+                         s.chats[peerHash].lastStatus = status;
+                    }
+                    return { ...s, chats: { ...s.chats } };
+                });
+                break;
+            }
+        }
+        return { ...mStore };
+    });
+};
+
+export const markAsDownloaded = async (peerHash: string, msgId: string, exportedPath?: string) => {
     messageStore.update(mStore => {
         if (!mStore[peerHash]) return mStore;
         const msgs = mStore[peerHash].map(m => {
             if (m.id === msgId && m.attachment) {
-                const updatedMsg = { ...m, attachment: { ...m.attachment, isDownloaded: true } };
-                invoke('db_save_message', {
-                    msg: {
-                        id: updatedMsg.id,
-                        chatAddress: peerHash,
-                        senderHash: updatedMsg.senderHash,
-                        content: updatedMsg.content,
-                        timestamp: updatedMsg.timestamp,
-                        type: updatedMsg.type,
-                        status: updatedMsg.status,
-                        attachmentJson: JSON.stringify(updatedMsg.attachment),
-                        isStarred: !!updatedMsg.isStarred,
-                        isGroup: !!updatedMsg.groupId,
-                        replyToJson: updatedMsg.replyTo ? JSON.stringify(updatedMsg.replyTo) : null
-                    }
+                const updatedMsg = { 
+                    ...m, 
+                    attachment: { 
+                        ...m.attachment, 
+                        isDownloaded: true,
+                        exportedPath: exportedPath || m.attachment.exportedPath
+                    } 
+                };
+                invoke('db_update_messages', {
+                    ids: [msgId],
+                    attachmentJson: JSON.stringify(updatedMsg.attachment)
                 }).catch(console.error);
                 return updatedMsg;
             }
@@ -367,3 +463,4 @@ export const markAsDownloaded = async (peerHash: string, msgId: string) => {
         return { ...mStore, [peerHash]: msgs };
     });
 };
+

@@ -8,13 +8,15 @@
     alias = "?", 
     size = "w-12 h-12",
     textSize = "text-lg",
-    rounded = "rounded-2xl"
+    rounded = "rounded-2xl",
+    clickable = true
   } = $props<{ 
     hash?: string; 
     alias?: string; 
     size?: string;
     textSize?: string;
     rounded?: string;
+    clickable?: boolean;
   }>();
 
   // Deterministically fetch the visual style from the hash
@@ -24,6 +26,7 @@
   let showFullSize = $state(false);
 
   const toggleLightbox = (e: MouseEvent) => {
+    if (!clickable) return;
     e.stopPropagation();
     showFullSize = !showFullSize;
   };
@@ -31,7 +34,7 @@
 
 <!-- Thumbnail Trigger -->
 <div 
-  class="{size} {rounded} flex items-center justify-center text-white font-bold {textSize} shadow-2xl overflow-hidden relative group/avatar transition-all duration-300 border border-white/5 ring-1 ring-white/10 cursor-zoom-in active:scale-95"
+  class="{size} {rounded} flex items-center justify-center text-white font-bold {textSize} shadow-2xl overflow-hidden relative group/avatar transition-all duration-300 border border-white/5 ring-1 ring-white/10 {clickable ? 'cursor-zoom-in active:scale-95' : ''}"
   onclick={toggleLightbox}
   onkeydown={(e) => e.key === 'Enter' && toggleLightbox(e as any)}
   role="button"

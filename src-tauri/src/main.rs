@@ -1,7 +1,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod audio;
 mod app_state;
 mod commands;
 mod signal_store;
@@ -13,8 +12,7 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use app_state::{DbState, NetworkState, AudioState};
-use audio::AudioRecorder;
+use app_state::{DbState, NetworkState};
 
 fn main() {
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
@@ -40,10 +38,9 @@ fn main() {
             halted_targets: Mutex::new(std::collections::HashSet::new()),
             media_assembler: Mutex::new(std::collections::HashMap::new()),
             pending_media_links: Mutex::new(std::collections::HashMap::new()),
+            binary_receiver: Mutex::new(None),
             is_refilling: Mutex::new(false),
-        })
-        .manage(AudioState {
-            recorder: Mutex::new(AudioRecorder::new()),
+            pending_transfers: Mutex::new(std::collections::HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -60,11 +57,9 @@ fn main() {
             commands::disconnect_network,
             commands::send_to_network,
             commands::flush_outbox,
-            commands::nuclear_reset,
+            commands::reset_database,
             commands::crypto_mine_pow,
             commands::vault_exists,
-            commands::start_native_recording,
-            commands::stop_native_recording,
             commands::save_file,
             commands::export_database,
             commands::import_database,
@@ -85,11 +80,11 @@ fn main() {
             commands::send_typing_status,
             commands::send_receipt,
             commands::send_profile_update,
-            commands::show_in_folder,
+            commands::open_file,
             commands::db_save_message,
             commands::db_get_messages,
             commands::db_search_messages,
-            commands::db_update_messages_status,
+            commands::db_update_messages,
             commands::db_upsert_chat,
             commands::db_get_chats,
             commands::db_delete_chat,
@@ -98,15 +93,31 @@ fn main() {
             commands::db_set_contact_nickname,
             commands::db_set_chat_pinned,
             commands::db_set_chat_archived,
-            commands::db_set_message_starred,
+            commands::db_get_starred_messages,
+            commands::db_export_media,
             commands::db_delete_messages,
             commands::register_nickname,
+
             commands::burn_account,
             commands::process_outgoing_text,
-            commands::process_outgoing_media
+            commands::process_outgoing_media,
+            commands::write_temp_media
         ])
         .setup(|app| {
-            
+            // 🎙️ LINUX Fix: WebKitGTK requires manual signal handling for microphone permission
+            #[cfg(target_os = "linux")]
+            {
+                use webkit2gtk::{WebViewExt, PermissionRequestExt, PermissionRequest};
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.with_webview(|w| {
+                        let webview = w.inner();
+                        webview.connect_permission_request(|_webview, request: &PermissionRequest| {
+                            request.allow();
+                            true
+                        });
+                    });
+                }
+            }
             // Setup tray and menu as before
             let quit_i = MenuItem::with_id(app, "quit", "Quit Entropy", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;

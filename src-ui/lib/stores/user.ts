@@ -15,7 +15,6 @@ export interface AppState {
     replyingTo: Message | null;
     blockedHashes: string[];
     privacySettings: PrivacySettings;
-    sessionToken: string | null;
     isSynced: boolean;
     connectionStatus: 'disconnected' | 'connecting' | 'mining' | 'connected' | 'sync_error';
     authError: string | null;
@@ -38,7 +37,6 @@ const initialState: AppState = {
         proxyUrl: 'socks5://127.0.0.1:9050',
         theme: 'dark'
     },
-    sessionToken: null,
     isSynced: false,
     connectionStatus: 'disconnected',
     authError: null,
@@ -69,8 +67,7 @@ async function performSave(state: AppState) {
         const metadata = {
             globalNickname: state.globalNickname,
             blockedHashes: state.blockedHashes,
-            privacySettings: state.privacySettings,
-            sessionToken: state.sessionToken
+            privacySettings: state.privacySettings
         };
         await vaultSave(`entropy_meta_${state.identityHash}`, JSON.stringify(metadata));
     } catch (e) {

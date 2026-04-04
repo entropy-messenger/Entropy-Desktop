@@ -6,6 +6,7 @@ import { addToast, showConfirm } from '../stores/ui';
 import { network } from '../network';
 import { broadcastProfile } from './contacts';
 import { initVault, vaultLoad } from '../persistence';
+import { loadStarredMessages } from './chat';
 import type { Chat } from '../types';
 
 /**
@@ -36,7 +37,6 @@ export const initApp = async (password: string) => {
     if (idHash) {
         let chats: Record<string, Chat> = {};
         let globalNickname: string | null = null;
-        let sessionToken: string | null = null;
         let blockedHashes: string[] = [];
         let privacySettings: any = {
             typingStatus: 'everyone',
@@ -51,7 +51,6 @@ export const initApp = async (password: string) => {
             try {
                 const meta = JSON.parse(savedMeta);
                 globalNickname = meta.globalNickname || meta.myAlias || null;
-                sessionToken = meta.sessionToken || meta.session_token || null;
                 privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
                 console.error("Failed to parse vault metadata:", e);
@@ -93,11 +92,14 @@ export const initApp = async (password: string) => {
             identityHash: idHash,
             chats,
             globalNickname,
-            sessionToken,
             blockedHashes,
             privacySettings,
             authError: null
         }));
+        
+        // 3. Prime the Starred Messages Cache
+        loadStarredMessages().catch(console.error);
+        
         network.connect();
     } else {
         userStore.update(s => ({ ...s, authError: "Identity not found. please create one." }));
@@ -164,7 +166,7 @@ export const burnAccount = async () => {
         // 1s buffer for the network packet
         await new Promise(r => setTimeout(r, 1000));
         
-        await invoke('nuclear_reset');
+        await invoke('reset_database');
     } catch (err) {
         console.error("[Account] Burn Failed:", err);
     }

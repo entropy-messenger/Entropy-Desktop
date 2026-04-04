@@ -68,8 +68,8 @@
 </script>
 
 <div class="bg-entropy-surface/95 backdrop-blur-md p-3 px-4 flex justify-between items-center shadow-sm z-30">
-    <div class="flex items-center space-x-3 overflow-hidden cursor-pointer" onclick={onViewImage} onkeydown={(e) => e.key === 'Enter' && onViewImage()} role="button" tabindex="0">
-        <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" />
+    <div class="flex items-center space-x-3 overflow-hidden">
+        <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" clickable={false} />
         <div class="min-w-0">
             <div class="flex items-center space-x-2">
                 <div class="font-bold text-entropy-text-primary leading-tight truncate">

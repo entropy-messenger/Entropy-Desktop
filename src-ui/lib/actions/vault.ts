@@ -33,9 +33,9 @@ export const importVault = async (srcPath: string) => {
     }
 };
 
-export const nuclearReset = async () => {
+export const resetDatabase = async () => {
     try {
-        await invoke('nuclear_reset');
+        await invoke('reset_database');
         localStorage.clear();
         addToast("Vault wiped. Entropy is restarting...", 'info');
         // Native process will likely terminate/restart

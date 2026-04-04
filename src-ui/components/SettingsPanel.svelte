@@ -1,6 +1,6 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
-  import { updateMyProfile, toggleBlock, updatePrivacy, registerGlobalNickname } from '../lib/actions/contacts';
+  import { toggleBlock, updatePrivacy, registerGlobalNickname } from '../lib/actions/contacts';
   import { burnAccount } from '../lib/actions/auth';
   import { invoke } from '@tauri-apps/api/core';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';

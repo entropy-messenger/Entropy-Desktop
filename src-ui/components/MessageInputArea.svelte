@@ -13,7 +13,6 @@
   let { activeChat } = $props<{ activeChat: Chat }>();
 
   let messageInput = $state("");
-  let fileInput = $state<HTMLInputElement | null>(null);
   let isRecording = $state(false);
   let messageInputEl = $state<HTMLTextAreaElement | null>(null);
 
@@ -157,18 +156,16 @@
         {/if}
 
         <div class="p-3 bg-entropy-bg flex items-end space-x-2 min-h-[64px] pb-4">
-            <input type="file" bind:this={fileInput} onchange={onFileSelect} class="hidden" />
-            
             {#if isRecording}
                 <RecordingBar 
-                    onSend={(blob) => {
-                        sendFile(activeChat!.peerHash, new File([blob], 'voice_note.opus'), 'voice_note');
+                    onSend={(blob, duration) => {
+                        sendFile(activeChat!.peerHash, new File([blob], 'voice_note.opus'), 'voice_note', duration);
                         isRecording = false;
                     }}
                     onCancel={() => isRecording = false}
                 />
             {:else}
-                <button onclick={() => fileInput?.click()} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
+                <button onclick={onFileSelect} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
                 <div class="flex-1 flex flex-col items-end">
                     <textarea 
                         id="message-input"

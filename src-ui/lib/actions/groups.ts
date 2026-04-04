@@ -14,7 +14,14 @@ export const createGroup = async (name: string, members: string[]) => {
     const allMembers = [state.identityHash, ...members];
 
     userStore.update(s => {
-        s.chats[groupId] = { peerHash: groupId, peerNickname: name, unreadCount: 0, isGroup: true, members: allMembers };
+        s.chats[groupId] = { 
+            peerHash: groupId, 
+            peerNickname: name, 
+            unreadCount: 0, 
+            isGroup: true, 
+            members: allMembers,
+            trustLevel: 1
+        };
         return { ...s, activeChatHash: groupId };
     });
 

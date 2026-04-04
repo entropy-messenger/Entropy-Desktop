@@ -92,7 +92,8 @@ export function setupBackgroundHandlers() {
                     peerNickname: name,
                     unreadCount: 1,
                     isGroup: true,
-                    members
+                    members,
+                    trustLevel: 1
                 };
             }
             return { ...s, chats: { ...s.chats } };

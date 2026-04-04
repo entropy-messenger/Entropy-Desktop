@@ -6,7 +6,7 @@
   import { loadChatMessages } from '../lib/actions/chat';
   import {
     LucidePlus, LucideSettings, LucideSearch,
-    LucideCheck, LucideCheckCheck, LucideUsers,
+    LucideCheck, LucideCheckCheck, LucideClock, LucideUsers,
     LucidePin, LucideArchive, LucideWifiOff, LucideSun, LucideMoon, LucideStar
   } from 'lucide-svelte';
   import MessageContent from './MessageContent.svelte';
@@ -210,7 +210,8 @@
                                 {:else if chat.lastMsg}
                                     <div class="flex items-center space-x-1">
                                         {#if chat.lastIsMine}
-                                            {#if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
+                                            {#if chat.lastStatus === 'pending' || chat.lastStatus === 'sending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
+                                            {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
                                             {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary" />
                                             {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}
                                         {/if}
