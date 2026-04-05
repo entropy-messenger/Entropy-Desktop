@@ -57,7 +57,7 @@
             "
         >
             {#if activeChat.isGroup && !msg.isMine}
-                <div class="text-[10px] font-bold text-entropy-primary mb-1 opacity-80">{msg.senderAlias || msg.senderHash.slice(0, 12)}</div>
+                <div class="text-[10px] font-bold text-entropy-primary mb-1 opacity-80">{msg.senderAlias || msg.senderHash.slice(0, 6)}</div>
             {/if}
 
             <MessageContent 

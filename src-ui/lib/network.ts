@@ -15,8 +15,7 @@ export class NetworkLayer {
     private isManualDisconnect = false;
     private lastWarningTime: Map<string, number> = new Map();
 
-    /** Tracking table for asynchronous request-response cycles over the socket */
-    private pendingRequests = new Map<string, { resolve: (val: any) => void, reject: (err: any) => void, timeout: any }>();
+
 
     constructor() {
 
@@ -76,7 +75,7 @@ export class NetworkLayer {
         listen('msg://status', (event) => {
             const payload = event.payload as any;
             if (payload.id) {
-                updateSingleMessageStatusUI(payload.id, payload.status);
+                updateSingleMessageStatusUI(payload.id, payload.status, payload.chat_address);
             } else if (payload.ids) {
                 updateMessageStatusUI(payload.chat_address, payload.ids, payload.status);
             }
@@ -93,6 +92,7 @@ export class NetworkLayer {
         // Group Handlers
         listen('msg://invite', (event) => {
             const { groupId, name, members } = event.payload as any;
+            const uniqueMembers = Array.from(new Set(((members || []) as string[]).map(m => m.toLowerCase())));
             userStore.update(s => ({
                 ...s,
                 chats: {
@@ -103,7 +103,7 @@ export class NetworkLayer {
                         messages: [],
                         unreadCount: 1,
                         isGroup: true,
-                        members
+                        members: uniqueMembers
                     }
                 }
             }));
@@ -126,18 +126,6 @@ export class NetworkLayer {
             // Native logic in Rust already updated DB; Svelte handles reload on next view
         });
 
-        // 🔗 Relay Response Lock: Resolve pending identity/nickname requests
-        listen('network-msg', (event) => {
-            const val = event.payload as any;
-            if (val && val.req_id) {
-                const pending = this.pendingRequests.get(val.req_id);
-                if (pending) {
-                    clearTimeout(pending.timeout);
-                    this.pendingRequests.delete(val.req_id);
-                    pending.resolve(val);
-                }
-            }
-        });
     }
 
     private connectingPromise: Promise<void> | null = null;
@@ -289,74 +277,6 @@ export class NetworkLayer {
             return newState;
         });
 
-    }
-
-
-
-
-    sendJSON(data: any, recipientHash?: string) {
-        try {
-            const routingHash = recipientHash ? recipientHash.split('.')[0] : null;
-            let msg = JSON.stringify(data);
-            invoke('send_to_network', { 
-                routingHash, 
-                msg, 
-                data: null, 
-                isBinary: false, 
-                isMedia: false 
-            }).catch(e => {
-                if (e.toString().includes("queued")) {
-                    console.debug("[Network] Message queued in persistent outbox");
-                } else {
-                    console.warn("[Network] Background send failed:", e);
-                }
-            });
-        } catch (e) {
-            console.error("Native sendJSON failed", e);
-        }
-    }
-
-    sendBinary(recipientHash: string, data: Uint8Array, metadata?: any) {
-        const routingHash = recipientHash.split('.')[0];
-        try {
-            invoke('send_to_network', { 
-                routingHash, 
-                msg: null, 
-                data: Array.from(data), 
-                isBinary: true, 
-                isMedia: true 
-            }).catch(e => {
-                if (!e.toString().includes("queued")) {
-                    console.warn("[Network] Binary background send failed:", e);
-                }
-            });
-        } catch (e) {
-            console.error("Native sendBinary failed", e);
-        }
-    }
-
-    /**
-     * Executes a JSON request and waits for a specific response via req_id.
-     */
-    request(type: string, payload: any, timeoutMs = 10000): Promise<any> {
-        return new Promise((resolve, reject) => {
-            const reqId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-
-            const timeout = setTimeout(() => {
-                if (this.pendingRequests.has(reqId)) {
-                    this.pendingRequests.delete(reqId);
-                    reject(new Error(`Request ${type} timed out`));
-                }
-            }, timeoutMs);
-
-            this.pendingRequests.set(reqId, { resolve, reject, timeout });
-
-            this.sendJSON({
-                type,
-                req_id: reqId,
-                ...payload
-            });
-        });
     }
 
 }

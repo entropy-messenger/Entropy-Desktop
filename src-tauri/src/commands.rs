@@ -95,11 +95,11 @@ const PACKET_SIZE: usize = 1400; // MTU-Safe (Fits in single 1500 MTU frame)
 
 
 async fn send_paced_json(app: &tauri::AppHandle, val: serde_json::Value) -> Result<(), String> {
-    let json_str = serde_json::to_string(&val).unwrap();
+    let json_str = serde_json::to_string(&val).map_err(|e| e.to_string())?;
     let raw_len = json_str.len();
 
     let net_state = app.state::<NetworkState>();
-    let tx_lock = net_state.sender.lock().unwrap();
+    let tx_lock = net_state.sender.lock().map_err(|_| "Network state poisoned")?;
     let tx = tx_lock.as_ref().ok_or("Network not connected")?;
 
     if raw_len > 1200 {
@@ -113,7 +113,7 @@ async fn send_paced_json(app: &tauri::AppHandle, val: serde_json::Value) -> Resu
             let start = i * 1200;
             let end = std::cmp::min(start + 1200, data_bytes.len());
             let chunk_data = &data_bytes[start..end];
-            let mut envelope = Vec::with_capacity(1400);
+            let mut envelope = Vec::with_capacity(PACKET_SIZE);
             envelope.extend_from_slice(&zero_hash);
             envelope.push(0x00); 
             envelope.extend_from_slice(&transfer_id.to_be_bytes());
@@ -141,12 +141,12 @@ async fn internal_request(
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     {
-        let mut channels = state.response_channels.lock().unwrap();
+        let mut channels = state.response_channels.lock().map_err(|_| "Network state poisoned")?;
         channels.insert(req_id.clone(), tx);
     }
 
     {
-        let sender_lock = state.sender.lock().unwrap();
+        let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
         if let Some(ws_tx) = &*sender_lock {
             let text = full_payload.to_string();
             if text.len() > 1200 {
@@ -180,7 +180,7 @@ async fn internal_request(
                 });
             }
         } else {
-            let mut channels = state.response_channels.lock().unwrap();
+            let mut channels = state.response_channels.lock().map_err(|_| "Response channels poisoned")?;
             channels.remove(&req_id);
             return Err("Not connected to network".into());
         }
@@ -189,7 +189,7 @@ async fn internal_request(
     match tokio::time::timeout(Duration::from_secs(10), rx).await {
         Ok(Ok(res)) => Ok(res),
         _ => {
-            let mut channels = state.response_channels.lock().unwrap();
+            let mut channels = state.response_channels.lock().map_err(|_| "Response channels poisoned")?;
             channels.remove(&req_id);
             Err("Request timed out".into())
         }
@@ -230,7 +230,7 @@ async fn internal_establish_session_logic(
     let mut existing_trust = 1; // Default to Trusted
     {
         let state = app.state::<DbState>();
-        let lock = state.conn.lock().unwrap();
+        let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(conn) = lock.as_ref() {
             let res: Result<(Vec<u8>, i32), _> = conn.query_row(
                 "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
@@ -349,7 +349,7 @@ async fn internal_establish_session_logic(
     // Update the trust level in the remote identities table (if it was reset or found)
     {
         let state = app.state::<DbState>();
-        let lock = state.conn.lock().unwrap();
+        let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(conn) = lock.as_ref() {
             let _ = conn.execute(
                 "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
@@ -562,15 +562,15 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
     if !passphrase.is_empty() {
         // Argon2id is intentionally slow — offload to blocking thread pool to keep UI responsive
         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
-            let salt = SaltString::from_b64("ZW50cm9weV9zYWx0XzI1Ng").unwrap(); // "entropy_salt_256"
+            let salt = SaltString::from_b64("ZW50cm9weV9zYWx0XzI1Ng").map_err(|e| format!("Salt error: {}", e))?; // "entropy_salt_256"
             let argon2 = Argon2::new(
                 argon2::Algorithm::Argon2id,
                 argon2::Version::V0x13,
-                Params::new(65536, 3, 4, Some(32)).unwrap(),
+                Params::new(65536, 3, 4, Some(32)).map_err(|e| format!("Argon2 params error: {}", e))?,
             );
             let password_hash = argon2.hash_password(passphrase.as_bytes(), &salt)
                 .map_err(|e| format!("Argon2 hash failed: {}", e))?;
-            let derived_key = password_hash.hash.unwrap();
+            let derived_key = password_hash.hash.ok_or_else(|| "Argon2 key derivation failed to return hash".to_string())?;
             Ok::<String, String>(hex::encode(derived_key.as_ref()))
         }).await.map_err(|e| e.to_string())??;
 
@@ -751,18 +751,18 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
     };
 
     {
-        let mut db_conn = state.conn.lock().unwrap();
+        let mut db_conn = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         *db_conn = Some(conn);
     }
     
     {
-        let mut state_key = state.media_key.lock().unwrap();
+        let mut state_key = state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
         *state_key = Some(media_key);
     }
 
     // 🦾 Autonomous Identity Recovery: Restore the secure session from the vault synchronously
     let pub_key_opt: Option<Vec<u8>> = {
-        let lock = state.conn.lock().unwrap();
+        let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(c) = lock.as_ref() {
             c.query_row("SELECT public_key FROM signal_identity LIMIT 1", [], |r| r.get(0)).ok()
         } else {
@@ -771,7 +771,7 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
     };
 
     let token_opt: Option<String> = {
-        let lock = state.conn.lock().unwrap();
+        let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(c) = lock.as_ref() {
             c.query_row("SELECT session_token FROM signal_identity LIMIT 1", [], |r| r.get(0)).ok().flatten()
         } else {
@@ -782,11 +782,11 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
     if let Some(mut pk) = pub_key_opt {
         if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
         let id_hash = hex::encode(Sha256::digest(&pk));
-        *app.state::<NetworkState>().identity_hash.lock().unwrap() = Some(id_hash);
+        if let Ok(mut l) = app.state::<NetworkState>().identity_hash.lock() { *l = Some(id_hash); }
         
         if let Some(t) = token_opt {
             println!("[Network] Autonomous Recovery: Found deep-cached session token.");
-            *app.state::<NetworkState>().session_token.lock().unwrap() = Some(t);
+            if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() { *l = Some(t); }
         }
     }
 
@@ -795,7 +795,7 @@ pub async fn init_vault(app: tauri::AppHandle, state: State<'_, DbState>, passph
 
 fn get_media_dir(app: &tauri::AppHandle, state: &State<'_, DbState>) -> Result<std::path::PathBuf, String> {
     let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let profile = state.profile.lock().unwrap();
+    let profile = state.profile.lock().map_err(|_| "Profile lock poisoned")?;
     let media_dir = app_dir.join("media").join(&*profile);
     if !media_dir.exists() {
         std::fs::create_dir_all(&media_dir).map_err(|e| e.to_string())?;
@@ -816,7 +816,7 @@ pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(),
 
 #[tauri::command]
 pub fn vault_save(state: State<'_, DbState>, key: String, value: String) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     if let Some(conn) = lock.as_ref() {
         conn.execute(
             "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?1, ?2);",
@@ -831,7 +831,7 @@ pub fn vault_save(state: State<'_, DbState>, key: String, value: String) -> Resu
 
 #[tauri::command]
 pub fn vault_load(state: State<'_, DbState>, key: String) -> Result<Option<String>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     if let Some(conn) = lock.as_ref() {
         let mut stmt = conn
             .prepare("SELECT value FROM kv_store WHERE key = ?1;")
@@ -868,6 +868,7 @@ pub struct OutgoingText {
     pub recipient: String,
     pub content: String,
     pub reply_to: Option<ReplyTo>,
+    pub group_name: Option<String>,
     #[serde(rename = "isGroup", default)]
     pub is_group: bool,
     pub group_members: Option<Vec<String>>,
@@ -879,10 +880,12 @@ pub struct OutgoingMedia {
     pub recipient: String,
     pub file_path: Option<String>,
     pub file_data: Option<Vec<u8>>,
-    pub file_name: String,
-    pub file_type: String,
-    pub msg_type: String, // "file" or "voice_note"
+    pub file_name: Option<String>,
+    pub file_type: Option<String>,
+    pub msg_type: Option<String>,
+    pub group_name: Option<String>,
     pub duration: Option<f64>,
+    #[serde(rename = "isGroup", default)]
     pub is_group: bool,
     pub group_members: Option<Vec<String>>,
     pub reply_to: Option<ReplyTo>,
@@ -894,7 +897,7 @@ pub fn process_outgoing_text(
     payload: OutgoingText,
 ) -> Result<serde_json::Value, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         rt.block_on(async move {
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
@@ -906,15 +909,15 @@ pub fn process_outgoing_text(
             let msg_id = uuid::Uuid::new_v4().to_string();
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as i64;
 
             let own_id = {
-                let id_lock = net_state.identity_hash.lock().unwrap();
+                let id_lock = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
                 id_lock.clone().ok_or("Not authenticated")?
             };
 
-            // 🚀 UI-FIRST: Save to local DB and notify UI BEFORE encryption/network attempt
+            // UI-FIRST: Save locally as 'sending'
             let db_msg = DbMessage {
                 id: msg_id.clone(),
                 chat_address: payload.recipient.clone(),
@@ -922,28 +925,32 @@ pub fn process_outgoing_text(
                 content: payload.content.clone(),
                 timestamp,
                 r#type: "text".to_string(),
-                status: "sending".to_string(), // C. Save Locally with 'sending' status
+                status: "sending".to_string(),
                 attachment_json: None,
                 is_starred: false,
-                is_group: payload.is_group,
+                is_group: false,
                 reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
             };
 
             internal_db_save_message(&db_state, db_msg.clone()).await?;
-            let final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            if let Some(obj) = final_json.as_object_mut() {
+                obj.insert("chatAlias".to_string(), serde_json::json!(payload.group_name));
+                obj.insert("chatMembers".to_string(), serde_json::json!(payload.group_members.clone()));
+            }
             app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
 
-            // 1. Prepare E2EE payload
             let signal_payload = serde_json::json!({
                 "type": "text_msg",
                 "content": payload.content,
-                "id": msg_id,
+                "id": msg_id.clone(),
                 "replyTo": payload.reply_to,
                 "timestamp": timestamp,
-                "isGroup": payload.is_group,
+                "isGroup": false,
             });
 
-            // 2. Encrypt using internal logic
+            // Encrypt for the single recipient
             let ciphertext_obj = internal_signal_encrypt(
                 app.clone(), 
                 &net_state, 
@@ -951,28 +958,116 @@ pub fn process_outgoing_text(
                 signal_payload.to_string()
             ).await?;
 
-            // 4. Send to Network (Direct Binary per Member)
-            if payload.is_group {
-                let members = payload.group_members.ok_or("Group members missing")?;
-                let routing_hash_list: Vec<String> = members.iter()
-                    .filter(|&m| m != &own_id)
-                    .map(|m| m.split('.').next().unwrap_or(m).to_string())
-                    .collect();
+            let routing_hash = payload.recipient.split('.').next().unwrap_or(&payload.recipient);
+            let payload_bytes = ciphertext_obj.to_string().into_bytes();
+            
+            let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.to_string()), Some(msg_id), None, Some(payload_bytes), true, false, None, false).await;
 
-                let payload_str = ciphertext_obj.to_string();
-                let payload_bytes = payload_str.into_bytes();
+            Ok(final_json)
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
 
-                for hash in routing_hash_list {
-                    let _ = internal_send_to_network(app.clone(), &net_state, Some(hash), Some(msg_id.clone()), None, Some(payload_bytes.clone()), true, false, None, false).await;
-                }
-            } else {
-                // Dispatch as a UNIVERSAL BINARY packet (Type 0x01)
-                let routing_hash = payload.recipient.split('.').next().unwrap_or(&payload.recipient);
-                let payload_str = ciphertext_obj.to_string();
-                let payload_bytes = payload_str.into_bytes();
+#[tauri::command]
+pub fn process_outgoing_group_text(
+    app: AppHandle,
+    payload: OutgoingText,
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let db_state = app.state::<DbState>();
+            let net_state = app.state::<NetworkState>();
+
+            if payload.content.chars().count() > 16000 {
+                return Err("Message too long (max 16000 characters)".into());
+            }
+
+            let msg_id = uuid::Uuid::new_v4().to_string();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+
+            let own_id = {
+                let id_lock = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
+                id_lock.clone().ok_or("Not authenticated")?
+            };
+
+            // Save to local DB with 'sending' status
+            let db_msg = DbMessage {
+                id: msg_id.clone(),
+                chat_address: payload.recipient.clone(), // This is the group_id
+                sender_hash: own_id.clone(),
+                content: payload.content.clone(),
+                timestamp,
+                r#type: "text".to_string(),
+                status: "sending".to_string(),
+                attachment_json: None,
+                is_starred: false,
+                is_group: true,
+                reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+            };
+
+            internal_db_save_message(&db_state, db_msg.clone()).await?;
+            
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            if let Some(obj) = final_json.as_object_mut() {
+                obj.insert("chatAlias".to_string(), serde_json::json!(payload.group_name));
+                obj.insert("chatMembers".to_string(), serde_json::json!(payload.group_members.clone()));
+            }
+            app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
+
+            let members = payload.group_members.as_ref().ok_or("Group members missing")?;
+            
+            // Prepare the inner payload (This will be the same for everyone)
+            let signal_inner_payload = serde_json::json!({
+                "type": "text_msg",
+                "content": payload.content,
+                "id": msg_id.clone(),
+                "replyTo": payload.reply_to,
+                "timestamp": timestamp,
+                "isGroup": true,
+                "groupId": payload.recipient, 
+                "groupName": payload.group_name,
+                "groupMembers": payload.group_members.clone(), // 🦾 SELF-HEALING: Send the member list with every message
+            });
+            let payload_str = signal_inner_payload.to_string();
+
+            // Loop through each member and encrypt individually
+            for member_id in members {
+                if member_id == &own_id { continue; }
                 
-                // Send as binary, and 'is_media' = false (type 0x01) ensures Signal decryption path
-                let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.to_string()), Some(msg_id), None, Some(payload_bytes), true, false, None, false).await;
+                let routing_hash = member_id.split('.').next().unwrap_or(&member_id).to_string();
+                
+                // 🔐 INDIVIDUAL ENCRYPTION: Each member needs their own ratchet ciphertext
+                match internal_signal_encrypt(
+                    app.clone(), 
+                    &net_state, 
+                    &member_id, 
+                    payload_str.clone()
+                ).await {
+                    Ok(ciphertext_obj) => {
+                        let payload_bytes = ciphertext_obj.to_string().into_bytes();
+                        let _ = internal_send_to_network(
+                            app.clone(), 
+                            &net_state, 
+                            Some(routing_hash), 
+                            Some(msg_id.clone()), 
+                            None, 
+                            Some(payload_bytes), 
+                            true, 
+                            false, 
+                            None, 
+                            false
+                        ).await;
+                    },
+                    Err(e) => {
+                        // ⚠️ ROBUSTNESS: If one member is unreachable/not found, DON'T fail the whole group message.
+                        // Just log it and move to the next member.
+                        tracing::warn!("[Group] Skipping member {}: {}", member_id, e);
+                    }
+                }
             }
 
             Ok(final_json)
@@ -986,18 +1081,20 @@ pub fn process_outgoing_media(
     payload: OutgoingMedia,
 ) -> Result<serde_json::Value, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
+            println!("[Media] Outgoing media: recipient={}, path={:?}, data_len={:?}", 
+                payload.recipient, payload.file_path, payload.file_data.as_ref().map(|d| d.len()));
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
             let msg_id = uuid::Uuid::new_v4().to_string();
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
             
-            // 1. Get raw data with strict 10MB limit (Matches 7680 fragments of 1319 bytes)
+            // 1. Get raw data with strict 10MB limit
             let data = if let Some(p) = &payload.file_path {
                 let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
                 if metadata.len() > 10 * 1024 * 1024 {
@@ -1006,13 +1103,6 @@ pub fn process_outgoing_media(
                 let mut file = std::fs::File::open(p).map_err(|e| e.to_string())?;
                 let mut d = Vec::new();
                 file.read_to_end(&mut d).map_err(|e| e.to_string())?;
-
-                // Cleanup temporary IPC files immediately
-                if let Some(os_name) = std::path::Path::new(p).file_name() {
-                    if os_name.to_string_lossy().starts_with("tmp_") {
-                        let _ = std::fs::remove_file(p);
-                    }
-                }
                 d
             } else if let Some(d) = payload.file_data {
                 if d.len() > 10 * 1024 * 1024 {
@@ -1032,13 +1122,12 @@ pub fn process_outgoing_media(
             let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
             combined.extend_from_slice(&nonce);
             combined.extend_from_slice(&ciphertext);
-            let _ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&combined);
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
 
             // 3. Save to Local Vault (encrypted with local media_key)
             let local_file_path = {
                  let local_key_bytes = {
-                    let lock = db_state.media_key.lock().unwrap();
+                    let lock = db_state.media_key.lock().map_err(|_| "State poisoned")?;
                     lock.clone().ok_or("Media key not initialized")?
                 };
                 let local_key = Key::<Aes256Gcm>::from_slice(&local_key_bytes);
@@ -1054,10 +1143,10 @@ pub fn process_outgoing_media(
                 f.write_all(&final_blob).map_err(|e| e.to_string())?;
                 file_path.to_string_lossy().to_string()
             };
+            let saved_vault_path = local_file_path;
 
-            // 4. Construct Signal-layer payload (Fragmentation-only)
+            // 4. Construct Signal-layer payload
             let transfer_id: u32 = rand::random();
-            
             let bundle = json!({
                 "type": "signal_media",
                 "key": key_b64,
@@ -1070,82 +1159,192 @@ pub fn process_outgoing_media(
                 "type": "file",
                 "id": msg_id.clone(),
                 "bundle": bundle,
+                "timestamp": timestamp,
+                "isGroup": false,
                 "transfer_id": transfer_id,
                 "size": data.len(),
-                "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64,
-                "msg_type": payload.msg_type,
+                "msg_type": payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
                 "duration": payload.duration,
-                "replyTo": payload.reply_to
+                "replyTo": payload.reply_to,
             });
 
-            // 🚀 UI-FIRST: Save to local DB and notify UI BEFORE network attempt
+            // 5. Save metadata to local DB
+            let own_id = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().unwrap_or_default();
             let db_msg = DbMessage {
                 id: msg_id.clone(),
                 chat_address: payload.recipient.clone(),
-                sender_hash: {
-                    let lock = net_state.identity_hash.lock().unwrap();
-                    lock.clone().unwrap_or_default()
-                },
-                content: if payload.msg_type == "voice_note" || payload.file_name == "voice_note.opus" { 
-                    "Voice Note".to_string() 
-                } else { 
-                    format!("File: {}", payload.file_name) 
-                },
+                sender_hash: own_id.clone(),
+                content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
                 timestamp,
-                r#type: payload.msg_type.clone(),
-                status: "sending".to_string(), // Truth-on-the-Wire sync: starts as sending
-                attachment_json: Some(json!({
+                r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+                status: "sent".to_string(), // Instant update for non-critical assets
+                attachment_json: Some(serde_json::json!({
                     "fileName": payload.file_name,
                     "fileType": payload.file_type,
                     "size": data.len(),
-                    "bundle": bundle,
                     "duration": payload.duration,
-                    "originalPath": payload.file_path,
-                    "vaultPath": local_file_path
+                    "bundle": bundle,
+                    "vaultPath": saved_vault_path
                 }).to_string()),
                 is_starred: false,
-                is_group: payload.is_group,
+                is_group: false,
                 reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
             };
 
             internal_db_save_message(&db_state, db_msg.clone()).await?;
-            let final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            if let Some(obj) = final_json.as_object_mut() {
+                // For 1:1 media, we do not have payload.group_name, but we can emit chatAlias as null or peerNickname
+                obj.insert("chatAlias".to_string(), serde_json::json!(null));
+            }
             app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
 
-            // 5. Send to Network (Wait for E2EE context per member)
-            let members = if payload.is_group {
-                payload.group_members.ok_or("Group members missing")?
-            } else {
-                vec![payload.recipient.clone()]
+            // 6. Signal-Encrypt metadata and send
+            let encrypted = internal_signal_encrypt(app.clone(), &net_state, &payload.recipient, content_obj.to_string()).await?;
+            let routing_hash = payload.recipient.split('.').next().unwrap_or(&payload.recipient);
+
+            // A. Send Metadata (0x04)
+            let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.to_string()), Some(msg_id.clone()), None, Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true).await;
+
+            // B. Send Binary (0x02)
+            let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.to_string()), Some(msg_id), None, Some(combined), true, true, Some(transfer_id), false).await;
+
+            Ok(final_json)
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
+#[tauri::command]
+pub fn process_outgoing_group_media(
+    app: AppHandle,
+    payload: OutgoingMedia,
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
+        rt.block_on(async move {
+            println!("[GroupMedia] Outgoing group media: recipient={}, path={:?}, data_len={:?}", 
+                payload.recipient, payload.file_path, payload.file_data.as_ref().map(|d| d.len()));
+            let db_state = app.state::<DbState>();
+            let net_state = app.state::<NetworkState>();
+
+            let msg_id = uuid::Uuid::new_v4().to_string();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| format!("Clock error: {}", e))?
+                .as_millis() as i64;
+            
+            // 1. Get raw data
+            let data = if let Some(p) = &payload.file_path {
+                let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
+                if metadata.len() > 10 * 1024 * 1024 { return Err("File too large.".to_string()); }
+                let mut d = Vec::new();
+                std::fs::File::open(p).map_err(|e| e.to_string())?.read_to_end(&mut d).map_err(|e| e.to_string())?;
+                d
+            } else if let Some(d) = payload.file_data {
+                if d.len() > 10 * 1024 * 1024 { return Err("File too large.".to_string()); }
+                d
+            } else { return Err("No data".into()); };
+
+            // 2. Encrypt for group (AES-GCM-256)
+            let key = Aes256Gcm::generate_key(&mut OsRng);
+            let cipher = Aes256Gcm::new(&key);
+            let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+            let ciphertext = cipher.encrypt(&nonce, data.as_ref()).map_err(|e| e.to_string())?;
+            let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
+            combined.extend_from_slice(&nonce);
+            combined.extend_from_slice(&ciphertext);
+            let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+
+            // 3. Save locally
+            let _ = {
+                let local_key_bytes = db_state.media_key.lock().map_err(|_| "State poisoned")?.clone().ok_or("No media key")?;
+                let local_key = Key::<Aes256Gcm>::from_slice(&local_key_bytes);
+                let local_nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+                let local_ciphertext = Aes256Gcm::new(local_key).encrypt(&local_nonce, data.as_ref()).map_err(|e| e.to_string())?;
+                let mut final_blob = local_nonce.to_vec();
+                final_blob.extend(local_ciphertext);
+                let media_dir = get_media_dir(&app, &db_state)?;
+                let file_path = media_dir.join(&msg_id);
+                std::fs::File::create(&file_path).map_err(|e| e.to_string())?.write_all(&final_blob).map_err(|e| e.to_string())?;
             };
 
-            for member in members {
-                let own_hash = {
-                    let lock = net_state.identity_hash.lock().unwrap();
-                    lock.clone().unwrap_or_default()
-                };
-                if member == own_hash { continue; }
+            // 4. Metadata Setup
+            let transfer_id: u32 = rand::random();
+            let bundle = json!({
+                "type": "signal_media",
+                "key": key_b64,
+                "file_name": payload.file_name,
+                "file_type": payload.file_type,
+                "file_size": data.len()
+            });
 
-                // A. Send Metadata (Signal-Encrypted JSON Type 0x01)
-                let encrypted = internal_signal_encrypt(app.clone(), &net_state, &member, content_obj.to_string()).await?;
-                let routing_hash = member.split('.').next().unwrap_or(&member);
+            let content_obj_raw = json!({
+                "type": "file",
+                "id": msg_id.clone(),
+                "bundle": bundle,
+                "timestamp": timestamp,
+                "isGroup": true,
+                "transfer_id": transfer_id,
+                "size": data.len(),
+                "msg_type": payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+                "duration": payload.duration,
+                "replyTo": payload.reply_to,
+                "groupId": payload.recipient,
+                "groupName": payload.group_name,
+                "groupMembers": payload.group_members.clone(),
+            }).to_string();
 
-                // Type 0x04: Metadata (Volatile) - This ensures no ghost bubbles if media is dropped
-                let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.to_string()), Some(msg_id.clone()), None, Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true).await;
+            // 5. Save to local DB (Group UUID is the chat address)
+            let own_id = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().unwrap_or_default();
+            let db_msg = DbMessage {
+                id: msg_id.clone(),
+                chat_address: payload.recipient.clone(),
+                sender_hash: own_id.clone(),
+                content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
+                timestamp,
+                r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+                status: "sent".to_string(),
+                attachment_json: Some(serde_json::json!({
+                    "fileName": payload.file_name,
+                    "fileType": payload.file_type,
+                    "size": data.len(),
+                    "duration": payload.duration,
+                    "bundle": bundle,
+                    "vaultPath": get_media_dir(&app, &db_state).map(|d| d.join(&msg_id).to_string_lossy().to_string()).unwrap_or_default()
+                }).to_string()),
+                is_starred: false,
+                is_group: true,
+                reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+            };
 
-                // B. Send binary fragments (Type 0x02)
-                let _ = internal_send_to_network(
-                    app.clone(), 
-                    &net_state, 
-                    Some(routing_hash.to_string()), 
-                    Some(msg_id.clone()),
-                    None, 
-                    Some(combined.clone()), 
-                    true, 
-                    true, // is_media enables fragmentation logic with transfer_id
-                    Some(transfer_id),
-                    false // Not volatile, Binary 0x02 has its own drop logic
-                ).await;
+            internal_db_save_message(&db_state, db_msg.clone()).await?;
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            if let Some(obj) = final_json.as_object_mut() {
+                obj.insert("chatAlias".to_string(), serde_json::json!(payload.group_name));
+                obj.insert("chatMembers".to_string(), serde_json::json!(payload.group_members.clone()));
+            }
+            app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
+
+            let members = payload.group_members.as_ref().ok_or("No members provided for group media")?;
+
+            // MULTICAST: Iterate over members and send metadata + binary
+            for member_id in members {
+                if member_id == &own_id { continue; }
+                let routing_hash = member_id.split('.').next().unwrap_or(&member_id).to_string();
+                
+                // A. Encrypt metadata specifically for THIS member
+                        if let Some(d) = payload.duration { println!("[Group-Media] Payload Duration: {}", d); }
+        match internal_signal_encrypt(app.clone(), &net_state, &member_id, content_obj_raw.clone()).await {
+                    Ok(encrypted_metadata) => {
+                         let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.clone()), Some(msg_id.clone()), None, Some(encrypted_metadata.to_string().into_bytes()), true, false, Some(transfer_id), true).await;
+                         
+                         // B. Upload binary fragments to THIS member
+                         let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash), Some(msg_id.clone()), None, Some(combined.clone()), true, true, Some(transfer_id), false).await;
+                    },
+                    Err(e) => {
+                        tracing::warn!("[Group Media] Skipping member {}: {}", member_id, e);
+                    }
+                }
             }
 
             Ok(final_json)
@@ -1159,7 +1358,7 @@ pub async fn db_save_message(state: tauri::State<'_, DbState>, msg: DbMessage) -
 }
 
 pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     // ... (rest of implementation remains same) ...
@@ -1226,7 +1425,7 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
 
 #[tauri::command]
 pub async fn db_get_messages(state: State<'_, DbState>, chat_address: String, limit: u32, offset: u32, include_attachments: bool) -> Result<Vec<DbMessage>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let sql = if include_attachments {
@@ -1266,7 +1465,7 @@ pub async fn db_get_messages(state: State<'_, DbState>, chat_address: String, li
 
 #[tauri::command]
 pub async fn db_search_messages(state: State<'_, DbState>, query: String) -> Result<Vec<DbMessage>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     // Search using FTS5 virtual table
@@ -1309,7 +1508,7 @@ pub async fn db_update_messages(
     is_starred: Option<bool>, 
     attachment_json: Option<String>
 ) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     for id in ids {
@@ -1354,7 +1553,7 @@ pub async fn db_update_messages(
 
 pub async fn internal_db_upsert_chat(db_state: &DbState, chat: DbChat) -> Result<(), String> {
 
-    let lock = db_state.conn.lock().unwrap();
+    let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     conn.execute(
@@ -1388,6 +1587,20 @@ pub async fn internal_db_upsert_chat(db_state: &DbState, chat: DbChat) -> Result
     Ok(())
 }
 
+pub async fn internal_db_save_members(db_state: &DbState, chat_address: &str, members: Vec<String>) -> Result<(), String> {
+    let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", [chat_address]).map_err(|e| e.to_string())?;
+    for m in members {
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)",
+            [chat_address, &m],
+        ).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn db_upsert_chat(state: State<'_, DbState>, chat: DbChat) -> Result<(), String> {
     internal_db_upsert_chat(&state, chat).await
@@ -1395,7 +1608,7 @@ pub async fn db_upsert_chat(state: State<'_, DbState>, chat: DbChat) -> Result<(
 
 #[tauri::command]
 pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let mut stmt = conn.prepare(
@@ -1447,7 +1660,7 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
 
 #[tauri::command]
 pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let mut stmt = conn.prepare("SELECT hash, alias, is_blocked, trust_level FROM contacts").map_err(|e| e.to_string())?;
@@ -1470,7 +1683,7 @@ pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>
 
 #[tauri::command]
 pub async fn db_set_contact_blocked(state: State<'_, DbState>, hash: String, is_blocked: bool) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     // UPSERT: Insert if missing, or update if exists
@@ -1486,7 +1699,7 @@ pub async fn db_set_contact_blocked(state: State<'_, DbState>, hash: String, is_
 
 #[tauri::command]
 pub async fn db_set_contact_nickname(state: State<'_, DbState>, hash: String, alias: Option<String>) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     conn.execute(
@@ -1500,7 +1713,7 @@ pub async fn db_set_contact_nickname(state: State<'_, DbState>, hash: String, al
 
 #[tauri::command]
 pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     for id in ids {
@@ -1516,18 +1729,17 @@ pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> 
 
 #[tauri::command]
 pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
-    *state.is_enabled.lock().unwrap() = false;
+    if let Ok(mut l) = state.is_enabled.lock() { *l = false; }
     
-    let mut sender_lock = state.sender.lock().unwrap();
-    *sender_lock = None;
+    if let Ok(mut l) = state.sender.lock() { *l = None; }
     
-    let mut cancel_lock = state.cancel.lock().unwrap();
-    if let Some(token) = cancel_lock.take() {
-        token.cancel();
+    if let Ok(mut l) = state.cancel.lock() {
+        if let Some(token) = l.take() {
+            token.cancel();
+        }
     }
     
-    let mut queue_lock = state.queue.lock().unwrap();
-    queue_lock.clear();
+    if let Ok(mut l) = state.queue.lock() { l.clear(); }
     
     Ok(())
 }
@@ -1576,21 +1788,27 @@ async fn internal_establish_network(
         )
     };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<PacedMessage>();
+    let (tx, rx) = mpsc::unbounded_channel::<PacedMessage>();
     let (bin_tx, mut bin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-    {
-        let state = app.state::<NetworkState>();
-        let mut sender = state.sender.lock().unwrap();
-        *sender = Some(tx.clone());
-        let mut bin_rec = state.binary_receiver.lock().unwrap();
-        *bin_rec = Some(bin_tx.clone());
-    }
+    let net_state_setup = app.state::<NetworkState>();
+    if let Ok(mut l) = net_state_setup.sender.lock() { *l = Some(tx); }
+    if let Ok(mut l) = net_state_setup.binary_receiver.lock() { *l = Some(bin_tx); }
+
+    let app_recv_sequencer = app.clone();
     
-    let app_handle = app.clone();
+    // Background listener for binary frames (reassembly sequencer)
+    tokio::task::spawn_local(async move {
+        while let Some(bin_vec) = bin_rx.recv().await {
+            // Sequential processing avoids reassembly race conditions and Send/Sync traits issues
+            let _ = process_incoming_binary(app_recv_sequencer.clone(), bin_vec, None).await;
+        }
+    });
+
     let write_token = token.clone();
     
-    tokio::spawn(async move {
+    tokio::task::spawn_local(async move {
+        let mut rx = rx;
         let mut next_dummy_sleep = Box::pin(tokio::time::sleep(Duration::from_millis(rand::random::<u64>() % 9000 + 1000)));
 
         loop {
@@ -1616,293 +1834,304 @@ async fn internal_establish_network(
                         Message::Binary(b) => b.len(),
                         _ => 0
                     };
-                    println!("[Net] RX Background Paced send: framesize={}", frame_len);
+                    println!("[Net] TX Background Paced send: framesize={}", frame_len);
                     if let Err(_) = write.send(msg_to_send).await { break; }
-                    
-                    // 🕒 Status is now promoted from 'sending' to 'sent' only when Relay confirms receipt (relay_success / delivery_status)
-                    // The background loop no longer 'lies' by auto-promoting messages here.
                 }
                 _ = &mut next_dummy_sleep => {
                     let mut dummy_vec = vec![0u8; PACKET_SIZE];
-                    dummy_vec[0] = 0x03; // Type 0x03 Binary Dummy
-                    TrafficNormalizer::pad_binary(&mut dummy_vec, PACKET_SIZE);
-                    
-                    if let Ok(sender_lock) = app_handle.state::<NetworkState>().sender.lock() {
-                        if sender_lock.is_some() {
-                             // Only send if we are active
-                        }
-                    }
-                    
-                    println!("[Net] TX Dummy Pacing: Binary Type 0x03 (1400B)");
+                    dummy_vec[0] = 0x03; // Dummy Pacing Payload
+                    println!("[Net] TX Dummy Pacing: Binary Type 0x03 ({}B)", PACKET_SIZE);
                     if let Err(_) = write.send(Message::Binary(dummy_vec.into())).await { break; }
-                    
                     next_dummy_sleep = Box::pin(tokio::time::sleep(Duration::from_millis(rand::random::<u64>() % 9000 + 1000)));
                 }
             }
         }
-        {
-            let state = app_handle.state::<NetworkState>();
-            let mut s = state.sender.lock().unwrap();
-            *s = None;
-        }
-        let _ = app_handle.emit("network-status", "disconnected");
-    });
-    
-    let app_recv_sequencer = app.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            while let Some(bin_vec) = bin_rx.recv().await {
-                // Sequential processing avoids reassembly race conditions and Send/Sync traits issues
-                let _ = process_incoming_binary(app_recv_sequencer.clone(), bin_vec, None).await;
-            }
-        });
     });
 
-    let app_read = app.clone();
-    let read_token = token;
-    tokio::spawn(async move {
-        // 🦾 AGGRESSIVE SESSION RESUMPTION: Skip PoW if we have a valid token
-        let id_hash = app_read.state::<NetworkState>().identity_hash.lock().unwrap().clone();
-        let session_token = app_read.state::<NetworkState>().session_token.lock().unwrap().clone();
-        
-        if let (Some(id), Some(token)) = (id_hash.clone(), session_token) {
-            if let Some(tx) = &*app_read.state::<NetworkState>().sender.lock().unwrap() {
-                let payload = json!({ "identity_hash": id, "session_token": token });
+    // 🦾 AGGRESSIVE SESSION RESUMPTION: Skip PoW if we have a valid token
+    let id_hash = app.state::<NetworkState>().identity_hash.lock().map_err(|_| "Network state poisoned")?.clone();
+    let session_token = app.state::<NetworkState>().session_token.lock().map_err(|_| "Network state poisoned")?.clone();
+    
+    if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token) {
+        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
+            if let Some(tx) = &*sender_lock {
+                let payload = json!({ "identity_hash": id, "session_token": token_val });
                 let auth_req = json!({"type": "auth", "payload": payload});
                 println!("[Net] Resuming session with token for {}...", id);
                 let _ = tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(auth_req.to_string())) });
             }
-        } else if let Some(id) = id_hash {
-            if let Some(tx) = &*app_read.state::<NetworkState>().sender.lock().unwrap() {
+        }
+    } else if let Some(id) = id_hash {
+        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
+            if let Some(tx) = &*sender_lock {
                 let challenge_req = json!({"type": "pow_challenge", "identity_hash": id, "id": "auto_challenge"});
                 println!("[Net] No session token found. Requesting PoW challenge for {}...", id);
                 let _ = tx.send(PacedMessage { msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())) });
             }
         }
+    }
 
-        loop {
-            tokio::select! {
-                _ = read_token.cancelled() => break,
-                res = read.next() => {
-                    match res {
-                        Some(Ok(msg)) => {
-                            match msg {
-                                Message::Text(text) => {
-                                    let text_str = text.to_string();
-                                    let mut handled = false;
-                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
-                                        if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
-                                            if let Some(tx) = app_read.state::<NetworkState>().response_channels.lock().unwrap().remove(req_id) {
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => break,
+            res = read.next() => {
+                match res {
+                    Some(Ok(msg)) => {
+                        match msg {
+                            Message::Text(text) => {
+                                let text_str = text.to_string();
+                                let mut handled = false;
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
+                                    if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
+                                        let net_state = app.state::<NetworkState>();
+                                        let lock = net_state.response_channels.lock();
+                                        if let Ok(mut channels) = lock {
+                                            if let Some(tx) = channels.remove(req_id) {
                                                 let _ = tx.send(val.clone());
                                                 handled = true;
                                             }
                                         }
-                                        if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
-                                            match msg_type {
-                                                "auth_success" => {
-                                                    let net_state = app_read.state::<NetworkState>();
-                                                    *net_state.is_authenticated.lock().unwrap() = true;
+                                    }
+                                    if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
+                                        match msg_type {
+                                            "auth_success" => {
+                                                let net_state = app.state::<NetworkState>();
+                                            if let Ok(mut l) = net_state.is_authenticated.lock() { *l = true; }
+                                            
+                                            if let Some(token_val) = val.get("session_token").and_then(|t| t.as_str()) {
+                                                if let Ok(mut l) = net_state.session_token.lock() { *l = Some(token_val.to_string()); }
                                                     
-                                                    if let Some(token) = val.get("session_token").and_then(|t| t.as_str()) {
-                                                        *net_state.session_token.lock().unwrap() = Some(token.to_string());
-                                                        
-                                                        // 🔐 ETERNAL SESSION: Persist new token back to the encrypted vault
-                                                        let app_token = app_read.clone();
-                                                        let token_str = token.to_string();
-                                                        tokio::spawn(async move {
-                                                            let _ = SqliteSignalStore::new(app_token).set_session_token(Some(token_str)).await;
-                                                        });
-                                                    }
-                                                    
-                                                    // Signal Hardening: Auto-replenish keys if they drop below threshold
-                                                    let count = val.get("otk_count").and_then(|c| c.as_u64()).unwrap_or(0);
-                                                    if count < 50 {
-                                                        let mut refill_lock = net_state.is_refilling.lock().unwrap();
+                                                    // 🔐 ETERNAL SESSION: Persist new token back to the encrypted vault
+                                                    let app_token = app.clone();
+                                                    let token_str = token_val.to_string();
+                                                    tokio::task::spawn_local(async move {
+                                                        let _ = SqliteSignalStore::new(app_token).set_session_token(Some(token_str)).await;
+                                                    });
+                                                }
+                                                
+                                                // Signal Hardening: Auto-replenish keys if they drop below threshold
+                                                let count = val.get("otk_count").and_then(|c| c.as_u64()).unwrap_or(0);
+                                                if count < 50 {
+                                                    if let Ok(mut refill_lock) = net_state.is_refilling.lock() {
                                                         if !*refill_lock {
                                                             *refill_lock = true;
                                                             let delta = 100_u32.saturating_sub(count as u32);
                                                             if delta > 0 {
                                                                 println!("[Signal] One-time prekeys are low ({}). Triggering smart refill (delta={})...", count, delta);
-                                                                let app_sync = app_read.clone();
-                                                                tokio::spawn(async move {
+                                                                let app_sync = app.clone();
+                                                                tokio::task::spawn_local(async move {
                                                                     let _ = signal_sync_keys(app_sync.clone(), Some(delta));
-                                                                    *app_sync.state::<NetworkState>().is_refilling.lock().unwrap() = false;
+                                                                    if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                                 });
                                                             } else {
                                                                 *refill_lock = false;
                                                             }
                                                         }
                                                     }
-                                                    
-                                                    // 🦾 AUTONOMOUS FLUSH: Trigger outbox sync the moment we hit the relay
-                                                    let app_flush = app_read.clone();
-                                                    tokio::spawn(async move {
-                                                        let net_flush = app_flush.state::<NetworkState>();
-                                                        let _ = flush_outbox(app_flush.clone(), net_flush).await;
-                                                    });
+                                                }
+                                                
+                                                // 🦾 AUTONOMOUS FLUSH: Trigger outbox sync the moment we hit the relay
+                                                let app_flush = app.clone();
+                                                tokio::task::spawn_local(async move {
+                                                    let net_flush = app_flush.state::<NetworkState>();
+                                                    let _ = flush_outbox(app_flush.clone(), net_flush).await;
+                                                });
 
-                                                    let _ = app_read.emit("network-status", "authenticated"); // Dumb Terminal: No token leaked
-                                                    handled = true;
-                                                },
-                                                "keys_low" => {
-                                                    let count = val.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
-                                                    let net_state = app_read.state::<NetworkState>();
-                                                    let mut refill_lock = net_state.is_refilling.lock().unwrap();
+                                                let _ = app.emit("network-status", "authenticated"); // Dumb Terminal: No token leaked
+                                                handled = true;
+                                            },
+                                            "keys_low" => {
+                                                let count = val.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+                                                let net_state = app.state::<NetworkState>();
+                                                if let Ok(mut refill_lock) = net_state.is_refilling.lock() {
                                                     if !*refill_lock {
                                                         *refill_lock = true;
                                                         let delta = 100_u32.saturating_sub(count as u32);
                                                         if delta > 0 {
                                                             tracing::warn!("[Signal] MOTK Pool Alert! Only {} keys remaining. Triggering smart refill (delta={})...", count, delta);
-                                                            let app_sync = app_read.clone();
-                                                            tokio::spawn(async move {
+                                                            let app_sync = app.clone();
+                                                            tokio::task::spawn_local(async move {
                                                                 let _ = signal_sync_keys(app_sync.clone(), Some(delta));
-                                                                *app_sync.state::<NetworkState>().is_refilling.lock().unwrap() = false;
+                                                                if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                             });
                                                         } else {
                                                             *refill_lock = false;
                                                         }
                                                     }
-                                                    handled = true;
-                                                },
-                                                "relay_success" | "delivery_status" | "delivery_error" => {
-                                                    let tid = val.get("transfer_id").and_then(|v| v.as_u64()).map(|v| v as u32);
-                                                    let reason = val.get("reason").and_then(|r| r.as_str()).unwrap_or("");
-                                                    let target_peer = val.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                                                }
+                                                handled = true;
+                                            },
+                                            "relay_success" | "delivery_status" | "delivery_error" => {
+                                                let tid = val.get("transfer_id").and_then(|v| v.as_u64()).map(|v| v as u32);
+                                                let reason = val.get("reason").and_then(|r| r.as_str()).unwrap_or("");
+                                                let target_peer = val.get("target").and_then(|t| t.as_str()).unwrap_or("");
 
-                                                    println!("[Net] Incoming RELAY RESPONSE: type={}, tid={:?}, reason={}", msg_type, tid, reason);
-                                                    
-                                                    if let Some(transfer_id) = tid {
-                                                        let msg_id = app_read.state::<NetworkState>().pending_transfers.lock().unwrap().remove(&transfer_id);
-                                                        if let Some(id) = msg_id {
+                                                println!("[Net] Incoming RELAY RESPONSE: type={}, tid={:?}, reason={}", msg_type, tid, reason);
+                                                
+                                                        println!("[Net] RELAY SUCCESS for TransferID={:?}, searching for MessageID in pending_transfers...", tid);
+                                                        if let Ok(mut pending) = app.state::<NetworkState>().pending_transfers.lock() {
+                                                            let id_found = if let Some(transfer_id) = tid { pending.remove(&transfer_id) } else { None };
+
+                                                        if let Some(id) = id_found {
                                                             let status = if msg_type == "delivery_error" { 
                                                                 if reason == "media_offline" { "offline" } else { "failed" }
                                                             } else { "sent" };
                                                             
-                                                            println!("[Net] Promoting Message ID {} to status: {}", id, status);
-                                                            
-                                                            // Update DB
-                                                            let db_state = app_read.state::<DbState>();
-                                                            let db_lock = db_state.conn.lock().unwrap();
-                                                            if let Some(conn) = db_lock.as_ref() {
-                                                                let _ = conn.execute("UPDATE messages SET status = ?1 WHERE id = ?2", [status, &id]);
-                                                            }
-                                                            
-                                                            // Notify UI
-                                                            let _ = app_read.emit("msg://status", json!({ "id": id, "status": status }));
-                                                        }
-                                                    }
+                                                            println!("[Net] SUCCESS! Mapping found. Promoting Message ID {} to status: {}", id, status);
+                                                        
+                                                            // 🧠 SYNC: Update BOTH message and parent chat status to keep sidebar ticks in sync
+                                                            let db_state = app.state::<DbState>();
+                                                            let db_conn_lock = db_state.conn.lock();
+                                                            if let Ok(db_lock) = db_conn_lock {
+                                                                if let Some(conn) = db_lock.as_ref() {
+                                                                // Fetch parent chat address and current status
+                                                                let chat_info: Option<(String, String)> = conn.query_row(
+                                                                    "SELECT chat_address, status FROM messages WHERE LOWER(id) = LOWER(?1)", 
+                                                                    [&id], 
+                                                                    |r| Ok((r.get(0)?, r.get(1)?))
+                                                                ).ok();
 
-                                                    if msg_type == "delivery_error" {
-                                                         if !target_peer.is_empty() && reason != "media_offline" {
-                                                             app_read.state::<NetworkState>().halted_targets.lock().unwrap().insert(target_peer.to_string());
-                                                         }
-                                                         let _ = app_read.emit("network-warning", json!({ "type": reason, "target": target_peer }));
+                                                                if let Some((addr, current_status)) = chat_info {
+                                                                    // Only update if the status is actually progressing (avoid overwriting 'delivered' with 'sent')
+                                                                    if current_status == "pending" || current_status == "sending" {
+                                                                        let m_res = conn.execute("UPDATE messages SET status = ?1 WHERE LOWER(id) = LOWER(?2)", [status, &id]);
+                                                                        let c_res = conn.execute("UPDATE chats SET last_status = ?1 WHERE LOWER(address) = LOWER(?2)", [status, &addr]);
+                                                                        
+                                                                        println!("[DB] Relay sync for {}: msg_res={:?}, chat_res={:?}", id, m_res, c_res);
+                                                                    
+                                                                        // Notify UI with chat_address so the sidebar and chat window can filter correctly
+                                                                        let _ = app.emit("msg://status", serde_json::json!({ "id": id, "status": status, "chat_address": addr }));
+                                                                    } else {
+                                                                        println!("[DB] Skipping promotion for {}: already in status {}", id, current_status);
+                                                                    }
+                                                                } else {
+                                                                    println!("[DB] WARN: Could not find parent chat for promoted message {}", id);
+                                                                    let _ = app.emit("msg://status", serde_json::json!({ "id": id, "status": status }));
+                                                                }
+                                                            }
+                                                        }
+                                                }
+                                            }
+
+                                            if msg_type == "delivery_error" {
+                                                     if !target_peer.is_empty() && reason != "media_offline" {
+                                                         if let Ok(mut l) = app.state::<NetworkState>().halted_targets.lock() { l.insert(target_peer.to_string()); }
+                                                     }
+                                                     let _ = app.emit("network-warning", json!({ "type": reason, "target": target_peer }));
+                                                }
+                                                handled = true;
+                                            },
+                                            "pow_challenge_res" => {
+                                                if val.get("req_id").is_none() {
+                                                    let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                                    let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
+                                                    let id = app.state::<NetworkState>().identity_hash.lock().map(|l| l.clone()).unwrap_or(None);
+                                                    let modulus = val.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
+                                                    
+                                                    if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
+                                                        let app_inner = app.clone();
+                                                        
+                                                        // 🦾 Session Resumption: Try using token to bypass PoW
+                                                        let existing_token = app_inner.state::<NetworkState>().session_token.lock().map(|l| l.clone()).unwrap_or(None);
+                                                        if let Some(token_val) = existing_token {
+                                                            let app_inner = app.clone();
+                                                            tokio::task::spawn_local(async move {
+                                                                let payload = json!({ "identity_hash": i, "session_token": token_val });
+                                                                let auth_val = json!({"type": "auth", "payload": payload});
+                                                                let _ = send_paced_json(&app_inner, auth_val).await;
+                                                            });
+                                                        } else {
+                                                            // No token available -> Mining PoW
+                                                            tokio::task::spawn_local(async move {
+                                                                let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
+                                                                let app_sig = app_inner.clone();
+                                                                let sig_res = tauri::async_runtime::spawn_blocking(move || {
+                                                                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
+                                                                    rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await.map_err(|e| e.to_string()) })
+                                                                }).await.map_err(|e| e.to_string());
+                                                                
+                                                                let mut payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
+                                                                if let Ok(Ok(kp)) = sig_res {
+                                                                    let mut rng = rand::rngs::StdRng::from_os_rng();
+                                                                    let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
+                                                                    if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
+                                                                        payload["signature"] = json!(hex::encode(sig));
+                                                                        let mut pk = kp.identity_key().serialize().to_vec();
+                                                                        if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
+                                                                        payload["public_key"] = json!(hex::encode(pk));
+                                                                    }
+                                                                }
+                                                                let auth_val = json!({"type": "auth", "payload": payload});
+                                                                let _ = send_paced_json(&app_inner, auth_val).await;
+                                                            });
+                                                        }
                                                     }
                                                     handled = true;
-                                                },
-                                                "pow_challenge_res" => {
-                                                    if val.get("req_id").is_none() {
-                                                        let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
-                                                        let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
-                                                        let id = app_read.state::<NetworkState>().identity_hash.lock().unwrap().clone();
-                                                        let modulus = val.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
-                                                        
-                                                        if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
-                                                            let app_inner = app_read.clone();
-                                                            
-                                                            // 🦾 Session Resumption: Try using token to bypass PoW
-                                                            let existing_token = app_inner.state::<NetworkState>().session_token.lock().unwrap().clone();
-                                                            if let Some(token) = existing_token {
-                                                                let app_inner = app_read.clone();
-                                                                tokio::spawn(async move {
-                                                                    let payload = json!({ "identity_hash": i, "session_token": token });
-                                                                    let auth_val = json!({"type": "auth", "payload": payload});
-                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
-                                                                });
-                                                            } else {
-                                                                // No token available -> Mining PoW
-                                                                tokio::spawn(async move {
-                                                                    let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                    let app_sig = app_inner.clone();
-                                                                    let sig_res = tauri::async_runtime::spawn_blocking(move || {
-                                                                        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                                                                        rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await })
-                                                                    }).await.map_err(|e| e.to_string());
-                                                                    
-                                                                    let mut payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
-                                                                    if let Ok(Ok(kp)) = sig_res {
-                                                                        let mut rng = rand::rngs::StdRng::from_os_rng();
-                                                                        let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
-                                                                        if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
-                                                                            payload["signature"] = json!(hex::encode(sig));
-                                                                            let mut pk = kp.identity_key().serialize().to_vec();
-                                                                            if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
-                                                                            payload["public_key"] = json!(hex::encode(pk));
-                                                                        }
-                                                                    }
-                                                                    let auth_val = json!({"type": "auth", "payload": payload});
-                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
-                                                                });
-                                                            }
-                                                        }
-                                                        handled = true;
-                                                    }
-                                                },
-                                                "error" => {
-                                                    let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");
-                                                    let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                                                }
+                                            },
+                                            "error" => {
+                                                let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");
+                                                let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                                                
+                                                if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Handshake failed") || error_msg.contains("Challenge") || error_msg.contains("Jailed") {
+                                                    println!("[Network] Auth/Resumption failed: {}. Purging token.", error_msg);
+                                                    if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() { *l = None; }
+                                                    if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
                                                     
-                                                    if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Challenge") || error_msg.contains("Jailed") {
-                                                        println!("[Network] Auth/Resumption failed: {}. Purging token.", error_msg);
-                                                        *app_read.state::<NetworkState>().session_token.lock().unwrap() = None;
-                                                        *app_read.state::<NetworkState>().is_authenticated.lock().unwrap() = false;
-                                                        
-                                                        // Persistently wipe the zombie token from DB
-                                                        let app_inner = app_read.clone();
-                                                        tokio::spawn(async move {
-                                                            let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
-                                                        });
-                                                        
-                                                        let _ = app_read.emit("network-status", "auth_failed");
-                                                        handled = true;
-                                                    } else {
-                                                        println!("[Network] Relay logic error: {}", error_msg);
-                                                    }
-                                                },
-                                                _ => println!("[Net] Unhandled JSON frame: {:?}", val)
-                                            }
+                                                    // Persistently wipe the zombie token from DB
+                                                    let app_inner = app.clone();
+                                                    tokio::task::spawn_local(async move {
+                                                        let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
+                                                    });
+                                                    
+                                                    let _ = app.emit("network-status", "auth_failed");
+                                                    let _ = app.emit("network-error", error_msg);
+                                                    handled = true;
+                                                } else {
+                                                    println!("[Network] Relay logic error: {}", error_msg);
+                                                }
+                                            },
+                                            _ => println!("[Net] Unhandled JSON frame: {:?}", val)
                                         }
                                     }
-                                    if !handled { let _ = app_read.emit("network-msg", text_str); }
                                 }
-                                Message::Binary(bin) => {
-                                    if let Some(bin_tx) = &*app_read.state::<NetworkState>().binary_receiver.lock().unwrap() {
+                                if !handled { let _ = app.emit("network-msg", text_str); }
+                            }
+                            Message::Binary(bin) => {
+                                if let Ok(lock) = app.state::<NetworkState>().binary_receiver.lock() {
+                                    if let Some(bin_tx) = &*lock {
                                         let _ = bin_tx.send(bin.to_vec());
                                     }
                                 }
-                                Message::Close(_) => break,
-                                _ => {}
                             }
+                            Message::Close(_) => break,
+                            _ => {}
                         }
-                        Some(Err(_)) => break,
-                        None => break,
                     }
+                    Some(Err(_)) => break,
+                    None => break,
                 }
             }
         }
-        *app_read.state::<NetworkState>().is_authenticated.lock().unwrap() = false;
-        {
-            let state = app_read.state::<NetworkState>();
-            let mut s = state.sender.lock().unwrap();
-            *s = None;
-        }
-        let _ = app_read.emit("network-status", "disconnected");
-    });
-
+    }
+    
+    let net_state = app.state::<NetworkState>();
+    let is_authed = *net_state.is_authenticated.lock().map_err(|_| "Network state poisoned")?;
+    let session_token_final = net_state.session_token.lock().map_err(|_| "Network state poisoned")?.clone();
+    
+    if !is_authed && session_token_final.is_some() {
+        println!("[Net] Connection lost before authentication. Wiping stale session token to prevent loop.");
+        if let Ok(mut l) = net_state.session_token.lock() { *l = None; }
+        let app_wipe = app.clone();
+        tokio::task::spawn_local(async move {
+            let _ = SqliteSignalStore::new(app_wipe).set_session_token(None).await;
+        });
+    }
+    
+    if let Ok(mut l) = net_state.is_authenticated.lock() { *l = false; }
+    let net_state_final = app.state::<NetworkState>();
+    if let Ok(mut s) = net_state_final.sender.lock() { *s = None; }
+    let _ = app.emit("network-status", "disconnected");
     Ok(())
 }
 
@@ -1912,35 +2141,40 @@ async fn run_connection_loop(app: AppHandle) {
     loop {
         let (enabled, url, proxy_url, token) = {
             let state = app.state::<NetworkState>();
-            let enabled = *state.is_enabled.lock().unwrap();
-            let url = state.url.lock().unwrap().clone();
-            let proxy_url = state.proxy_url.lock().unwrap().clone();
-            let token = state.cancel.lock().unwrap().clone();
+            let enabled = state.is_enabled.lock().map(|l| *l).unwrap_or(false);
+            let url = state.url.lock().map(|l| l.clone()).unwrap_or(None);
+            let proxy_url = state.proxy_url.lock().map(|l| l.clone()).unwrap_or(None);
+            let token = state.cancel.lock().map(|l| l.clone()).unwrap_or(None);
             (enabled, url, proxy_url, token)
         };
-        if !enabled || token.is_none() { break; }
-        let token = token.unwrap();
-        if token.is_cancelled() { break; }
+        if !enabled { break; }
+        let token_val = match token {
+            Some(t) => t,
+            None => break,
+        };
+        if token_val.is_cancelled() { break; }
         if let Some(target_url) = url {
             println!("[Network] Attempting reconnection: attempt {}", retry_count + 1);
-            if let Err(e) = internal_establish_network(app.clone(), target_url, proxy_url, token.clone()).await {
+            if let Err(e) = internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone()).await {
                 eprintln!("[Network] Connection error: {}", e);
             } else {
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     let net_state = app.state::<NetworkState>();
-                    if token.is_cancelled() || !*net_state.is_enabled.lock().unwrap() { break; }
-                    let s = net_state.sender.lock().unwrap();
-                    if s.is_none() { break; }
+                    let is_enabled = net_state.is_enabled.lock().map(|l| *l).unwrap_or(false);
+                    if token_val.is_cancelled() || !is_enabled { break; }
+                    let s_lock = net_state.sender.lock();
+                    if s_lock.is_err() || s_lock.map(|l| l.is_none()).unwrap_or(true) { break; }
                 }
                 retry_count = 0;
             }
         }
-        if !*app.state::<NetworkState>().is_enabled.lock().unwrap() || token.is_cancelled() { break; }
+        let is_enabled = app.state::<NetworkState>().is_enabled.lock().map(|l| *l).unwrap_or(false);
+        if !is_enabled || token_val.is_cancelled() { break; }
         let delay = backoff[retry_count.min(backoff.len() - 1)];
         println!("[Network] Next retry in {}s", delay);
         tokio::select! {
-            _ = token.cancelled() => break,
+            _ = token_val.cancelled() => break,
             _ = tokio::time::sleep(Duration::from_secs(delay)) => { retry_count += 1; }
         }
     }
@@ -1960,7 +2194,7 @@ pub async fn connect_network(
         // 1. Recover identity from signal store if not provided
         let identity = if id_hash.is_none() {
             let db_state = app.state::<DbState>();
-            let lock = db_state.conn.lock().unwrap();
+            let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
             if let Some(conn) = lock.as_ref() {
                 let id_res: Option<Vec<u8>> = conn.query_row("SELECT public_key FROM signal_identity WHERE id = 0", [], |r| r.get(0)).ok();
                 id_res.map(|pk| {
@@ -1984,17 +2218,16 @@ pub async fn connect_network(
     };
 
     {
-        *state.is_enabled.lock().unwrap() = true;
-        *state.url.lock().unwrap() = Some(url.clone());
-        *state.proxy_url.lock().unwrap() = proxy_url.clone();
-        *state.identity_hash.lock().unwrap() = final_id;
-        *state.session_token.lock().unwrap() = final_token;
+        if let Ok(mut l) = state.is_enabled.lock() { *l = true; }
+        if let Ok(mut l) = state.url.lock() { *l = Some(url.clone()); }
+        if let Ok(mut l) = state.proxy_url.lock() { *l = proxy_url.clone(); }
+        if let Ok(mut l) = state.identity_hash.lock() { *l = final_id; }
+        if let Ok(mut l) = state.session_token.lock() { *l = final_token; }
     }
 
     // Trigger the background reconnection loop
-    let app_handle = app.clone();
     {
-        let mut cancel_lock = state.cancel.lock().unwrap();
+        let mut cancel_lock = state.cancel.lock().map_err(|_| "Network state poisoned")?;
         if let Some(t) = cancel_lock.take() {
             t.cancel();
         }
@@ -2002,8 +2235,20 @@ pub async fn connect_network(
         *cancel_lock = Some(t.clone());
     }
 
-    tokio::spawn(async move {
-        run_connection_loop(app_handle).await;
+    // Trigger the background reconnection loop (Running in dedicated thread for non-Send Signal support)
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string()) {
+                Ok(r) => r,
+                Err(e) => { eprintln!("[Network] Failed to build runtime: {}", e); return; }
+            };
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async move {
+            run_connection_loop(app_handle).await;
+        });
     });
 
     // Background Cleanup Loop for Media Fragments
@@ -2013,7 +2258,10 @@ pub async fn connect_network(
         loop {
             interval.tick().await;
             let state = app_cleanup.state::<NetworkState>();
-            let mut assembler = state.media_assembler.lock().unwrap();
+            let mut assembler = match state.media_assembler.lock().map_err(|_| "Network state poisoned") {
+                Ok(l) => l,
+                Err(e) => { eprintln!("[Network] Cleanup lock failed: {}", e); break; }
+            };
             let now = std::time::Instant::now();
             let mut removed_count = 0;
             assembler.retain(|_, buffer| {
@@ -2027,7 +2275,8 @@ pub async fn connect_network(
             if removed_count > 0 {
                 tracing::warn!("[Network] Cleaned up {} stale media transfer(s)", removed_count);
             }
-            if !*state.is_enabled.lock().unwrap() { break; }
+            let is_enabled = state.is_enabled.lock().map(|l| *l).unwrap_or(false);
+            if !is_enabled { break; }
         }
     });
 
@@ -2088,13 +2337,13 @@ pub async fn internal_send_to_network(
 
             for i in 0..chunks {
                 let target_hash_str = hex::encode(&hash_bytes);
-                if state.halted_targets.lock().unwrap().contains(&target_hash_str) { break; }
+                if state.halted_targets.lock().map_err(|_| "Network state poisoned")?.contains(&target_hash_str) { break; }
 
                 let start = i * chunk_capacity;
                 let end = std::cmp::min(start + chunk_capacity, total_len);
                 let chunk_data = &data_bytes[start..end];
                 
-                let mut envelope = Vec::with_capacity(1400);
+                let mut envelope = Vec::with_capacity(PACKET_SIZE);
                 envelope.extend_from_slice(&hash_bytes); 
                 if is_media {
                     envelope.push(0x02); 
@@ -2111,7 +2360,7 @@ pub async fn internal_send_to_network(
                 
                 if let Some(ref id) = msg_id {
                     println!("[Net] Mapping transfer_id {} to msg_id {}", transfer_id, id);
-                    state.pending_transfers.lock().unwrap().insert(transfer_id, id.clone());
+                    state.pending_transfers.lock().map_err(|_| "Network state poisoned")?.insert(transfer_id, id.clone());
                 }
                 paced_messages.push(PacedMessage { 
                     msg: Message::Binary(envelope.into()), 
@@ -2120,11 +2369,11 @@ pub async fn internal_send_to_network(
         }
     }
 
-    let is_connected = state.sender.lock().unwrap().is_some();
+    let is_connected = state.sender.lock().map_err(|_| "Network state poisoned")?.is_some();
 
     if is_connected {
         if is_binary {
-            let sender_lock = state.sender.lock().unwrap();
+            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
             if let Some(tx) = sender_lock.as_ref() {
                 for pm in paced_messages {
                     tx.send(pm).map_err(|e| e.to_string())?;
@@ -2140,8 +2389,8 @@ pub async fn internal_send_to_network(
         if is_binary {
             // Queue precisely chunked envelopes to persistent outbox
             let db_lock = app.state::<DbState>();
-            let conn_lock = db_lock.conn.lock().unwrap();
-            let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+            let conn_lock = db_lock.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+            let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
             
             if let Some(conn) = conn_lock.as_ref() {
                 for pm in paced_messages {
@@ -2159,10 +2408,17 @@ pub async fn internal_send_to_network(
 
             // 🕒 Update UI to 'Pending' (Clock Icon) if offline
             if let Some(id) = msg_id {
+                let db_lock = app.state::<DbState>();
+                let conn_lock = db_lock.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                let mut chat_address: Option<String> = None;
                 if let Some(conn) = conn_lock.as_ref() {
+                    chat_address = conn.query_row("SELECT chat_address FROM messages WHERE id = ?", [&id], |r| r.get(0)).ok();
                     let _ = conn.execute("UPDATE messages SET status = 'pending' WHERE id = ?", [id.clone()]);
+                    if let Some(ref addr) = chat_address {
+                        let _ = conn.execute("UPDATE chats SET last_status = 'pending' WHERE address = ?", [addr]);
+                    }
                 }
-                app.emit("msg://status", json!({ "id": id, "status": "pending" })).map_err(|e| e.to_string())?;
+                app.emit("msg://status", json!({ "id": id, "status": "pending", "chat_address": chat_address })).map_err(|e| e.to_string())?;
             }
         }
         
@@ -2176,10 +2432,10 @@ pub async fn flush_outbox(
     app: AppHandle,
     state: State<'_, NetworkState>
 ) -> Result<(), String> {
-    let sender_lock = state.sender.lock().unwrap();
+    let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
     if let Some(tx) = &*sender_lock {
         let db_state = app.state::<DbState>();
-        let db_lock = db_state.conn.lock().unwrap();
+        let db_lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(conn) = db_lock.as_ref() {
             let mut stmt = conn.prepare("SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC").map_err(|e| e.to_string())?;
             let rows = stmt.query_map([], |row| {
@@ -2210,7 +2466,7 @@ pub async fn flush_outbox(
 #[tauri::command]
 pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Result<(), String> {
     {
-        let mut conn = state.conn.lock().unwrap();
+        let mut conn = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(c) = conn.take() {
             let _ = c.close(); 
         }
@@ -2273,7 +2529,7 @@ pub async fn db_export_media(app: tauri::AppHandle, state: State<'_, DbState>, s
     if std::path::Path::new(&src_path).starts_with(&media_dir) {
         // 1. Get Key
         let key_bytes = {
-            let lock = state.media_key.lock().unwrap();
+            let lock = state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
             lock.clone().ok_or("Media key not initialized")?
         };
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
@@ -2332,20 +2588,11 @@ pub fn open_file(path: String) -> Result<(), String> {
 
 
 #[tauri::command]
-pub async fn write_temp_media(app: tauri::AppHandle, state: State<'_, DbState>, name: String, data: Vec<u8>) -> Result<String, String> {
-    let media_dir = get_media_dir(&app, &state)?;
-    let file_path = media_dir.join(format!("tmp_{}", name));
-    let mut file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
-    file.write_all(&data).map_err(|e| e.to_string())?;
-    Ok(file_path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
 pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String, data: Vec<u8>) -> Result<String, String> {
 
     // 1. Get Key from state
     let key_bytes = {
-        let lock = state.media_key.lock().unwrap();
+        let lock = state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
         lock.clone().ok_or("Media key not initialized")?
     };
 
@@ -2372,7 +2619,7 @@ pub async fn vault_save_media(app: tauri::AppHandle, state: State<'_, DbState>, 
 pub async fn vault_load_media(app: tauri::AppHandle, state: State<'_, DbState>, id: String) -> Result<Vec<u8>, String> {
     // 1. Get Key from state
     let key_bytes = {
-        let lock = state.media_key.lock().unwrap();
+        let lock = state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
         lock.clone().ok_or("Media key not initialized")?
     };
 
@@ -2420,7 +2667,7 @@ pub async fn vault_delete_media(app:  tauri::AppHandle, id: String) -> Result<()
 pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, target_path: String) -> Result<(), String> {
     // 1. Checkpoint WAL to main DB file
     {
-        let conn_guard = state.conn.lock().unwrap();
+        let conn_guard = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(conn) = conn_guard.as_ref() {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
                 .map_err(|e| format!("Failed to checkpoint DB: {}", e))?;
@@ -2485,7 +2732,7 @@ pub async fn export_database(app: tauri::AppHandle, state: State<'_, DbState>, t
 pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, src_path: String) -> Result<(), String> {
     // 1. Close current connection deeply
     {
-        let mut conn = state.conn.lock().unwrap();
+        let mut conn = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         *conn = None;
         drop(conn); // Release lock before filesystem ops
     }
@@ -2552,7 +2799,7 @@ pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, s
     // 4. Re-initialize database state
     println!("[Import] Restore complete. Re-opening connection...");
     let new_conn = rusqlite::Connection::open(&dest_path).map_err(|e| format!("Failed to re-open DB: {}", e))?;
-    let mut state_lock = state.conn.lock().unwrap();
+    let mut state_lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     *state_lock = Some(new_conn);
     
     Ok(())
@@ -2562,7 +2809,7 @@ pub async fn import_database(app: tauri::AppHandle, state: State<'_, DbState>, s
 pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
     let handle_clone = handle.clone();
     let result: Result<String, String> = tauri::async_runtime::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         rt.block_on(async move {
             let store = SqliteSignalStore::new(handle_clone.clone());
             
@@ -2583,7 +2830,7 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
             let priv_bytes = identity_key_pair.private_key().serialize();
 
             let db_state = handle_clone.state::<DbState>();
-            let db_lock = db_state.conn.lock().unwrap();
+            let db_lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
             let conn = db_lock.as_ref().ok_or("Database not initialized")?;
 
             conn.execute(
@@ -2608,8 +2855,9 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
     hasher.update(&pub_bytes);
     let id_hash = hex::encode(hasher.finalize());
     
-    let mut hash_lock = state.identity_hash.lock().unwrap();
-    *hash_lock = Some(id_hash);
+    if let Ok(mut hash_lock) = state.identity_hash.lock() {
+        *hash_lock = Some(id_hash);
+    }
     
     Ok(pub_key_hex)
 }
@@ -2617,7 +2865,7 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
 pub fn signal_get_bundle(handle: tauri::AppHandle, count: Option<u32>) -> Result<serde_json::Value, String> {
     let key_count = count.unwrap_or(100).min(200); // Limit to 200 max to prevent server abuse
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         rt.block_on(async move {
             let mut store = SqliteSignalStore::new(handle.clone());
             let mut rng = StdRng::from_os_rng();
@@ -2644,7 +2892,7 @@ pub fn signal_get_bundle(handle: tauri::AppHandle, count: Option<u32>) -> Result
             let signed_pre_key_id = SignedPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
             let signed_pre_key_pair = KeyPair::generate(&mut rng);
             let timestamp = Timestamp::from_epoch_millis(
-                std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64
+                std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
             );
             let signature = identity_key_pair.private_key().calculate_signature(&signed_pre_key_pair.public_key.serialize(), &mut rng)
                 .map_err(|e| e.to_string())?;
@@ -2685,7 +2933,7 @@ pub fn signal_sync_keys(
 ) -> Result<(), String> {
     let handle_clone = handle.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         rt.block_on(async move {
             let state = handle_clone.state::<NetworkState>();
             
@@ -2693,12 +2941,12 @@ pub fn signal_sync_keys(
             let raw_bundle = signal_get_bundle(handle_clone.clone(), count).map_err(|e| e.to_string())?;
             
             let id_hash = {
-                let lock = state.identity_hash.lock().unwrap();
+                let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
                 lock.clone().ok_or("No identity hash in network state")?
             };
 
             // 2. Prepare Base64 bundle for server 
-            let mut ik_bytes = hex::decode(raw_bundle["identityKey"].as_str().unwrap()).unwrap();
+            let mut ik_bytes = hex::decode(raw_bundle["identityKey"].as_str().unwrap_or("")).unwrap_or_default();
             if ik_bytes.len() == 33 && ik_bytes[0] == 0x05 {
                 ik_bytes.remove(0);
             }
@@ -2708,14 +2956,22 @@ pub fn signal_sync_keys(
                 "identityKey": base64::engine::general_purpose::STANDARD.encode(&ik_bytes),
                 "signedPreKey": {
                     "id": raw_bundle["signedPreKey"]["id"],
-                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
-                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap()).unwrap()),
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode(
+                        hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()
+                    ),
+                    "signature": base64::engine::general_purpose::STANDARD.encode(
+                        hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default()
+                    ),
                 },
                 "preKeys": raw_bundle["preKeys"],
                 "kyberPreKey": {
                     "id": raw_bundle["kyberPreKey"]["id"],
-                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap()).unwrap()),
-                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["signature"].as_str().unwrap()).unwrap())
+                    "publicKey": base64::engine::general_purpose::STANDARD.encode(
+                        hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()
+                    ),
+                    "signature": base64::engine::general_purpose::STANDARD.encode(
+                        hex::decode(raw_bundle["kyberPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default()
+                    )
                 }
             });
 
@@ -2760,7 +3016,7 @@ pub fn signal_encrypt(
     message: String,
 ) -> Result<serde_json::Value, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
             let _db_state = handle.state::<DbState>();
             let _net_state = handle.state::<NetworkState>();
@@ -2771,7 +3027,7 @@ pub fn signal_encrypt(
 #[tauri::command]
 pub fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<String, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
             let store = SqliteSignalStore::new(handle.clone());
             let kp = store.get_identity_key_pair().await.map_err(|e| e.to_string())?;
@@ -2787,7 +3043,7 @@ pub fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<
 
 #[tauri::command]
 pub async fn signal_get_peer_identity(state: tauri::State<'_, DbState>, address: String) -> Result<Option<(Vec<u8>, i32)>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     // address is "peer_hash:1"
@@ -2808,7 +3064,7 @@ pub async fn signal_get_peer_identity(state: tauri::State<'_, DbState>, address:
 
 #[tauri::command]
 pub async fn signal_set_peer_trust(state: tauri::State<'_, DbState>, address: String, trust_level: i32) -> Result<(), String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     // 1. Update Signal Identity Store (Standard Signal address format)
@@ -2830,7 +3086,7 @@ pub async fn signal_set_peer_trust(state: tauri::State<'_, DbState>, address: St
 
 #[tauri::command]
 pub async fn signal_get_own_identity(state: tauri::State<'_, DbState>) -> Result<Vec<u8>, String> {
-    let lock = state.conn.lock().unwrap();
+    let lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let pub_key: Vec<u8> = conn.query_row(
@@ -2849,7 +3105,7 @@ pub async fn signal_get_identity_hash(
 ) -> Result<String, String> {
     // Check cache first
     {
-        let lock = net_state.identity_hash.lock().unwrap();
+        let lock = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
         if let Some(hash) = lock.as_ref() {
             return Ok(hash.clone());
         }
@@ -2866,7 +3122,7 @@ pub async fn signal_get_identity_hash(
     
     // Update cache
     {
-        let mut lock = net_state.identity_hash.lock().unwrap();
+        let mut lock = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
         *lock = Some(hash.clone());
     }
     
@@ -2933,7 +3189,7 @@ pub async fn signal_get_fingerprint(
 
 #[tauri::command]
 pub async fn db_set_chat_archived(state: tauri::State<'_, DbState>, address: String, is_archived: bool) -> Result<(), String> {
-    let conn_lock = state.conn.lock().unwrap();
+    let conn_lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = conn_lock.as_ref().ok_or("Database not initialized")?;
     conn.execute(
         "UPDATE chats SET is_archived = ? WHERE address = ?",
@@ -2944,7 +3200,7 @@ pub async fn db_set_chat_archived(state: tauri::State<'_, DbState>, address: Str
 
 #[tauri::command]
 pub async fn db_set_chat_pinned(state: tauri::State<'_, DbState>, address: String, is_pinned: bool) -> Result<(), String> {
-    let conn_lock = state.conn.lock().unwrap();
+    let conn_lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = conn_lock.as_ref().ok_or("Database not initialized")?;
     conn.execute(
         "UPDATE chats SET is_pinned = ? WHERE address = ?",
@@ -2956,7 +3212,7 @@ pub async fn db_set_chat_pinned(state: tauri::State<'_, DbState>, address: Strin
 
 #[tauri::command]
 pub async fn db_get_starred_messages(state: tauri::State<'_, DbState>) -> Result<Vec<Value>, String> {
-    let conn_lock = state.conn.lock().unwrap();
+    let conn_lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = conn_lock.as_ref().ok_or("Database not initialized")?;
     let mut stmt = conn.prepare(
         "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json 
@@ -2991,7 +3247,7 @@ pub async fn db_delete_chat(
     state: State<'_, DbState>,
     address: String
 ) -> Result<(), String> {
-    let mut conn_lock = state.conn.lock().unwrap();
+    let mut conn_lock = state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
     let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
     
     // 1. Fetch message IDs to clean media
@@ -3024,11 +3280,11 @@ pub fn register_nickname(
     nickname: String
 ) -> Result<serde_json::Value, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
             let state = handle.state::<NetworkState>();
             let id_hash = {
-                let lock = state.identity_hash.lock().unwrap();
+                let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
                 lock.clone().ok_or("No identity hash in network state")?
             };
 
@@ -3059,15 +3315,217 @@ pub fn register_nickname(
 }
 
 #[tauri::command]
+pub fn nickname_lookup(
+    handle: tauri::AppHandle,
+    name: String
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let state = handle.state::<NetworkState>();
+            internal_request(&state, "nickname_lookup", json!({ "name": name })).await
+        })
+    }).join().map_err(|_| "Thread panic during nickname_lookup".to_string())?
+}
+
+#[tauri::command]
+pub fn identity_resolve(
+    handle: tauri::AppHandle,
+    identity_hash: String
+) -> Result<serde_json::Value, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let state = handle.state::<NetworkState>();
+            internal_request(&state, "identity_resolve", json!({ "identity_hash": identity_hash })).await
+        })
+    }).join().map_err(|_| "Thread panic during identity_resolve".to_string())?
+}
+
+#[tauri::command]
+pub fn create_group(
+    app: tauri::AppHandle,
+    name: String,
+    members: Vec<String>
+) -> Result<String, String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let group_id = uuid::Uuid::new_v4().to_string();
+            let state = app.state::<NetworkState>();
+            let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
+
+            let mut all_members = members.iter().map(|m| m.to_lowercase()).collect::<Vec<String>>();
+            if !all_members.contains(&id_hash.to_lowercase()) { all_members.push(id_hash.to_lowercase()); }
+            all_members.sort();
+            all_members.dedup();
+
+            let chat = DbChat {
+                address: group_id.clone(),
+                is_group: true,
+                alias: Some(name.clone()),
+                last_msg: None,
+                last_timestamp: None,
+                unread_count: 0,
+                is_archived: false,
+                is_pinned: false,
+                members: Some(all_members.clone()),
+                trust_level: 1,
+                is_blocked: false,
+                last_sender_hash: None,
+                last_status: None,
+            };
+            let db_state = app.state::<DbState>();
+            internal_db_upsert_chat(&db_state, chat).await?;
+
+            // Seed for groups (legacy/decentralized compatible)
+            let dist_msg = hex::encode(rand::random::<[u8; 16]>());
+            let invite = json!({ 
+                "type": "group_invite", 
+                "groupId": group_id, 
+                "name": name, 
+                "members": all_members, 
+                "distribution": dist_msg 
+            });
+
+            // Multicast to all members (E2EE via Signal)
+            let invite_str = invite.to_string();
+            for member in members {
+                if member == id_hash { continue; }
+                if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, &member, invite_str.clone()).await {
+                    let _ = internal_send_to_network(app.clone(), &state, Some(member), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
+                }
+            }
+
+            Ok(group_id)
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
+#[tauri::command]
+pub fn add_to_group(
+    app: tauri::AppHandle,
+    group_id: String,
+    new_members: Vec<String>
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let db_state = app.state::<DbState>();
+            let state = app.state::<NetworkState>();
+            let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
+
+            let current_members = {
+                let mut m = Vec::new();
+                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                if let Some(conn) = lock.as_ref() {
+                    let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                        .map_err(|e| e.to_string())?;
+                    let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
+                        .map_err(|e| e.to_string())?;
+                    for r in rows { if let Ok(ma) = r { m.push(ma); } }
+                }
+                m
+            };
+
+            let mut all_members = current_members.clone();
+            for nm in &new_members {
+                if !all_members.contains(nm) { all_members.push(nm.clone()); }
+            }
+
+            // Update DB
+            let _ = internal_db_save_members(&db_state, &group_id, all_members.clone()).await;
+
+            // Distribute bits
+            let dist_msg = hex::encode(rand::random::<[u8; 16]>());
+            let group_name = {
+                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                lock.as_ref().and_then(|c| c.query_row("SELECT alias FROM chats WHERE address = ?1", params![group_id], |r| r.get::<_, Option<String>>(0)).ok().flatten())
+            }.unwrap_or_else(|| "Group".to_string());
+
+            let invite = json!({ "type": "group_invite", "groupId": group_id, "name": group_name, "members": all_members, "distribution": dist_msg });
+            let update = json!({ "type": "group_update", "groupId": group_id, "members": all_members });
+
+            let invite_str = invite.to_string();
+            let update_str = update.to_string();
+
+            // Invite new ones
+            for member in &new_members {
+                if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, member, invite_str.clone()).await {
+                    let _ = internal_send_to_network(app.clone(), &state, Some(member.clone()), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
+                }
+            }
+            // Update existing ones
+            for member in &current_members {
+                if member == &id_hash || new_members.contains(member) { continue; }
+                if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, member, update_str.clone()).await {
+                    let _ = internal_send_to_network(app.clone(), &state, Some(member.clone()), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
+                }
+            }
+
+            Ok(())
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
+#[tauri::command]
+pub fn leave_group(
+    app: tauri::AppHandle,
+    group_id: String
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let db_state = app.state::<DbState>();
+            let state = app.state::<NetworkState>();
+            let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
+
+            let members = {
+                let mut m = Vec::new();
+                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                if let Some(conn) = lock.as_ref() {
+                    let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                        .map_err(|e| e.to_string())?;
+                    let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
+                        .map_err(|e| e.to_string())?;
+                    for r in rows { if let Ok(ma) = r { m.push(ma); } }
+                }
+                m
+            };
+
+            let payload = json!({ "type": "group_leave", "groupId": group_id, "member": id_hash });
+            let payload_str = payload.to_string();
+
+            for member in members {
+                if member == id_hash { continue; }
+                if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, &member, payload_str.clone()).await {
+                    let _ = internal_send_to_network(app.clone(), &state, Some(member), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
+                }
+            }
+
+            // Remove locally
+            let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+            if let Some(conn) = lock.as_ref() {
+                let _ = conn.execute("DELETE FROM chats WHERE address = ?1", [&group_id]);
+                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", [&group_id]);
+                let _ = conn.execute("DELETE FROM messages WHERE chat_address = ?1", [&group_id]);
+            }
+
+            Ok(())
+        })
+    }).join().map_err(|_| "Thread panicked".to_string())?
+}
+
+#[tauri::command]
 pub fn burn_account(
     handle: tauri::AppHandle
 ) -> Result<serde_json::Value, String> {
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
         rt.block_on(async move {
             let state = handle.state::<NetworkState>();
             let id_hash = {
-                let lock = state.identity_hash.lock().unwrap();
+                let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
                 lock.clone().ok_or("No identity hash in network state")?
             };
 
@@ -3100,19 +3558,26 @@ pub fn burn_account(
 #[tauri::command]
 pub fn send_typing_status(
     app: AppHandle,
-    _db_state: State<'_, crate::app_state::DbState>,
+    db_state: State<'_, crate::app_state::DbState>,
     net_state: State<'_, crate::app_state::NetworkState>,
     peer_hash: String,
     is_typing: bool
 ) -> Result<(), String> {
+    // Typing indicators are only for 1:1 chats
+    {
+        let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+        if let Some(conn) = lock.as_ref() {
+            let is_group = conn.query_row("SELECT is_group FROM chats WHERE address = ?1", [&peer_hash], |r| r.get::<_, i32>(0)).unwrap_or(0) != 0;
+            if is_group { return Ok(()); }
+        }
+    }
+
     println!("[Typing] Command called for {} (isTyping={})", peer_hash, is_typing);
     tauri::async_runtime::block_on(async move {
-        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let message = json!({ "type": "typing", "isTyping": is_typing, "timestamp": timestamp }).to_string();
         match internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
             Ok(encrypted) => {
-                // Flag as is_binary=true, is_media=false (opaque) to skip JSON check
-                // Volatile=true to skip Redis storage
                 let _ = internal_send_to_network(app.clone(), &net_state, Some(peer_hash.clone()), None, None, Some(encrypted.to_string().into_bytes()), true, false, None, true).await;
             },
             Err(e) => println!("[Typing] Encryption FAILED for {}: {}", peer_hash, e),
@@ -3158,7 +3623,7 @@ pub fn send_profile_update(
         let message = json!({
             "type": "profile_update",
             "alias": alias,
-            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
         }).to_string();
         
         if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
@@ -3334,7 +3799,7 @@ pub async fn process_incoming_binary(
     }
 
     // FAST-DROP 0x03 (Dummy Pacing from Relay)
-    if trimmed[64] == 0x03 {
+    if payload[0] == 0x03 {
         return Ok(()); 
     }
 
@@ -3345,7 +3810,7 @@ pub async fn process_incoming_binary(
     
     // 🛑 Block check: Drop binary if sender is in contacts and is_blocked=1
     if !sender.is_empty() {
-        let lock = db_state.conn.lock().unwrap();
+        let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
         if let Some(conn) = lock.as_ref() {
             let is_blocked = conn.query_row(
                 "SELECT is_blocked FROM contacts WHERE hash = ?1",
@@ -3378,10 +3843,10 @@ pub async fn process_incoming_binary(
         let (total_bytes, rest) = rest.split_at(4);
         let (len_bytes, raw_chunk_data) = rest.split_at(4);
         
-        let transfer_id = u32::from_be_bytes(tid_bytes.try_into().unwrap());
-        let index = u32::from_be_bytes(idx_bytes.try_into().unwrap());
-        let total = u32::from_be_bytes(total_bytes.try_into().unwrap());
-        let chunk_len = u32::from_be_bytes(len_bytes.try_into().unwrap()) as usize;
+        let transfer_id = u32::from_be_bytes(tid_bytes.try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?);
+        let index = u32::from_be_bytes(idx_bytes.try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?);
+        let total = u32::from_be_bytes(total_bytes.try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?);
+        let chunk_len = u32::from_be_bytes(len_bytes.try_into().map_err(|e: std::array::TryFromSliceError| e.to_string())?) as usize;
 
         // Security: Prevent Fragment Bombing (Limit to ~10MB reassembly)
         if total > 7680 {
@@ -3404,7 +3869,7 @@ pub async fn process_incoming_binary(
         }
 
         let (is_complete, entry_data, total_actual, current_count) = {
-            let mut assembler = net_state.media_assembler.lock().unwrap();
+            let mut assembler = net_state.media_assembler.lock().map_err(|_| "Network state poisoned")?;
             let entry = assembler.entry(assembler_key.clone()).or_insert_with(|| crate::app_state::FragmentBuffer {
                 total,
                 chunks: std::collections::HashMap::new(),
@@ -3520,7 +3985,7 @@ pub async fn process_incoming_binary(
                                 if let Some(members) = decrypted_json["members"].as_array() {
                                     let m_strings: Vec<String> = members.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
                                     let db_state = app.state::<DbState>();
-                                    let lock = db_state.conn.lock().unwrap();
+                                    let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
                                     if let Some(conn) = lock.as_ref() {
                                         let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![gid]);
                                         for m in m_strings {
@@ -3535,9 +4000,17 @@ pub async fn process_incoming_binary(
                                 let content = decrypted_json["content"].as_str().ok_or("Missing content")?.to_string();
                                 let timestamp = decrypted_json["timestamp"].as_i64().ok_or("Missing timestamp")?;
 
+                                let is_group = decrypted_json["isGroup"].as_bool().unwrap_or(false);
+                                let group_name = decrypted_json["groupName"].as_str().map(|s| s.to_string());
+                                let chat_address = if is_group {
+                                    decrypted_json["groupId"].as_str().unwrap_or(&sender).to_string()
+                                } else {
+                                    sender.clone()
+                                };
+
                                 let db_msg = DbMessage {
                                     id: msg_id.clone(),
-                                    chat_address: sender.clone(),
+                                    chat_address: chat_address.clone(),
                                     sender_hash: sender.clone(),
                                     content,
                                     timestamp,
@@ -3545,22 +4018,61 @@ pub async fn process_incoming_binary(
                                     status: "delivered".to_string(),
                                     attachment_json: None,
                                     is_starred: false,
-                                    is_group: decrypted_json["isGroup"].as_bool().unwrap_or(sender.len() < 40),
+                                    is_group,
                                     reply_to_json: decrypted_json["replyTo"].as_object().map(|r| serde_json::to_string(r).unwrap_or_default()),
                                 };
 
                                 let db_state = app.state::<DbState>();
-                                internal_db_save_message(&db_state, db_msg.clone()).await?;
-                                app.emit("msg://added", serde_json::to_value(&db_msg).unwrap()).map_err(|e| e.to_string())?;
+                                
+                                // NEW: If it's a group and we have a name, ensure the chat record exists with the CORRECT name
+                                if is_group {
+                                    let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                                    if let Some(conn) = lock.as_ref() {
+                                        // MUCH MORE AGGRESSIVE: Always update the alias to the one provided in the message metadata
+                                        let _ = conn.execute(
+                                            "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
+                                             ON CONFLICT(address) DO UPDATE SET 
+                                                alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
+                                                is_group = 1",
+                                            params![chat_address, group_name],
+                                        );
 
-                                let receipt_payload = json!({ 
-                                    "type": "receipt", 
-                                    "msgIds": vec![msg_id], 
-                                    "status": "delivered" 
-                                });
-                                let net_state = app.state::<NetworkState>();
-                                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &sender, receipt_payload.to_string()).await {
-                                    let _ = internal_send_to_network(app.clone(), &net_state, Some(sender.clone()), None, Some(encrypted.to_string()), None, true, false, None, false).await;
+                                        // 🧬 AUTO-SYNC MEMBERS: If the message includes members, update our local knowledge
+                                        if let Some(members) = decrypted_json["groupMembers"].as_array() {
+                                            let m_strings: Vec<String> = members.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                                            if !m_strings.is_empty() {
+                                                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![chat_address]);
+                                                for m in m_strings {
+                                                    let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![chat_address, m]);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                internal_db_save_message(&db_state, db_msg.clone()).await?;
+                                let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                if is_group {
+                                    if let Some(obj) = final_json.as_object_mut() {
+                                        obj.insert("chatAlias".to_string(), json!(group_name));
+                                        if let Some(members) = decrypted_json["groupMembers"].as_array() {
+                                            obj.insert("chatMembers".to_string(), json!(members));
+                                        }
+                                    }
+                                }
+                                app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
+
+                                // 🟢 Automatic Receipts: ONLY for 1:1 chats. Groups stay 'single tick' (sent).
+                                if !is_group {
+                                    let receipt_payload = json!({ 
+                                        "type": "receipt", 
+                                        "msgIds": vec![msg_id], 
+                                        "status": "delivered" 
+                                    });
+                                    let net_state = app.state::<NetworkState>();
+                                    if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &sender, receipt_payload.to_string()).await {
+                                        let _ = internal_send_to_network(app.clone(), &net_state, Some(sender.clone()), None, Some(encrypted.to_string()), None, true, false, None, false).await;
+                                    }
                                 }
                             },
                             "receipt" => {
@@ -3596,7 +4108,7 @@ pub async fn process_incoming_binary(
                                 let m_type = decrypted_json["msg_type"].as_str().ok_or("Missing msg_type")?.to_string();
                                 let duration = decrypted_json["duration"].as_f64().unwrap_or(0.0);
                                 let timestamp = decrypted_json["timestamp"].as_i64().unwrap_or_else(|| {
-                                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64
+                                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
                                 });
 
                                 let db_state = app.state::<DbState>();
@@ -3626,16 +4138,24 @@ pub async fn process_incoming_binary(
                                     }
                                 } else {
                                     // 🕒 JSON ARRIVED FIRST: Wait for fragments
-                                    let mut links = net_state.pending_media_links.lock().unwrap();
+                                    let mut links = net_state.pending_media_links.lock().map_err(|_| "Network state poisoned")?;
                                     links.insert(inner_transfer_key, crate::app_state::PendingMediaMetadata { id: msg_id.clone(), key: key_str });
                                     println!("[Network] JSON stored pending link+key for transfer: {}", inner_transfer_id);
                                 }
 
+                                let is_group = decrypted_json["isGroup"].as_bool().unwrap_or(false);
+                                let group_name = decrypted_json["groupName"].as_str().map(|s| s.to_string());
+                                let chat_address = if is_group {
+                                    decrypted_json["groupId"].as_str().unwrap_or(&sender).to_string()
+                                } else {
+                                    sender.clone()
+                                };
+
                                 let db_msg = DbMessage {
                                     id: msg_id.clone(),
-                                    chat_address: sender.clone(),
+                                    chat_address: chat_address.clone(),
                                     sender_hash: sender.clone(),
-                                    content: if m_type == "voice_note" { "Voice Note".to_string() } else { format!("File: {}", bundle["file_name"].as_str().unwrap_or("unnamed")) },
+                                    content: if m_type == "voice_note" { "Voice Note".to_string() } else { format!("File: {}", bundle["file_name"].as_str().unwrap_or("Unnamed File")) },
                                     timestamp,
                                     r#type: m_type.clone(),
                                     status: "delivered".to_string(),
@@ -3648,16 +4168,55 @@ pub async fn process_incoming_binary(
                                         "vaultPath": final_file_path.to_string_lossy().to_string()
                                     }).to_string()),
                                     is_starred: false,
-                                    is_group: bundle["isGroup"].as_bool().unwrap_or(sender.len() > 60),
+                                    is_group,
                                     reply_to_json: decrypted_json["replyTo"].as_object().map(|r| serde_json::to_string(r).unwrap_or_default()),
                                 };
 
-                                internal_db_save_message(&db_state, db_msg.clone()).await?;
-                                app.emit("msg://added", serde_json::to_value(&db_msg).unwrap()).map_err(|e| e.to_string())?;
+                                // NEW: Auto-create/rename chat for media too
+                                if is_group {
+                                    let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                                    if let Some(conn) = lock.as_ref() {
+                                        // MUCH MORE AGGRESSIVE: Always update the alias to the one provided in the message metadata
+                                        let _ = conn.execute(
+                                            "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
+                                             ON CONFLICT(address) DO UPDATE SET 
+                                                alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
+                                                is_group = 1",
+                                            params![chat_address, group_name],
+                                        );
 
-                                let receipt_payload = json!({ "type": "receipt", "msgIds": vec![msg_id], "status": "delivered" });
-                                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &sender, receipt_payload.to_string()).await {
-                                    let _ = internal_send_volatile(app.clone(), &net_state, &sender, encrypted).await;
+                                        // 🧬 AUTO-SYNC MEMBERS: Keep the group membership in sync
+                                        if let Some(members) = decrypted_json["groupMembers"].as_array() {
+                                            let m_strings: Vec<String> = members.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                                            if !m_strings.is_empty() {
+                                                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![chat_address]);
+                                                for m in m_strings {
+                                                    let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![chat_address, m]);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                internal_db_save_message(&db_state, db_msg.clone()).await?;
+                                
+                                let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                if is_group {
+                                    if let Some(obj) = final_json.as_object_mut() {
+                                        obj.insert("chatAlias".to_string(), json!(group_name));
+                                        if let Some(members) = decrypted_json["groupMembers"].as_array() {
+                                            obj.insert("chatMembers".to_string(), json!(members));
+                                        }
+                                    }
+                                }
+                                app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
+
+                                // 🟢 Automatic Receipts: ONLY for 1:1 chats. Groups stay 'single tick' (sent).
+                                if !is_group {
+                                    let receipt_payload = json!({ "type": "receipt", "msgIds": vec![msg_id], "status": "delivered" });
+                                    if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &sender, receipt_payload.to_string()).await {
+                                        let _ = internal_send_volatile(app.clone(), &net_state, &sender, encrypted).await;
+                                    }
                                 }
                             },
                             _ => {
@@ -3676,7 +4235,7 @@ pub async fn process_incoming_binary(
                 let link_key = format!("{}:{}", sender, transfer_id);
                 if let Ok(media_dir) = get_media_dir(&app, &db_state) {
                     let meta = {
-                        let mut links = net_state.pending_media_links.lock().unwrap();
+                        let mut links = net_state.pending_media_links.lock().map_err(|_| "Network state poisoned")?;
                         links.remove(&link_key)
                     };
 

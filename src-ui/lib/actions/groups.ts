@@ -1,7 +1,7 @@
 import { get } from 'svelte/store';
 import { userStore } from '../stores/user';
 import { signalManager } from '../signal_manager';
-import { network } from '../network';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
  * Orchestrates group lifecycle, membership distribution, and invite signaling.
@@ -11,7 +11,7 @@ export const createGroup = async (name: string, members: string[]) => {
     if (!state.identityHash) return;
 
     const groupId = crypto.randomUUID();
-    const allMembers = [state.identityHash, ...members];
+    const allMembers = Array.from(new Set([state.identityHash.toLowerCase(), ...members.map(m => m.toLowerCase())]));
 
     userStore.update(s => {
         s.chats[groupId] = { 
@@ -31,7 +31,13 @@ export const createGroup = async (name: string, members: string[]) => {
     for (const member of members) {
         try {
             const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite));
-            network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
+            await invoke('send_to_network', { 
+                routingHash: member.split('.')[0], 
+                msg: null, 
+                data: Array.from(new TextEncoder().encode(JSON.stringify(ciphertext))), 
+                isBinary: true, 
+                isMedia: false 
+            });
         } catch (e) { }
     }
 };
@@ -61,7 +67,13 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
     for (const member of newMembers) {
         try {
             const ciphertext = await signalManager.encrypt(member, JSON.stringify(invite));
-            network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
+            await invoke('send_to_network', { 
+                routingHash: member.split('.')[0], 
+                msg: null, 
+                data: Array.from(new TextEncoder().encode(JSON.stringify(ciphertext))), 
+                isBinary: true, 
+                isMedia: false 
+            });
         } catch (e) { }
     }
 
@@ -70,7 +82,13 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
         if (member === state.identityHash || newMembers.includes(member)) continue;
         try {
             const ciphertext = await signalManager.encrypt(member, JSON.stringify(update));
-            network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
+            await invoke('send_to_network', { 
+                routingHash: member.split('.')[0], 
+                msg: null, 
+                data: Array.from(new TextEncoder().encode(JSON.stringify(ciphertext))), 
+                isBinary: true, 
+                isMedia: false 
+            });
         } catch (e) { }
     }
 };
@@ -94,7 +112,13 @@ export const leaveGroup = async (groupId: string) => {
         if (member === state.identityHash) continue;
         try {
             const ciphertext = await signalManager.encrypt(member, JSON.stringify(payload));
-            network.sendBinary(member, new TextEncoder().encode(JSON.stringify(ciphertext)));
+            await invoke('send_to_network', { 
+                routingHash: member.split('.')[0], 
+                msg: null, 
+                data: Array.from(new TextEncoder().encode(JSON.stringify(ciphertext))), 
+                isBinary: true, 
+                isMedia: false 
+            });
         } catch (e) { }
     }
 

@@ -15,6 +15,7 @@
   let errorMessage = $state<string | null>(null);
   let recordedBlob = $state<Blob | null>(null);
   let previewUrl = $state<string | null>(null);
+  let startTime = $state<number>(0);
   let finalDurationSeconds = $state(0);
   let recordingSeconds = $state(0);
   let recordingInterval: any = null;
@@ -28,6 +29,7 @@
   const startRecording = async () => {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        startTime = performance.now();
         
         // 🧪 OPTIMIZATION: Use Web Audio for real-time visualization
         audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -48,12 +50,15 @@
         };
         updateVolume();
 
-        // 🎙️ OPUS ENCODING: Browser handles this natively
+        // 🎙️ OPUS ENCODING: Stick to Opus for optimal quality/size (WebM for Linux/Windows, Ogg for older Safari/macOS support)
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
             ? 'audio/webm;codecs=opus' 
             : 'audio/ogg;codecs=opus';
         
-        mediaRecorder = new MediaRecorder(stream, { mimeType });
+        mediaRecorder = new MediaRecorder(stream, { 
+            mimeType,
+            audioBitsPerSecond: 48000 
+        });
         const chunks: Blob[] = [];
         
         mediaRecorder.ondataavailable = (e) => {
@@ -61,9 +66,16 @@
         };
         
         mediaRecorder.onstop = () => {
+            const durationMs = performance.now() - startTime;
+            if (durationMs < 500) {
+                addToast("Recording too short", "error");
+                cancelRecording();
+                return;
+            }
+
             recordedBlob = new Blob(chunks, { type: mimeType });
             previewUrl = URL.createObjectURL(recordedBlob);
-            finalDurationSeconds = recordingSeconds;
+            finalDurationSeconds = durationMs / 1000;
             if (recordingInterval) clearInterval(recordingInterval);
             recordingState = 'preview';
             isStopping = false;
@@ -71,7 +83,9 @@
 
         mediaRecorder.start();
         recordingSeconds = 0;
-        recordingInterval = setInterval(() => { recordingSeconds++; }, 1000);
+        recordingInterval = setInterval(() => { 
+            recordingSeconds = Math.floor((performance.now() - startTime) / 1000); 
+        }, 200);
     } catch (e: any) { 
         console.error("[Voice] Start Error:", e);
         recordingState = 'error';

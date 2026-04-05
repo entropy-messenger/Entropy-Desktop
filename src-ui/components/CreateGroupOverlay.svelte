@@ -42,7 +42,7 @@
 
   const handleCreateGroup = async () => {
       if (!groupName || groupMembers.length === 0) return;
-      await createGroup(groupName, [ ...groupMembers, $userStore.identityHash ]);
+      await createGroup(groupName, groupMembers);
       groupName = "";
       groupMembers = [];
       onClose();
@@ -65,6 +65,7 @@
                 <input id="member-input" bind:value={memberInput} placeholder="Hash or Nickname..." class="flex-1 p-3 bg-entropy-surface-light rounded-xl border-none text-xs" onkeydown={(e) => e.key === 'Enter' && addMember()} />
                 <button onclick={addMember} aria-label="Add Member" class="bg-entropy-primary text-white p-3 rounded-xl disabled:opacity-50" disabled={!memberInput}><LucidePlus size={20}/></button>
             </div>
+        </div>
             
         <div class="space-y-4 pt-2">
             <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest">Select from Contacts</div>
@@ -90,17 +91,11 @@
                 {/each}
             </div>
         </div>
-        <div class="space-y-2 pt-2">
-            {#each groupMembers as m}
-                <div class="flex items-center justify-between p-2 bg-entropy-surface rounded-lg text-[10px] font-mono text-entropy-text-primary">
-                    <span>{m.slice(0, 32)}...</span>
-                    <button onclick={() => removeMember(m)}><LucideX size={14} class="hover:text-red-500 transition" /></button>
-                </div>
-            {/each}
+        <div class="space-y-4 pt-4 border-t border-entropy-surface">
+            <button onclick={handleCreateGroup} disabled={!groupName || groupMembers.length === 0} class="w-full py-4 bg-entropy-primary text-white rounded-2xl font-bold shadow-lg active:scale-[0.98] transition disabled:opacity-50 disabled:active:scale-100 flex items-center justify-center space-x-2">
+                <LucideUsers size={20} />
+                <span>Create Group Chat</span>
+            </button>
         </div>
-    </div>
-</div>
-    <div class="p-6 bg-entropy-surface/50">
-        <button onclick={handleCreateGroup} disabled={!groupName || groupMembers.length === 0} class="w-full py-4 bg-entropy-primary text-white rounded-2xl font-bold shadow-lg active:scale-[0.98] transition disabled:opacity-50 disabled:active:scale-100">Create Group Chat</button>
     </div>
 </div>

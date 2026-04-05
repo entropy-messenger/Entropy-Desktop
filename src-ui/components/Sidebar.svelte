@@ -3,16 +3,17 @@
   import { 
     startChat, togglePin, toggleArchive, lookupNickname, updatePrivacy
   } from '../lib/actions/contacts';
-  import { loadChatMessages } from '../lib/actions/chat';
+  import { deleteChat, loadChatMessages } from '../lib/actions/chat';
+  import { leaveGroup } from '../lib/actions/groups';
   import {
     LucidePlus, LucideSettings, LucideSearch,
     LucideCheck, LucideCheckCheck, LucideClock, LucideUsers,
-    LucidePin, LucideArchive, LucideWifiOff, LucideSun, LucideMoon, LucideStar
+    LucidePin, LucideArchive, LucideWifiOff, LucideSun, LucideMoon, LucideStar, LucideTrash2
   } from 'lucide-svelte';
   import MessageContent from './MessageContent.svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { invoke } from '@tauri-apps/api/core';
-  import { addToast, showPrompt } from '../lib/stores/ui';
+  import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import { signalManager } from '../lib/signal_manager';
 
   import SettingsPanel from './SettingsPanel.svelte';
@@ -49,9 +50,9 @@
   };
 
   const createChatPrompt = async () => {
-    let input = await showPrompt("Enter Peer ID Hash, Global Nickname, or entropy:// link:", "", "New Chat");
+    let input = await showPrompt("Enter Peer ID Hash, Global Nickname, or link:", "", "New Chat");
     if (!input) return;
-    input = input.trim().replace(/^entropy:\/\//, '');
+    input = input.trim().replace(/^entropy:\/\//, '').split('?')[0];
 
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
         startChat(input);
@@ -216,7 +217,7 @@
                                             {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}
                                         {/if}
                                         <span class="truncate">
-                                            {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{chat.lastSenderHash?.slice(0, 4) || ''}:</span>{/if}
+                                            {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{chat.lastSenderHash?.slice(0, 6) || ''}:</span>{/if}
                                             {chat.lastMsg}
                                         </span>
                                     </div>
@@ -230,6 +231,21 @@
                             <div class="hidden group-hover/item:flex items-center space-x-1 ml-2">
                                  <button onclick={(e) => {e.stopPropagation(); togglePin(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Pin/Unpin"><LucidePin size={12} class={chat.isPinned ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
                                  <button onclick={(e) => {e.stopPropagation(); toggleArchive(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Archive/Unarchive"><LucideArchive size={12} class={chat.isArchived ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
+                                 <button 
+                                    onclick={async (e) => { 
+                                        e.stopPropagation(); 
+                                        const msg = chat.isGroup ? "Are you sure you want to leave this group?" : "Are you sure you want to delete this conversation?";
+                                        const title = chat.isGroup ? "Leave Group" : "Delete Chat";
+                                        if (await showConfirm(msg, title)) {
+                                            if (chat.isGroup) leaveGroup(chat.peerHash);
+                                            else deleteChat(chat.peerHash);
+                                        }
+                                    }} 
+                                    class="p-1 hover:bg-red-500/10 rounded transition text-entropy-text-dim hover:text-red-500" 
+                                    title={chat.isGroup ? "Leave Group" : "Delete Chat"}
+                                 >
+                                    <LucideTrash2 size={12} />
+                                 </button>
                             </div>
                         </div>
                     </div>

@@ -25,6 +25,10 @@ export interface Message {
     isMine: boolean;
     status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
     isStarred?: boolean;
+    isGroup?: boolean;
+    chatAlias?: string;
+    chatMembers?: string[];
+    chatAddress?: string;
     replyTo?: {
         id: string;
         content: string;

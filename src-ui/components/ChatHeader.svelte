@@ -68,11 +68,13 @@
 </script>
 
 <div class="bg-entropy-surface/95 backdrop-blur-md p-3 px-4 flex justify-between items-center shadow-sm z-30">
-    <div class="flex items-center space-x-3 overflow-hidden">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="flex items-center space-x-3 overflow-hidden cursor-pointer group/header hover:opacity-80 transition-opacity" onclick={onShowGallery}>
         <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" clickable={false} />
         <div class="min-w-0">
             <div class="flex items-center space-x-2">
-                <div class="font-bold text-entropy-text-primary leading-tight truncate">
+                <div class="font-bold text-entropy-text-primary leading-tight truncate group-hover/header:text-entropy-primary transition-colors">
                     {activeChat.localNickname || activeChat.peerNickname || activeChat.peerHash.slice(0, 12)}
                 </div>
                 {#if activeChat.isVerified}
@@ -80,7 +82,7 @@
                 {/if}
             </div>
             <div class="text-[11px] font-medium h-4 truncate {activeChat.isTyping && canSeeTyping ? 'text-entropy-accent animate-pulse' : 'text-entropy-text-dim'}">
-                {activeChat.isTyping && canSeeTyping ? "typing..." : ""}
+                {activeChat.isTyping && canSeeTyping ? "typing..." : (activeChat.isGroup ? `${activeChat.members?.length || 0} members` : "")}
             </div>
         </div>
     </div>
@@ -101,7 +103,9 @@
                 {#if showOptions}
                     <div class="absolute right-0 mt-2 w-56 bg-entropy-surface rounded-xl shadow-2xl py-2 z-[100] animate-in fade-in zoom-in-95 duration-150" onclick={() => showOptions = false} onkeypress={(e) => e.key === 'Enter' && (showOptions = false)} role="button" tabindex="0">
                         <button onclick={() => {onShowGallery(); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideInfo size={16} /> <span>Contact Info</span></button>
-                        <button onclick={() => {handleSetLocalNickname(); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideEdit2 size={16} /> <span>Set Nickname</span></button>
+                        {#if !activeChat.isGroup}
+                            <button onclick={() => {handleSetLocalNickname(); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideEdit2 size={16} /> <span>Set Nickname</span></button>
+                        {/if}
                         <button onclick={() => {onSelectionModeChange(true); showOptions = false;}} class="w-full text-left px-4 py-2 text-sm text-entropy-text-secondary hover:bg-entropy-surface-light flex items-center space-x-3"><LucideCheckIcon size={16} /> <span>Select Messages</span></button>
                         <div class="h-px bg-entropy-border my-1"></div>
                         {#if activeChat.isGroup}

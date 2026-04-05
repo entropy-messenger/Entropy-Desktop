@@ -1,7 +1,8 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
   import { leaveGroup, addToGroup } from '../lib/actions/groups';
-  import { toggleBlock, setTrustLevel } from '../lib/actions/contacts';
+  import { deleteChat } from '../lib/actions/chat';
+  import { toggleBlock, setTrustLevel, startChat } from '../lib/actions/contacts';
   import { signalManager } from '../lib/signal_manager';
   import { 
     LucideX, LucideShieldCheck, LucideShieldAlert, LucideInfo,
@@ -48,15 +49,6 @@
   });
 
   let mediaMessages = $derived(activeChat ? ($messageStore[activeChat.peerHash] || []).filter((m: any) => m.attachment && m.type === 'file') : []);
-  
-  let inviteCopied = $state(false);
-  const copyInvite = () => {
-      if (!activeChat) return;
-      const link = `entropy://${activeChat.peerHash}`;
-      navigator.clipboard.writeText(link);
-      inviteCopied = true;
-      setTimeout(() => inviteCopied = false, 2000);
-  };
 </script>
 
 <div class="w-80 bg-entropy-bg flex flex-col animate-in slide-in-from-right duration-300 z-[40]">
@@ -148,23 +140,13 @@
                             </p>
                         </div>
                     {:else}
-                        <div class="text-[10px] text-center text-orange-500/80 font-bold py-2 uppercase tracking-tighter">Establishing Secure Session...</div>
+                         <div class="text-[10px] text-center text-orange-500/80 font-bold py-2 uppercase tracking-tighter">Establishing Secure Session...</div>
                     {/if}
                  </div>
             </div>
         {/if}
-        
-        {#if activeChat.isGroup}
-            <div class="space-y-2">
-                <h4 class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest">Group Invite Link</h4>
-                <div class="bg-entropy-surface-light p-3 rounded-xl flex items-center justify-between">
-                    <span class="text-[11px] font-mono text-entropy-primary truncate">entropy://{activeChat.peerHash.slice(0, 32)}...</span>
-                    <button onclick={copyInvite} class="p-2 hover:bg-entropy-primary/10 rounded-lg text-entropy-primary transition">
-                        {#if inviteCopied}<LucideCheckIcon size={16} />{:else}<LucideCopy size={16} />{/if}
-                    </button>
-                </div>
-            </div>
 
+        {#if activeChat.isGroup}
             <div class="space-y-2">
                  <div class="flex justify-between items-center">
                     <h4 class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest">Members ({activeChat.members?.length || 0})</h4>
@@ -183,9 +165,20 @@
                  </div>
                  <div class="space-y-1 max-h-40 overflow-y-auto custom-scrollbar pr-1">
                     {#each activeChat.members || [] as member}
-                        <div class="flex items-center space-x-2 bg-entropy-surface-light p-2 rounded-lg">
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <!-- svelte-ignore a11y_interactive_supports_focus -->
+                        <div 
+                            class="flex items-center space-x-2 bg-entropy-surface-light p-2 rounded-lg cursor-pointer hover:bg-entropy-primary/10 transition group/member"
+                            onclick={() => {
+                                if (member !== $userStore.identityHash) {
+                                    startChat(member);
+                                    onClose();
+                                }
+                            }}
+                            role="button"
+                        >
                             <Avatar hash={member} alias={member.slice(0, 8)} size="w-5 h-5" textSize="text-[8px]" rounded="rounded-md" />
-                            <span class="text-[10px] font-mono text-entropy-text-secondary truncate flex-1">{member.slice(0, 16)}...</span>
+                            <span class="text-[10px] font-mono text-entropy-text-secondary truncate flex-1 group-hover/member:text-entropy-primary transition-colors">{member.slice(0, 16)}...</span>
                             {#if member === $userStore.identityHash}
                                 <span class="text-[8px] font-black bg-entropy-primary/10 text-entropy-primary px-1 rounded">YOU</span>
                             {/if}
@@ -220,6 +213,16 @@
                 >
                     <LucideTrash2 size={16} />
                     <span>Leave Group</span>
+                </button>
+            </div>
+        {:else}
+            <div class="pt-4 border-t border-entropy-border/10">
+                <button 
+                    onclick={async () => { if (await showConfirm("Are you sure you want to delete this conversation? This will permanently erase all messages and cannot be undone.", "Delete Chat")) { deleteChat(activeChat!.peerHash); onClose(); } }}
+                    class="w-full flex items-center justify-center space-x-2 p-3 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500/20 font-bold text-xs transition active:scale-[0.98]"
+                >
+                    <LucideTrash2 size={16} />
+                    <span>Delete Conversation</span>
                 </button>
             </div>
         {/if}

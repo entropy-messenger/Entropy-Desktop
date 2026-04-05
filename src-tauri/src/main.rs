@@ -97,11 +97,16 @@ fn main() {
             commands::db_export_media,
             commands::db_delete_messages,
             commands::register_nickname,
-
+            commands::nickname_lookup,
+            commands::identity_resolve,
+            commands::create_group,
+            commands::add_to_group,
+            commands::leave_group,
             commands::burn_account,
             commands::process_outgoing_text,
+            commands::process_outgoing_group_text,
             commands::process_outgoing_media,
-            commands::write_temp_media
+            commands::process_outgoing_group_media
         ])
         .setup(|app| {
             // 🎙️ LINUX Fix: WebKitGTK requires manual signal handling for microphone permission
@@ -123,17 +128,26 @@ fn main() {
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let tray_builder = TrayIconBuilder::new();
+            let tray_icon = app.default_window_icon().cloned();
+            
+            let builder = if let Some(icon) = tray_icon {
+                tray_builder.icon(icon)
+            } else {
+                tray_builder
+            };
+
+            let _tray = builder
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         app.exit(0);
                     }
                     "show" => {
-                        let window = app.get_webview_window("main").unwrap();
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
                     }
                     _ => {}
                 })

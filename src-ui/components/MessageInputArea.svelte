@@ -159,7 +159,7 @@
             {#if isRecording}
                 <RecordingBar 
                     onSend={(blob, duration) => {
-                        sendFile(activeChat!.peerHash, new File([blob], 'voice_note.opus'), 'voice_note', duration);
+                        sendFile(activeChat!.peerHash, new File([blob], 'Voice Note'), 'voice_note', duration);
                         isRecording = false;
                     }}
                     onCancel={() => isRecording = false}

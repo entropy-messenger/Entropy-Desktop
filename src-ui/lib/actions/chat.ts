@@ -35,7 +35,8 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     const chat = state.chats[destId];
 
     try {
-        await invoke('process_outgoing_text', {
+        const command = chat?.isGroup ? 'process_outgoing_group_text' : 'process_outgoing_text';
+        await invoke(command, {
             payload: {
                 recipient: destId,
                 content,
@@ -47,7 +48,8 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
                     type: state.replyingTo.type
                 } : null,
                 isGroup: !!chat?.isGroup,
-                groupMembers: chat?.members || null
+                groupMembers: chat?.members || null,
+                groupName: chat?.isGroup ? (chat?.peerNickname || null) : null
             }
         });
         setReplyingTo(null);
@@ -56,37 +58,37 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     }
 };
 
-export const sendFile = async (destIdRaw: string, file: File | { name: string, type: string, path: string }, type: 'file' | 'voice_note' = 'file', duration?: number) => {
+export const sendFile = async (destIdRaw: string, file: { name: string, type: string, path?: string, data?: Uint8Array | ArrayBuffer }, type: 'file' | 'voice_note' = 'file', duration?: number) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    let filePath: string | null = null;
-    if ('path' in file) {
-        filePath = file.path;
-    } else {
-        const buffer = await file.arrayBuffer();
-        const uint8 = new Uint8Array(buffer);
-        // Avoid sending huge JSON number arrays across IPC. 
-        // Write to a temporary file via a dedicated command and send the path instead.
-        filePath = await invoke<string>('write_temp_media', { 
-            name: file.name || 'blob', 
-            data: Array.from(uint8) 
-        });
-    }
-
     try {
-        await invoke('process_outgoing_media', {
+        let fileData: Uint8Array | null = null;
+        if (file.data) {
+            fileData = file.data instanceof ArrayBuffer ? new Uint8Array(file.data) : file.data;
+        } else if (file && (file instanceof File || typeof (file as any).arrayBuffer === 'function')) {
+            // Logic for DOM File objects or Blobs (e.g. from recording)
+            // Svelte 5 proxies might not satisfy 'instanceof File', so we check for arrayBuffer()
+            const source = (file as any)._target || file; // Try to unwrap proxy if possible
+            const buffer = await (source as any).arrayBuffer();
+            fileData = new Uint8Array(buffer);
+        }
+
+        const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
+        await invoke(command, {
             payload: {
                 recipient: destId,
-                filePath: filePath,
+                filePath: file.path || null,
+                fileData: fileData ? Array.from(fileData) : null,
                 fileName: file.name,
                 fileType: file.type,
                 msgType: type,
                 duration: duration,
                 isGroup: !!chat?.isGroup,
                 groupMembers: chat?.members || null,
+                groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,
                 replyTo: state.replyingTo ? {
                     id: state.replyingTo.id,
                     content: state.replyingTo.content,
@@ -124,13 +126,26 @@ export const addMessage = async (peerHash: string, msg: Message) => {
             isNewChat = true;
             s.chats[peerHash] = {
                 peerHash,
-                peerNickname: peerHash.slice(0, 8),
+                peerNickname: msg.chatAlias || peerHash.slice(0, 8),
                 unreadCount: 0,
-                isGroup: !!msg.groupId,
-                trustLevel: 1
+                isGroup: !!msg.isGroup,
+                trustLevel: 1,
+                members: msg.chatMembers || []
             };
         }
         const chat = { ...s.chats[peerHash] };
+        
+        // Update alias if we got a better one from the message metadata
+        if (msg.chatAlias && (!chat.peerNickname || chat.peerNickname === peerHash.slice(0, 8))) {
+            chat.peerNickname = msg.chatAlias;
+        }
+        
+        // Update members if provided (for self-healing)
+        if (msg.chatMembers && msg.chatMembers.length > 0) {
+            chat.members = msg.chatMembers;
+            chat.isGroup = true;
+        }
+
         chat.lastMsg = msg.content;
         chat.lastTimestamp = msg.timestamp;
         chat.lastStatus = msg.status;
@@ -169,22 +184,6 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         const s = get(userStore);
         if (!msg.isMine && s.activeChatHash !== peerHash) triggerNativeNotification(updatedChatMetadata, msg);
 
-        // 5. Automated Identity Guard (New & Recurring)
-        const now = Date.now();
-        const lastCheck = (updatedChatMetadata as any).lastIdentityCheck || 0;
-        const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 Hour
-
-        if (!msg.groupId && (isNewChat || (now - lastCheck > REFRESH_INTERVAL))) {
-            // Update the check timestamp locally first to prevent triple-firing
-            userStore.update(st => {
-                if (st.chats[peerHash]) st.chats[peerHash].lastIdentityCheck = now;
-                return { ...st, chats: { ...st.chats } };
-            });
-
-            import('./contacts').then(({ resolveIdentity }) => {
-                resolveIdentity(peerHash);
-            });
-        }
     }
 };
 
@@ -420,15 +419,39 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
     });
 };
 
-export const updateSingleMessageStatusUI = (msgId: string, status: any) => {
+export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string) => {
     messageStore.update(mStore => {
+        // 🏎️ FAST PATH: Direct lookup if chatAddress is known
+        if (chatAddress && mStore[chatAddress]) {
+            const index = mStore[chatAddress].findIndex(m => m.id === msgId);
+            if (index !== -1) {
+                // Immutably update the message array to trigger Svelte 5 reactivity
+                const updatedMessages = [...mStore[chatAddress]];
+                updatedMessages[index] = { ...updatedMessages[index], status };
+                mStore[chatAddress] = updatedMessages;
+                
+                userStore.update(s => {
+                    if (s.chats[chatAddress]) {
+                        // Immutably update the chat object same way
+                        s.chats[chatAddress] = { ...s.chats[chatAddress], lastStatus: status };
+                    }
+                    return { ...s, chats: { ...s.chats } };
+                });
+                return { ...mStore };
+            }
+        }
+
+        // 🐢 FALLBACK: Search all chats (Legacy or missing addr)
         for (const peerHash of Object.keys(mStore)) {
             const index = mStore[peerHash].findIndex(m => m.id === msgId);
             if (index !== -1) {
-                mStore[peerHash][index] = { ...mStore[peerHash][index], status };
+                const updatedMessages = [...mStore[peerHash]];
+                updatedMessages[index] = { ...updatedMessages[index], status };
+                mStore[peerHash] = updatedMessages;
+
                 userStore.update(s => {
                     if (s.chats[peerHash]) {
-                         s.chats[peerHash].lastStatus = status;
+                         s.chats[peerHash] = { ...s.chats[peerHash], lastStatus: status };
                     }
                     return { ...s, chats: { ...s.chats } };
                 });
