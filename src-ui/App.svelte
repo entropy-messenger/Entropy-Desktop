@@ -48,9 +48,34 @@
     }
   };
 
+  /**
+   * Checks for application updates using the Tauri Updater plugin.
+   * If an update is available, it prompts the user to download and install it.
+   */
+  const checkForUpdates = async () => {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      
+      const update = await check();
+      if (update && update.available) {
+        if (await showConfirm(`Update ${update.version} is available! Would you like to install it now?`, "Update Available")) {
+          addToast("Downloading update...", 'info');
+          await update.downloadAndInstall();
+          await relaunch();
+        }
+      }
+    } catch (e) {
+      console.error("Update check failed:", e);
+    }
+  };
+
   onMount(async () => {
     if (window.__TAURI_INTERNALS__) {
         await new Promise(r => setTimeout(r, 100));
+        
+        // Background update check
+        checkForUpdates();
     }
     
     isInitializing = false;

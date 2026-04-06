@@ -1,31 +1,29 @@
+# Node / Svelte
+node_modules/
+dist/
+.svelte-kit/
+.vercel/
+.npm
+**/.env
 
-logs
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+**/*.rs.bk
+
+# Minisign Keys (PROTECT ASSETS)
+**/*.key
+!**/*.key.pub
+
+# Update Manifest Backup
+scripts/update.json.bak
+
+# Log files
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-src-tauri/target/
-src-tauri/gen/
-
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Desktop OS files
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-.env
-.env.local
-*.txt
-*.log
+Thumbs.db

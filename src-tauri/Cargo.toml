@@ -9,13 +9,14 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2.10", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 keyring = "3"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-process = "2.3"
 webkit2gtk = { version = "2.0", features = ["v2_10"] }
 rusqlite = { version = "0.33.0", features = ["bundled-sqlcipher"] }
 tokio = { version = "1", features = ["full"] }
@@ -42,6 +43,7 @@ aes-gcm = "0.10"
 tokio-rustls = "0.26.4"
 tokio-util = "0.7.18"
 tracing = "0.1"
+tauri-plugin-updater = "2.10"
 
 [features]
 default = ["custom-protocol"]

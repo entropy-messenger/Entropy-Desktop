@@ -105,16 +105,6 @@ export class SignalManager {
     // --- SESSION CONTEXT HELPERS ---
 
     // --- GROUP CONTEXT HELPERS ---
-
-    async groupInit(groupId: string): Promise<string> {
-        const seed = crypto.getRandomValues(new Uint8Array(16));
-        return toHex(seed);
-    }
-
-    async createGroupDistribution(groupId: string): Promise<string> {
-        const seed = crypto.getRandomValues(new Uint8Array(16));
-        return toHex(seed);
-    }
 }
 
 export const signalManager = new SignalManager();

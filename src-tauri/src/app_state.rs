@@ -3,7 +3,6 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-
 use std::collections::VecDeque;
 
 pub struct DbState {
@@ -32,9 +31,10 @@ pub struct NetworkState {
     pub url: Mutex<Option<String>>,
     pub proxy_url: Mutex<Option<String>>,
     pub queue: Mutex<VecDeque<PacedMessage>>,
-    pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>, 
+    pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>,
     pub cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
-    pub response_channels: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,
+    pub response_channels:
+        Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,
     pub is_authenticated: Mutex<bool>,
     pub identity_hash: Mutex<Option<String>>,
     pub session_token: Mutex<Option<String>>,

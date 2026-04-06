@@ -14,9 +14,10 @@
         "core:webview:default",
         "shell:default",
         "notification:default",
-        "dialog:default",
         "dialog:allow-message",
         "default",
-        "allow-commands"
+        "allow-commands",
+        "updater:default",
+        "process:allow-restart"
     ]
 }

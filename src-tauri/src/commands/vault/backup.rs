@@ -1,0 +1,152 @@
+use crate::app_state::DbState;
+use crate::commands::get_db_filename;
+use std::io::{Read, Write};
+use tauri::{Manager, State};
+use walkdir::WalkDir;
+use zip::write::FileOptions;
+
+#[tauri::command]
+pub async fn export_database(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    target_path: String,
+) -> Result<(), String> {
+    {
+        let conn_guard = state
+            .conn
+            .lock()
+            .map_err(|_| "Database connection lock poisoned")?;
+        if let Some(conn) = conn_guard.as_ref() {
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .map_err(|e| format!("Failed to checkpoint DB: {}", e))?;
+        }
+    }
+
+    let filename = get_db_filename();
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let src_path = app_dir.join(&filename);
+
+    let file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let mut f = std::fs::File::open(&src_path)
+        .map_err(|e| format!("Failed to open DB for export: {}", e))?;
+    zip.start_file(filename, options)
+        .map_err(|e| e.to_string())?;
+    std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to stream DB to zip: {}", e))?;
+
+    let media_path = app_dir.join("media");
+    if media_path.exists() {
+        let walker = WalkDir::new(&media_path).into_iter();
+        for entry in walker.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = path
+                .strip_prefix(&app_dir)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned();
+
+            if path.is_file() {
+                zip.start_file(name, options).map_err(|e| e.to_string())?;
+                let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                let mut buffer = Vec::new();
+                f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
+                zip.write_all(&buffer).map_err(|e| e.to_string())?;
+            } else if !name.is_empty() {
+                zip.add_directory(name, options)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn import_database(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    src_path: String,
+) -> Result<(), String> {
+    {
+        let mut conn = state
+            .conn
+            .lock()
+            .map_err(|_| "Database connection lock poisoned")?;
+        *conn = None;
+        drop(conn);
+    }
+
+    let backup_path = std::path::Path::new(&src_path);
+    let extension = backup_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if extension != "entropy" && extension != "zip" {
+        return Err("Invalid backup file: Must be a .entropy or .zip archive".into());
+    }
+
+    if !backup_path.exists() {
+        return Err("Selected backup file does not exist".to_string());
+    }
+
+    let filename = get_db_filename();
+    let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dest_path = app_dir.join(&filename);
+    let wal_path = app_dir.join(format!("{}-wal", filename));
+    let shm_path = app_dir.join(format!("{}-shm", filename));
+
+    if dest_path.exists() {
+        std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
+    }
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(wal_path);
+    }
+    if shm_path.exists() {
+        let _ = std::fs::remove_file(shm_path);
+    }
+
+    let media_path = app_dir.join("media");
+    if media_path.exists() {
+        std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
+    }
+
+    let file = std::fs::File::open(&src_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
+
+        let outpath = match file.enclosed_name() {
+            Some(path) => app_dir.join(path),
+            None => continue,
+        };
+
+        if file.name().ends_with('/') {
+            std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                }
+            }
+            let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+            std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+        }
+    }
+
+    println!("[Import] Restore complete. Re-opening connection...");
+    let new_conn = rusqlite::Connection::open(&dest_path)
+        .map_err(|e| format!("Failed to re-open DB: {}", e))?;
+    let mut state_lock = state
+        .conn
+        .lock()
+        .map_err(|_| "Database connection lock poisoned")?;
+    *state_lock = Some(new_conn);
+
+    Ok(())
+}

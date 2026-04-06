@@ -139,15 +139,6 @@
         <input type="text" bind:value={searchQuery} placeholder="Search messages & contacts..." class="w-full pl-9 pr-4 py-2 bg-entropy-surface-light focus:bg-entropy-surface border-none rounded-xl text-xs transition ring-1 ring-white/5" />
     </div>
     
-    {#if $playingVoiceNoteId}
-        <div class="px-4 py-2 bg-entropy-primary text-white flex items-center justify-between animate-in slide-in-from-left duration-300">
-            <div class="flex items-center space-x-2">
-                <div class="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                <span class="text-[9px] font-black uppercase tracking-widest">Listening</span>
-            </div>
-            <button onclick={() => playingVoiceNoteId.set(null)} class="text-[8px] font-black uppercase tracking-tighter hover:underline bg-white/10 px-1.5 py-0.5 rounded">Stop</button>
-        </div>
-    {/if}
   </div>
 
   <div class="flex-1 overflow-y-auto custom-scrollbar">
@@ -260,6 +251,20 @@
 
   {#if showCreateGroup}
       <CreateGroupOverlay onClose={() => showCreateGroup = false} />
+  {/if}
+
+  {#if $playingVoiceNoteId}
+    <div class="mx-3 mb-2 bg-blue-600 text-white rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 shadow-lg shadow-blue-600/20">
+        <div class="flex items-center space-x-2">
+            <div class="flex space-x-0.5">
+                <div class="w-1 h-2.5 bg-white/40 animate-pulse delay-75"></div>
+                <div class="w-1 h-2.5 bg-white/40 animate-pulse delay-150"></div>
+                <div class="w-1 h-2.5 bg-white/40 animate-pulse delay-300"></div>
+            </div>
+            <span class="text-[9px] font-black uppercase tracking-widest">Listening to VN</span>
+        </div>
+        <button onclick={() => playingVoiceNoteId.set(null)} class="text-[8px] font-black uppercase tracking-tighter hover:underline bg-white/10 px-2 py-1 rounded-md">Stop</button>
+    </div>
   {/if}
 
   <div class="mt-auto bg-entropy-surface/50">

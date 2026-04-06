@@ -71,6 +71,18 @@
 
   $effect(() => {
     if (activeMessages.length > 0 && activeChat && $userStore.activeChatHash === activeChat.peerHash) {
+        // 1. Always clear local unread count for current active chat
+        if (activeChat.unreadCount > 0) {
+            userStore.update(s => {
+                const c = s.chats[activeChat.peerHash];
+                if (c) s.chats[activeChat.peerHash] = { ...c, unreadCount: 0 };
+                return { ...s, chats: { ...s.chats } };
+            });
+        }
+
+        // 2. Only send network-level Signal receipts for 1:1 chats
+        if (activeChat.isGroup) return;
+
         const unreadIncoming = activeMessages.filter(m => !m.isMine && m.status !== 'read');
         if (unreadIncoming.length > 0) {
             const ids = unreadIncoming.map(m => m.id);

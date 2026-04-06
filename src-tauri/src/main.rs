@@ -1,18 +1,17 @@
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
 mod commands;
+mod noise;
 mod signal_store;
-mod security;
 
+use app_state::{DbState, NetworkState};
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use app_state::{DbState, NetworkState};
 
 fn main() {
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
@@ -45,6 +44,8 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::init_vault,
             commands::vault_save,
@@ -60,7 +61,6 @@ fn main() {
             commands::reset_database,
             commands::crypto_mine_pow,
             commands::vault_exists,
-            commands::save_file,
             commands::export_database,
             commands::import_database,
             commands::signal_init,
@@ -101,6 +101,8 @@ fn main() {
             commands::identity_resolve,
             commands::create_group,
             commands::add_to_group,
+            commands::update_group_name,
+            commands::remove_from_group,
             commands::leave_group,
             commands::burn_account,
             commands::process_outgoing_text,
@@ -112,14 +114,16 @@ fn main() {
             // 🎙️ LINUX Fix: WebKitGTK requires manual signal handling for microphone permission
             #[cfg(target_os = "linux")]
             {
-                use webkit2gtk::{WebViewExt, PermissionRequestExt, PermissionRequest};
+                use webkit2gtk::{PermissionRequest, PermissionRequestExt, WebViewExt};
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.with_webview(|w| {
                         let webview = w.inner();
-                        webview.connect_permission_request(|_webview, request: &PermissionRequest| {
-                            request.allow();
-                            true
-                        });
+                        webview.connect_permission_request(
+                            |_webview, request: &PermissionRequest| {
+                                request.allow();
+                                true
+                            },
+                        );
                     });
                 }
             }
@@ -130,7 +134,7 @@ fn main() {
 
             let tray_builder = TrayIconBuilder::new();
             let tray_icon = app.default_window_icon().cloned();
-            
+
             let builder = if let Some(icon) = tray_icon {
                 tray_builder.icon(icon)
             } else {

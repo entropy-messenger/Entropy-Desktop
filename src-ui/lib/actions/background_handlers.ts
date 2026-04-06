@@ -84,7 +84,7 @@ export function setupBackgroundHandlers() {
     });
 
     listen('group-invite', (event: any) => {
-        const { groupId, name, members, inviter } = event.payload;
+        const { groupId, name, members } = event.payload;
         userStore.update(s => {
             if (!s.chats[groupId]) {
                 s.chats[groupId] = {
@@ -95,6 +95,27 @@ export function setupBackgroundHandlers() {
                     members,
                     trustLevel: 1
                 };
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    });
+
+    listen('group-update', (event: any) => {
+        const { groupId, name, members } = event.payload;
+        userStore.update(s => {
+            if (s.chats[groupId]) {
+                if (name) s.chats[groupId].peerNickname = name;
+                if (members) s.chats[groupId].members = members;
+            }
+            return { ...s, chats: { ...s.chats } };
+        });
+    });
+
+    listen('group-leave', (event: any) => {
+        const { groupId, member } = event.payload;
+        userStore.update(s => {
+            if (s.chats[groupId] && s.chats[groupId].members) {
+                s.chats[groupId].members = s.chats[groupId].members.filter(m => m !== member);
             }
             return { ...s, chats: { ...s.chats } };
         });

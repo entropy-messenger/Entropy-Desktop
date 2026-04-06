@@ -74,10 +74,11 @@ export class NetworkLayer {
         // Listen for message status updates (Confirmed Delivery & Read Receipts)
         listen('msg://status', (event) => {
             const payload = event.payload as any;
+            const chatAddress = payload.chatAddress || payload.chat_address;
             if (payload.id) {
-                updateSingleMessageStatusUI(payload.id, payload.status, payload.chat_address);
+                updateSingleMessageStatusUI(payload.id, payload.status, chatAddress);
             } else if (payload.ids) {
-                updateMessageStatusUI(payload.chat_address, payload.ids, payload.status);
+                updateMessageStatusUI(chatAddress, payload.ids, payload.status);
             }
         });
 
@@ -99,7 +100,7 @@ export class NetworkLayer {
                     ...s.chats,
                     [groupId]: {
                         peerHash: groupId,
-                        peerAlias: name,
+                        peerNickname: name,
                         messages: [],
                         unreadCount: 1,
                         isGroup: true,
@@ -122,8 +123,20 @@ export class NetworkLayer {
         });
 
         listen('msg://group_update', (event) => {
-            const { groupId } = event.payload as any;
-            // Native logic in Rust already updated DB; Svelte handles reload on next view
+            const { groupId, name, members } = event.payload as any;
+            userStore.update(s => {
+                const chat = s.chats[groupId];
+                if (chat) {
+                    if (name) {
+                        chat.peerNickname = name;
+                    }
+                    if (members) {
+                        chat.members = members;
+                    }
+                    s.chats[groupId] = { ...chat };
+                }
+                return { ...s, chats: { ...s.chats } };
+            });
         });
 
     }

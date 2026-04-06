@@ -1,9 +1,6 @@
-
-
 pub struct TrafficNormalizer;
 
 impl TrafficNormalizer {
-
     pub fn pad_json_str(json_str: &mut String, target_size: usize) {
         let current_len = json_str.len();
         if current_len > target_size {
