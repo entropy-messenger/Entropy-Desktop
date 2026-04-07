@@ -92,7 +92,7 @@ export class NetworkLayer {
 
         // Group Handlers
         listen('msg://invite', (event) => {
-            const { groupId, name, members } = event.payload as any;
+            const { groupId, name, members, lastMsg, lastTimestamp } = event.payload as any;
             const uniqueMembers = Array.from(new Set(((members || []) as string[]).map(m => m.toLowerCase())));
             userStore.update(s => ({
                 ...s,
@@ -104,7 +104,9 @@ export class NetworkLayer {
                         messages: [],
                         unreadCount: 1,
                         isGroup: true,
-                        members: uniqueMembers
+                        members: uniqueMembers,
+                        lastMsg: lastMsg || `Added to ${name}`,
+                        lastTimestamp: lastTimestamp || Date.now()
                     }
                 }
             }));

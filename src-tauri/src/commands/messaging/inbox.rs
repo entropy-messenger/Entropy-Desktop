@@ -37,10 +37,7 @@ async fn internal_signal_decrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
-    println!(
-        "[Signal] Decrypting message from {} (type={})",
-        remote_hash, message_type
-    );
+
 
     let mut rng = StdRng::from_os_rng();
 
@@ -91,12 +88,13 @@ pub async fn process_incoming_binary(
     payload: Vec<u8>,
     override_sender: Option<String>,
 ) -> Result<(), String> {
-    println!(
-        "[Network] process_incoming_binary called ({} bytes)",
-        payload.len()
-    );
+
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
+    let own_hash = {
+        let lock = net_state.identity_hash.lock().map_err(|_| "Net state poisoned")?;
+        lock.clone().ok_or("No identity found")?
+    };
 
     // CRITICAL: DO NOT trim zeros globally anymore.
     // Data is random binary and zero bytes are valid.
@@ -204,17 +202,7 @@ pub async fn process_incoming_binary(
         let _link_key = format!("{}:{}", sender, transfer_id);
         let assembler_key = format!("{}:{}:{:02x}", sender, transfer_id, frame_type);
 
-        if frame_type == 0x01 || frame_type == 0x04 {
-            println!(
-                "[Net] Metadata Fragment: tid={} idx={}/{}",
-                transfer_id, index, total
-            );
-        } else if frame_type == 0x02 {
-            println!(
-                "[Net] Media Fragment: tid={} idx={}/{}",
-                transfer_id, index, total
-            );
-        }
+
 
         let (is_complete, entry_data, total_actual, current_count) = {
             let mut assembler = net_state
@@ -263,11 +251,7 @@ pub async fn process_incoming_binary(
             let complete_data = entry_data;
 
             if frame_type == 0x01 || frame_type == 0x04 {
-                println!(
-                    "[Network] Reassembly COMPLETE for Type 0x01 (TID={} size={} bytes)",
-                    transfer_id,
-                    complete_data.len()
-                );
+
 
                 let envelope: serde_json::Value =
                     serde_json::from_slice(&complete_data).map_err(|e| {
@@ -286,12 +270,32 @@ pub async fn process_incoming_binary(
 
                 match internal_signal_decrypt(app.clone(), &sender, msg_type, &body_bytes).await {
                     Ok(decrypted_str) => {
-                        println!(
-                            "[Signal] Decryption SUCCESS from {}: {:.50}...",
-                            sender, decrypted_str
-                        );
+
                         let decrypted_json: serde_json::Value =
                             serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
+
+                        // 🛑 GLOBAL INACTIVE CHECK: Drop messages for groups the user has left
+                        if let Some(p_type) = decrypted_json["type"].as_str() {
+                            if p_type != "group_invite" {
+                                if let Some(gid) = decrypted_json["groupId"].as_str() {
+                                    let lock = db_state.conn.lock().map_err(|_| "DB Lock poisoned")?;
+                                    if let Some(conn) = lock.as_ref() {
+                                        let is_active: i32 = conn
+                                            .query_row(
+                                                "SELECT is_active FROM chats WHERE address = ?1",
+                                                params![gid],
+                                                |r| r.get(0),
+                                            )
+                                            .unwrap_or(1); // Default to 1 (active) if group not found yet
+
+                                        if is_active == 0 {
+                                            println!("[Inbox] Dropping {} for inactive group: {}", p_type, gid);
+                                            return Ok(());
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         let p_type = decrypted_json["type"]
                             .as_str()
@@ -334,28 +338,68 @@ pub async fn process_incoming_binary(
                                 let db_state = app.state::<DbState>();
                                 internal_db_upsert_chat(&db_state, chat).await?;
 
-                                // 📢 SYSTEM INDICATOR: 'You were added'
-                                let sys_id = uuid::Uuid::new_v4().to_string();
-                                let sys_ts = chrono::Utc::now().timestamp_millis();
-                                let sys_msg = DbMessage {
-                                    id: sys_id,
-                                    chat_address: gid.clone(),
-                                    sender_hash: sender.clone(),
-                                    content: format!("You were added to the group by {}", &sender[0..8]),
-                                    timestamp: sys_ts,
-                                    r#type: "system".to_string(),
-                                    status: "delivered".to_string(),
-                                    attachment_json: None,
-                                    is_starred: false,
-                                    is_group: true,
-                                    reply_to_json: None,
-                                };
-                                internal_db_save_message(&db_state, sys_msg.clone()).await?;
-                                app.emit("msg://added", json!(sys_msg)).map_err(|e: tauri::Error| e.to_string())?;
+                                // 🕵️ Handle batch additions via 'newMembers'
+                                let mut handled_me = false;
+                                if let Some(new_m_list) = decrypted_json["newMembers"].as_array() {
+                                    for nm_val in new_m_list {
+                                        if let Some(nm) = nm_val.as_str() {
+                                            let sys_id = uuid::Uuid::new_v4().to_string();
+                                            let sys_ts = chrono::Utc::now().timestamp_millis();
+                                            let content = if nm == own_hash {
+                                                handled_me = true;
+                                                format!("You were added to the group by {}", &sender[0..8.min(sender.len())])
+                                            } else {
+                                                format!("{} added {}", &sender[0..8.min(sender.len())], &nm[0..8.min(nm.len())])
+                                            };
+                                            let sys_msg = DbMessage {
+                                                id: sys_id,
+                                                chat_address: gid.clone(),
+                                                sender_hash: sender.clone(),
+                                                content,
+                                                timestamp: sys_ts,
+                                                r#type: "system".to_string(),
+                                                status: "delivered".to_string(),
+                                                attachment_json: None,
+                                                is_starred: false,
+                                                is_group: true,
+                                                reply_to_json: None,
+                                            };
+                                            let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
+                                            let _ = app.emit("msg://added", json!(sys_msg));
+                                        }
+                                    }
+                                }
+
+                                // 📢 Fallback SYSTEM INDICATOR: 'You were added' (if not in newMembers or missing)
+                                if !handled_me {
+                                    let sys_id = uuid::Uuid::new_v4().to_string();
+                                    let sys_ts = chrono::Utc::now().timestamp_millis();
+                                    let sys_msg = DbMessage {
+                                        id: sys_id,
+                                        chat_address: gid.clone(),
+                                        sender_hash: sender.clone(),
+                                        content: format!("You were added to the group by {}", &sender[0..8.min(sender.len())]),
+                                        timestamp: sys_ts,
+                                        r#type: "system".to_string(),
+                                        status: "delivered".to_string(),
+                                        attachment_json: None,
+                                        is_starred: false,
+                                        is_group: true,
+                                        reply_to_json: None,
+                                    };
+                                    internal_db_save_message(&db_state, sys_msg.clone()).await?;
+                                    app.emit("msg://added", json!(sys_msg)).map_err(|e: tauri::Error| e.to_string())?;
+                                }
 
                                 app.emit(
                                     "msg://invite",
-                                    json!({ "groupId": gid, "name": name, "members": members }),
+                                    json!({ 
+                                        "groupId": gid, 
+                                        "name": name, 
+                                        "members": members,
+                                        "lastMsg": format!("Added to {}", name),
+                                        "lastTimestamp": chrono::Utc::now().timestamp_millis()
+                                    }),
                                 )
                                 .map_err(|e: tauri::Error| e.to_string())?;
                             }
@@ -423,86 +467,86 @@ pub async fn process_incoming_binary(
                                 }
 
                                 {
-                                    let lock = db_state
-                                        .conn
-                                        .lock()
-                                        .map_err(|_| "Database connection lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
-                                        // 🛑 CHECK FOR "LEFT" STATUS
-                                        let is_active: i32 = conn
-                                            .query_row(
-                                                "SELECT is_active FROM chats WHERE address = ?1",
-                                                params![gid],
-                                                |r| r.get(0),
-                                            )
-                                            .unwrap_or(1);
+                                    let mut system_messages = Vec::new();
+                                    let m_strings: Vec<String> = if let Some(members_val) = decrypted_json["members"].as_array() {
+                                        members_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                                    } else { Vec::new() };
 
-                                        if is_active == 0 {
-                                            println!("[Inbox] Ignoring update for left group: {}", gid);
-                                            return Ok(());
-                                        }
-
-                                        // Update members if present
-                                        if let Some(members) = decrypted_json["members"].as_array()
-                                        {
-                                            let m_strings: Vec<String> = members
-                                                .iter()
-                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                                .collect();
-
+                                    {
+                                        let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                                        if let Some(conn) = lock.as_ref() {
                                             // 🕵️ Member Change Detection
-                                            let mut current_m = Vec::new();
-                                            if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1") {
-                                                if let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0)) {
-                                                    for m in rows.flatten() { current_m.push(m); }
+                                            if let Some(new_members) = decrypted_json["newMembers"].as_array() {
+                                                for nm_val in new_members {
+                                                    if let Some(m) = nm_val.as_str() {
+                                                        if m == own_hash { continue; }
+                                                        let content = if m == sender {
+                                                            format!("{} joined the group", &m[0..8.min(m.len())])
+                                                        } else {
+                                                            format!("{} added {}", &sender[0..8.min(sender.len())], &m[0..8.min(m.len())])
+                                                        };
+                                                        system_messages.push(content);
+                                                    }
+                                                }
+                                            } else if !m_strings.is_empty() {
+                                                // Fallback
+                                                let mut current_m = Vec::new();
+                                                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1") {
+                                                    if let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0)) {
+                                                        for m in rows.flatten() { current_m.push(m); }
+                                                    }
+                                                }
+                                                for m in &m_strings {
+                                                    if !current_m.contains(m) && m != &own_hash {
+                                                        let content = if m == &sender {
+                                                            format!("{} joined the group", &m[0..8.min(m.len())])
+                                                        } else {
+                                                            format!("{} added {}", &sender[0..8.min(sender.len())], &m[0..8.min(m.len())])
+                                                        };
+                                                        system_messages.push(content);
+                                                    }
                                                 }
                                             }
 
-                                            for m in &m_strings {
-                                                if !current_m.contains(m) {
-                                                    let sys_id = uuid::Uuid::new_v4().to_string();
-                                                    let sys_ts = chrono::Utc::now().timestamp_millis();
-                                                    let content = if m == &sender {
-                                                        format!("{} joined the group", &m[0..8])
-                                                    } else {
-                                                        format!("{} added {}", &sender[0..8], &m[0..8])
-                                                    };
-                                                    let sys_msg = DbMessage {
-                                                        id: sys_id,
-                                                        chat_address: gid.clone(),
-                                                        sender_hash: sender.clone(),
-                                                        content,
-                                                        timestamp: sys_ts,
-                                                        r#type: "system".to_string(),
-                                                        status: "delivered".to_string(),
-                                                        attachment_json: None,
-                                                        is_starred: false,
-                                                        is_group: true,
-                                                        reply_to_json: None,
-                                                    };
-                                                    let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
-                                                    let _ = app.emit("msg://added", json!(sys_msg));
+                                            // Update DB state
+                                            if !m_strings.is_empty() {
+                                                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![gid]);
+                                                for m in m_strings {
+                                                    let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![gid, m]);
                                                 }
                                             }
-
-                                            let _ = conn.execute(
-                                                "DELETE FROM chat_members WHERE chat_address = ?1",
-                                                params![gid],
-                                            );
-                                            for m in m_strings {
-                                                let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![gid, m]);
+                                            if let Some(name) = group_name {
+                                                let _ = conn.execute("UPDATE chats SET alias = ?1 WHERE address = ?2", params![name, gid]);
                                             }
                                         }
+                                    }
 
-                                        // Update name if present
-                                        if let Some(name) = group_name {
-                                            let _ = conn.execute(
-                                                "UPDATE chats SET alias = ?1 WHERE address = ?2",
-                                                params![name, gid],
-                                            );
+                                    // 📢 Save and Emit collected system notifications AFTER releasing lock
+                                    for content in system_messages {
+                                        let sys_id = uuid::Uuid::new_v4().to_string();
+                                        let sys_ts = chrono::Utc::now().timestamp_millis();
+                                        let sys_msg = DbMessage {
+                                            id: sys_id,
+                                            chat_address: gid.clone(),
+                                            sender_hash: sender.clone(),
+                                            content,
+                                            timestamp: sys_ts,
+                                            r#type: "system".to_string(),
+                                            status: "delivered".to_string(),
+                                            attachment_json: None,
+                                            is_starred: false,
+                                            is_group: true,
+                                            reply_to_json: None,
+                                        };
+                                        if let Err(e) = internal_db_save_message(&db_state, sys_msg.clone()).await {
+                                            println!("[Inbox] ERROR: Failed to save group system message: {}", e);
+                                        }
+                                        if let Err(e) = app.emit("msg://added", json!(sys_msg)) {
+                                            println!("[Inbox] ERROR: Failed to emit group system message: {}", e);
                                         }
                                     }
                                 }
+
                                 app.emit(
                                     "msg://group_update",
                                     json!({ "groupId": gid, "name": group_name }),
@@ -559,43 +603,16 @@ pub async fn process_incoming_binary(
                                         .lock()
                                         .map_err(|_| "Database connection lock poisoned")?;
                                     if let Some(conn) = lock.as_ref() {
-                                        // 🛑 CHECK FOR "LEFT" STATUS: If we explicitly left this group, don't recreate it
                                         let is_active: i32 = conn
                                             .query_row(
                                                 "SELECT is_active FROM chats WHERE address = ?1",
                                                 params![chat_address],
                                                 |r| r.get(0),
                                             )
-                                            .unwrap_or(1); // Default to 1 if it doesn't exist yet
+                                            .unwrap_or(1);
 
                                         if is_active == 0 {
-                                            println!("[Inbox] Ignoring message for left group: {}", chat_address);
                                             return Ok(());
-                                        }
-
-                                        // MUCH MORE AGGRESSIVE: Always update the alias to the one provided in the message metadata
-                                        let _ = conn.execute(
-                                            "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
-                                             ON CONFLICT(address) DO UPDATE SET 
-                                                alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
-                                                is_group = 1",
-                                            params![chat_address, group_name],
-                                        );
-
-                                        // 🧬 AUTO-SYNC MEMBERS: If the message includes members, update our local knowledge
-                                        if let Some(members) =
-                                            decrypted_json["groupMembers"].as_array()
-                                        {
-                                            let m_strings: Vec<String> = members
-                                                .iter()
-                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                                .collect();
-                                            if !m_strings.is_empty() {
-                                                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![chat_address]);
-                                                for m in m_strings {
-                                                    let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![chat_address, m]);
-                                                }
-                                            }
                                         }
                                     }
                                 }

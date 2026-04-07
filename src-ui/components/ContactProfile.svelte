@@ -151,9 +151,8 @@
                  <div class="flex justify-between items-center">
                     <h4 class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest">Members ({activeChat.members?.length || 0})</h4>
                     <button onclick={async () => {
-                        let input = await showPrompt("Enter Peer Hash, Nickname, or link:", "", "Add Member");
+                        let input = await showPrompt("Enter Peer Hash or Nickname:", "", "Add Member");
                         if (input) {
-                            input = input.trim().replace(/^entropy:\/\//, '');
                             if (input.length === 64) {
                                 addToGroup(activeChat!.peerHash, [input]);
                                 addToast("Invitation sent!", 'success');

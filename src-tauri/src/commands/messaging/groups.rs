@@ -1,6 +1,7 @@
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
-    internal_db_upsert_chat, internal_send_to_network, internal_signal_encrypt, DbChat,
+    internal_db_save_message, internal_db_upsert_chat, internal_send_to_network,
+    internal_signal_encrypt, DbChat, DbMessage,
 };
 use hex;
 use rand;
@@ -65,9 +66,32 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
                 "type": "group_invite",
                 "groupId": group_id,
                 "name": name,
-                "members": all_members,
+                "members": &all_members,
+                "newMembers": members, // In create_group, the input members are the 'new' ones
                 "distribution": dist_msg
             });
+
+            // 📢 SYSTEM INDICATOR: 'You added...' for the adder
+            for m in &all_members {
+                if m == &id_hash { continue; }
+                let sys_id = uuid::Uuid::new_v4().to_string();
+                let sys_ts = chrono::Utc::now().timestamp_millis();
+                let sys_msg = DbMessage {
+                    id: sys_id,
+                    chat_address: group_id.clone(),
+                    sender_hash: id_hash.clone(),
+                    content: format!("You added {}", if m.len() > 8 { &m[0..8] } else { m }),
+                    timestamp: sys_ts,
+                    r#type: "system".to_string(),
+                    status: "delivered".to_string(),
+                    attachment_json: None,
+                    is_starred: false,
+                    is_group: true,
+                    reply_to_json: None,
+                };
+                let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
+                let _ = app.emit("msg://added", json!(sys_msg));
+            }
 
             // Multicast to all members (E2EE via Signal)
             let invite_str = invite.to_string();
@@ -146,8 +170,32 @@ pub fn add_to_group(
                 lock.as_ref().and_then(|c| c.query_row("SELECT alias FROM chats WHERE address = ?1", params![group_id], |r| r.get::<_, Option<String>>(0)).ok().flatten())
             }.unwrap_or_else(|| "Group".to_string());
 
-            let invite = json!({ "type": "group_invite", "groupId": group_id, "name": group_name, "members": all_members, "distribution": dist_msg });
-            let update = json!({ "type": "group_update", "groupId": group_id, "members": all_members });
+            let invite = json!({ "type": "group_invite", "groupId": group_id, "name": group_name, "members": &all_members, "newMembers": &new_members, "distribution": dist_msg });
+            let update = json!({ "type": "group_update", "groupId": group_id, "members": &all_members, "newMembers": &new_members });
+
+            // 📢 SYSTEM INDICATOR: 'You added...' locally for the adder
+            for m in &new_members {
+                if current_members.contains(m) {
+                    continue;
+                }
+                let sys_id = uuid::Uuid::new_v4().to_string();
+                let sys_ts = chrono::Utc::now().timestamp_millis();
+                let sys_msg = DbMessage {
+                    id: sys_id,
+                    chat_address: group_id.clone(),
+                    sender_hash: id_hash.clone(),
+                    content: format!("You added {}", if m.len() > 8 { &m[0..8] } else { m }),
+                    timestamp: sys_ts,
+                    r#type: "system".to_string(),
+                    status: "delivered".to_string(),
+                    attachment_json: None,
+                    is_starred: false,
+                    is_group: true,
+                    reply_to_json: None,
+                };
+                let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
+                let _ = app.emit("msg://added", json!(sys_msg));
+            }
 
             let invite_str = invite.to_string();
             let update_str = update.to_string();

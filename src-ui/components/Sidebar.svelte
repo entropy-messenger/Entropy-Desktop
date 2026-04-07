@@ -50,9 +50,8 @@
   };
 
   const createChatPrompt = async () => {
-    let input = await showPrompt("Enter Peer ID Hash, Global Nickname, or link:", "", "New Chat");
+    let input = await showPrompt("Enter Peer ID Hash or Global Nickname:", "", "New Chat");
     if (!input) return;
-    input = input.trim().replace(/^entropy:\/\//, '').split('?')[0];
 
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
         startChat(input);
@@ -225,15 +224,14 @@
                                  <button 
                                     onclick={async (e) => { 
                                         e.stopPropagation(); 
-                                        const msg = chat.isGroup ? "Are you sure you want to leave this group?" : "Are you sure you want to delete this conversation?";
-                                        const title = chat.isGroup ? "Leave Group" : "Delete Chat";
+                                        const msg = "Are you sure you want to delete this conversation's history?";
+                                        const title = "Delete Chat History";
                                         if (await showConfirm(msg, title)) {
-                                            if (chat.isGroup) leaveGroup(chat.peerHash);
-                                            else deleteChat(chat.peerHash);
+                                            deleteChat(chat.peerHash);
                                         }
                                     }} 
                                     class="p-1 hover:bg-red-500/10 rounded transition text-entropy-text-dim hover:text-red-500" 
-                                    title={chat.isGroup ? "Leave Group" : "Delete Chat"}
+                                     title="Delete Chat History"
                                  >
                                     <LucideTrash2 size={12} />
                                  </button>

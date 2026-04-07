@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { userStore } from '../stores/user';
+import { userStore, messageStore } from '../stores/user';
 import { invoke } from '@tauri-apps/api/core';
 
 /**
@@ -91,6 +91,12 @@ export const leaveGroup = async (groupId: string) => {
             delete s.chats[groupId];
             if (s.activeChatHash === groupId) s.activeChatHash = null;
             return { ...s, chats: { ...s.chats } };
+        });
+
+        // Clear message history from memory
+        messageStore.update(mStore => {
+            delete mStore[groupId];
+            return { ...mStore };
         });
     } catch (e) {
         console.error("[Groups] Failed to leave group:", e);

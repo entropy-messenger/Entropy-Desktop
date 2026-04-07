@@ -125,7 +125,8 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
     if (!input) return null;
     if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) return input.toLowerCase();
     try {
-        return await invoke<string | null>('nickname_lookup', { name: input });
+        const res = await invoke<any>('nickname_lookup', { name: input });
+        return res?.identity_hash || null;
     } catch (e) {
         return null;
     }
@@ -133,7 +134,8 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
 
 export const resolveIdentity = async (peerHash: string): Promise<string | null> => {
     try {
-        const name = await invoke<string | null>('identity_resolve', { identityHash: peerHash });
+        const res = await invoke<any>('identity_resolve', { identityHash: peerHash });
+        const name = res?.nickname;
         if (name) {
             userStore.update(s => {
                 if (s.chats[peerHash]) s.chats[peerHash].peerNickname = name;

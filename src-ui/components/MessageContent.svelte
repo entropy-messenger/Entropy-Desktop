@@ -5,6 +5,7 @@
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import AttachmentRenderer from './AttachmentRenderer.svelte';
+    import { open } from '@tauri-apps/plugin-shell';
 
     let { 
         msg, 
@@ -23,17 +24,30 @@
     const isReplyToMine = $derived(msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash);
 
     const linkify = (text: string) => {
-        const urlRegex = /(https?:\/\/[^\s]+)/g;
+        // Robust URL regex matching http(s), www. OR naked domains (e.g. google.com)
+        const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|net|org|io|dev|ai|app|me|network|xyz)(?:\/[^\s]*)?)/gi;
         return text.split(urlRegex).map(part => {
-            if (part.match(urlRegex)) {
-                return `<a href="${part}" target="_blank" rel="noopener noreferrer" class="underline decoration-1 underline-offset-2 hover:text-entropy-accent transition-colors">${part}</a>`;
+            if (part && part.match(urlRegex)) {
+                const href = (part.startsWith('http')) ? part : `https://${part}`;
+                return `<a href="${href}" target="_blank" class="message-link text-entropy-primary font-bold underline decoration-1 underline-offset-4 hover:text-entropy-accent transition-all cursor-pointer">${part}</a>`;
             }
             return part;
         }).join('');
     };
+
+    const handleMessageClick = (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (target.classList.contains('message-link')) {
+            e.preventDefault();
+            const href = target.getAttribute('href');
+            if (href) open(href).catch(console.error);
+        }
+    };
 </script>
 
-<div class="relative w-full">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="relative w-full" onclick={handleMessageClick}>
     {#if msg.replyTo}
         <div 
             onclick={() => scrollToMessage?.(msg.replyTo!.id)} 

@@ -285,7 +285,7 @@ impl SessionStore for SqliteSignalStore {
             let data: Vec<u8> = row.get::<_, Vec<u8>>(0).map_err(|e: rusqlite::Error| {
                 SignalProtocolError::InvalidArgument(e.to_string())
             })?;
-            println!("[SignalStore] Loaded session for {}", address_str);
+
             Ok(Some(SessionRecord::deserialize(&data)?))
         } else {
             Ok(None)
@@ -308,7 +308,7 @@ impl SessionStore for SqliteSignalStore {
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let data = record.serialize()?;
 
-        println!("[SignalStore] Storing session for {}", address_str);
+
         conn.execute(
             "INSERT OR REPLACE INTO signal_sessions (address, session_data) VALUES (?1, ?2)",
             params![address_str, data],
@@ -334,7 +334,7 @@ impl PreKeyStore for SqliteSignalStore {
         ))?;
 
         let id_u32: u32 = pre_key_id.into();
-        println!("[SignalStore] Loading PreKey {}", id_u32);
+
         let mut stmt = conn
             .prepare("SELECT key_data FROM signal_pre_keys WHERE key_id = ?1")
             .map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
@@ -372,7 +372,7 @@ impl PreKeyStore for SqliteSignalStore {
         let id_u32 = u32::from(pre_key_id);
         let data = record.serialize()?;
 
-        println!("[SignalStore] Saving PreKey {}", id_u32);
+
         conn.execute(
             "INSERT OR REPLACE INTO signal_pre_keys (key_id, key_data) VALUES (?1, ?2)",
             params![id_u32, data],
@@ -395,7 +395,7 @@ impl PreKeyStore for SqliteSignalStore {
         ))?;
 
         let id_u32: u32 = pre_key_id.into();
-        println!("[SignalStore] Removing PreKey {}", id_u32);
+
         conn.execute(
             "DELETE FROM signal_pre_keys WHERE key_id = ?1",
             params![id_u32],
@@ -482,7 +482,7 @@ impl KyberPreKeyStore for SqliteSignalStore {
         ))?;
 
         let id_u32: u32 = kyber_prekey_id.into();
-        println!("[SignalStore] Loading KyberPreKey {}", id_u32);
+
         let mut stmt = conn
             .prepare("SELECT key_data FROM signal_kyber_pre_keys WHERE key_id = ?1")
             .map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
@@ -520,7 +520,7 @@ impl KyberPreKeyStore for SqliteSignalStore {
         let id_u32: u32 = kyber_prekey_id.into();
         let data = record.serialize()?;
 
-        println!("[SignalStore] Saving KyberPreKey {}", id_u32);
+
         conn.execute(
             "INSERT OR REPLACE INTO signal_kyber_pre_keys (key_id, key_data) VALUES (?1, ?2)",
             params![id_u32, data],
