@@ -65,6 +65,21 @@
                 <input id="member-input" bind:value={memberInput} placeholder="Hash or Nickname..." class="flex-1 p-3 bg-entropy-surface-light rounded-xl border-none text-xs" onkeydown={(e) => e.key === 'Enter' && addMember()} />
                 <button onclick={addMember} aria-label="Add Member" class="bg-entropy-primary text-white p-3 rounded-xl disabled:opacity-50" disabled={!memberInput}><LucidePlus size={20}/></button>
             </div>
+            
+            {#if groupMembers.length > 0}
+                <div class="flex flex-wrap gap-2 pt-1">
+                    {#each groupMembers as m}
+                        <div class="bg-entropy-surface-light border border-entropy-border/10 rounded-full pl-3 pr-1 py-1 flex items-center space-x-2 animate-in zoom-in duration-200">
+                            <span class="text-[10px] font-bold text-entropy-text-primary">
+                                {$userStore.nicknames[m] || m.slice(0, 8)}
+                            </span>
+                            <button onclick={() => removeMember(m)} class="p-1 hover:bg-red-500/10 rounded-full text-entropy-text-dim hover:text-red-500 transition-colors">
+                                <LucideX size={12} />
+                            </button>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
         </div>
             
         <div class="space-y-4 pt-2">
@@ -77,10 +92,10 @@
                     >
                         <div class="flex items-center space-x-3">
                             <div class="w-8 h-8 rounded-full bg-entropy-surface flex items-center justify-center text-[10px] font-bold text-entropy-primary">
-                                {(contact.localNickname || contact.peerNickname || "?")[0].toUpperCase()}
+                                {($userStore.nicknames[contact.peerHash] || "?")[0].toUpperCase()}
                             </div>
                             <div class="text-left">
-                                <div class="text-xs font-bold text-entropy-text-primary">{contact.localNickname || contact.peerNickname || contact.peerHash.slice(0, 8)}</div>
+                                <div class="text-xs font-bold text-entropy-text-primary">{$userStore.nicknames[contact.peerHash] || contact.peerHash.slice(0, 8)}</div>
                                 <div class="text-[9px] font-mono text-entropy-text-dim">{contact.peerHash.slice(0, 16)}...</div>
                             </div>
                         </div>

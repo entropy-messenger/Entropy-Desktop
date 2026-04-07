@@ -23,13 +23,15 @@
 
     const isReplyToMine = $derived(msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash);
 
-    const linkify = (text: string) => {
-        // Robust URL regex matching http(s), www. OR naked domains (e.g. google.com)
+    const linkify = (text: string, mine: boolean) => {
+        // Robust URL regex matching http(s), www. OR naked domains
         const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|net|org|io|dev|ai|app|me|network|xyz)(?:\/[^\s]*)?)/gi;
+        const linkClass = mine ? 'text-cyan-300 font-bold underline decoration-cyan-300/40' : 'text-entropy-primary font-bold underline decoration-1';
+        
         return text.split(urlRegex).map(part => {
             if (part && part.match(urlRegex)) {
                 const href = (part.startsWith('http')) ? part : `https://${part}`;
-                return `<a href="${href}" target="_blank" class="message-link text-entropy-primary font-bold underline decoration-1 underline-offset-4 hover:text-entropy-accent transition-all cursor-pointer">${part}</a>`;
+                return `<a href="${href}" target="_blank" class="message-link ${linkClass} underline-offset-4 hover:opacity-80 transition-all cursor-pointer">${part}</a>`;
             }
             return part;
         }).join('');
@@ -43,6 +45,36 @@
             if (href) open(href).catch(console.error);
         }
     };
+
+    /**
+     * Scans message content for 64-character hashes and replaces them with
+     * nicknames if available in the $userStore.
+     */
+    const resolveHashesInText = (text: string) => {
+        if (!text) return text;
+        const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
+        return text.replace(hashRegex, (match) => {
+            const nick = $userStore.nicknames[match.toLowerCase()];
+            return nick ? nick : match.slice(0, 8);
+        });
+    };
+
+    // 🕵️ DEEP RESOLVE: If we encounter unknown hashes in a protocol message, resolve them
+    import { resolveIdentity } from '../lib/actions/contacts';
+    $effect(() => {
+        if (msg.type === 'group_management' || msg.type === 'system') {
+            const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
+            const matches = msg.content.match(hashRegex);
+            if (matches) {
+                matches.forEach(hash => {
+                    const h = hash.toLowerCase();
+                    if (!$userStore.nicknames[h]) {
+                        resolveIdentity(h);
+                    }
+                });
+            }
+        }
+    });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -56,11 +88,11 @@
             tabindex="0" 
             class="bg-black/10 dark:bg-white/5 backdrop-blur-sm p-2 px-3 rounded-lg border-l-2 border-entropy-primary mb-2 cursor-pointer hover:bg-black/15 dark:hover:bg-white/10 transition-all active:scale-[0.98] overflow-hidden"
         >
-            <div class="text-[10px] font-black {isMine ? 'text-white/90' : 'text-entropy-primary'} line-clamp-1 leading-tight uppercase tracking-widest mb-0.5">
-                {isReplyToMine ? 'You' : (msg.replyTo.senderAlias || msg.replyTo.senderHash?.slice(0, 8) || 'Peer')}
+            <div class="text-[10px] font-black {isMine ? 'text-white/90' : 'text-entropy-primary'} line-clamp-1 leading-tight tracking-wide mb-0.5">
+                {isReplyToMine ? 'You' : ($userStore.nicknames[msg.replyTo.senderHash] || msg.replyTo.senderAlias || msg.replyTo.senderHash?.slice(0, 8) || 'Peer')}
             </div>
             <div class="{isMine ? 'text-white/80' : 'text-entropy-text-secondary'} text-[11px] line-clamp-2 opacity-90 leading-tight break-words">
-                {msg.replyTo.content}
+                {resolveHashesInText(msg.replyTo.content)}
             </div>
         </div>
     {/if}
@@ -87,7 +119,7 @@
         {/if}
     {:else}
         <div class="text-[14px] leading-snug whitespace-pre-wrap break-words relative overflow-hidden pb-0.5">
-            {@html linkify(msg.content)}
+            {@html linkify(resolveHashesInText(msg.content), isMine)}
             <!-- Native float wrap for the timestamp block -->
             {#if !compactMode}
                 <div class="float-right flex items-center space-x-0.5 select-none pointer-events-none pt-[8px] pl-1.5 mt-[-1px]">

@@ -52,7 +52,7 @@
   const handleSetLocalNickname = async () => {
       if (!activeChat) return;
       try {
-          const val = await showPrompt("Set a local nickname for this contact:", activeChat.localNickname || activeChat.peerNickname || "", "Local Nickname");
+          const val = await showPrompt("Set a local nickname for this contact:", $userStore.nicknames[activeChat.peerHash] || "", "Local Nickname");
           if (val !== null) {
               await setLocalNickname(activeChat.peerHash, val.trim() || null);
               addToast("Nickname updated", 'success');
@@ -71,11 +71,13 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="flex items-center space-x-3 overflow-hidden cursor-pointer group/header hover:opacity-80 transition-opacity" onclick={onShowGallery}>
-        <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" clickable={false} />
+        <Avatar hash={activeChat.peerHash} alias={$userStore.nicknames[activeChat.peerHash]} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" clickable={false} />
         <div class="min-w-0">
             <div class="flex items-center space-x-2">
                 <div class="font-bold text-entropy-text-primary leading-tight truncate group-hover/header:text-entropy-primary transition-colors">
-                    {activeChat.localNickname || activeChat.peerNickname || activeChat.peerHash.slice(0, 12)}
+                    {activeChat.isGroup 
+                        ? (activeChat.localNickname || activeChat.peerHash.slice(0, 12))
+                        : ($userStore.nicknames[activeChat.peerHash] || activeChat.peerHash.slice(0, 12))}
                 </div>
                 {#if activeChat.isVerified}
                     <LucideShieldCheck size={14} class="text-entropy-accent" />

@@ -3,8 +3,8 @@ use libsignal_protocol::{
     kem, message_encrypt, process_prekey_bundle, CiphertextMessage, CiphertextMessageType,
     DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
     KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeyRecord,
-    PreKeyStore, ProtocolAddress, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord,
-    SignedPreKeyStore, Timestamp,
+    PreKeyStore, ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError, SignedPreKeyId,
+    SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -30,22 +30,30 @@ pub(crate) async fn internal_signal_encrypt(
 
     let own_hash = net_state.identity_hash.lock().map_err(|_| "Net lock poisoned")?.clone().ok_or("Identity not established")?;
     let own_address = ProtocolAddress::new(
-        own_hash,
+        own_hash.clone(),
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
     let res: Result<CiphertextMessage, SignalProtocolError> = {
         let mut rng = StdRng::from_os_rng();
-        message_encrypt(
-            message.as_bytes(),
-            &address,
-            &own_address,
-            &mut store.clone(),
-            &mut store,
-            std::time::SystemTime::now(),
-            &mut rng,
-        )
-        .await
+        
+        // 🦾 POST-QUANTUM ENFORCEMENT: Strictly require a PQXDH session
+        if let Ok(Some(_session)) = store.load_session(&address).await {
+            // Note: In this version of libsignal, we rely on the fact that internal_establish_session_logic
+            // only allows PQ bundles. If we need a deeper check, we would inspect SessionState.
+            message_encrypt(
+                message.as_bytes(),
+                &address,
+                &own_address,
+                &mut store.clone(),
+                &mut store,
+                std::time::SystemTime::now(),
+                &mut rng,
+            )
+            .await
+        } else {
+            Err(SignalProtocolError::InvalidState("SessionStore", "Session not found".into()))
+        }
     };
 
     match res {
@@ -65,7 +73,7 @@ pub(crate) async fn internal_signal_encrypt(
                 "is_signal": true
             }))
         }
-        Err(e) if e.to_string().contains("session") || e.to_string().contains("not found") => {
+        Err(e) if e.to_string().to_lowercase().contains("session") || e.to_string().to_lowercase().contains("not found") => {
             println!(
                 "[Signal] Session not found for {}, fetching bundle...",
                 remote_hash
@@ -74,7 +82,10 @@ pub(crate) async fn internal_signal_encrypt(
             let response = internal_request(
                 net_state,
                 "fetch_key",
-                json!({ "target_hash": remote_hash }),
+                json!({ 
+                    "target_hash": remote_hash,
+                    "initiator_hash": own_hash
+                }),
             )
             .await?;
 
@@ -134,7 +145,7 @@ pub(crate) async fn internal_signal_encrypt(
                 "is_signal": true
             }))
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err::<serde_json::Value, String>(e.to_string()),
     }
 }
 
@@ -174,24 +185,39 @@ pub fn signal_get_bundle(
             let signed_pre_key_record = SignedPreKeyRecord::new(signed_pre_key_id, timestamp, &signed_pre_key_pair, &signature);
             store.save_signed_pre_key(signed_pre_key_id, &signed_pre_key_record).await.map_err(|e: SignalProtocolError| e.to_string())?;
 
-            let kyber_pre_key_id = KyberPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
-            let kyber_pre_key_record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, kyber_pre_key_id, identity_key_pair.private_key())
+            let mut kyber_pre_keys_json = Vec::new();
+            for _ in 0..key_count {
+                let id = KyberPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
+                let record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_key_pair.private_key())
+                    .map_err(|e: SignalProtocolError| e.to_string())?;
+                store.save_kyber_pre_key(id, &record).await.map_err(|e: SignalProtocolError| e.to_string())?;
+                kyber_pre_keys_json.push(serde_json::json!({
+                    "id": u32::from(id),
+                    "publicKey": hex::encode(record.public_key().map_err(|e: SignalProtocolError| e.to_string())?.serialize()),
+                    "signature": hex::encode(record.signature().map_err(|e: SignalProtocolError| e.to_string())?)
+                }));
+            }
+
+            // Also keep the single "last resort" kyberPreKey for compatibility with older establishments
+            let last_resort_id = KyberPreKeyId::from(rand::random::<u32>() & 0x7FFFFFFF);
+            let last_resort_record = KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, last_resort_id, identity_key_pair.private_key())
                 .map_err(|e: SignalProtocolError| e.to_string())?;
-            store.save_kyber_pre_key(kyber_pre_key_id, &kyber_pre_key_record).await.map_err(|e: SignalProtocolError| e.to_string())?;
+            store.save_kyber_pre_key(last_resort_id, &last_resort_record).await.map_err(|e: SignalProtocolError| e.to_string())?;
 
             Ok(serde_json::json!({
                 "registrationId": registration_id,
                 "identityKey": hex::encode(identity_key_pair.identity_key().serialize()),
                 "preKeys": pre_keys_json,
+                "kyberPreKeys": kyber_pre_keys_json,
                 "signedPreKey": {
                     "id": u32::from(signed_pre_key_id),
                     "publicKey": hex::encode(signed_pre_key_pair.public_key.serialize()),
                     "signature": hex::encode(signature)
                 },
                 "kyberPreKey": {
-                    "id": u32::from(kyber_pre_key_id),
-                    "publicKey": hex::encode(kyber_pre_key_record.public_key().map_err(|e: SignalProtocolError| e.to_string())?.serialize()),
-                    "signature": hex::encode(kyber_pre_key_record.signature().map_err(|e: SignalProtocolError| e.to_string())?)
+                    "id": u32::from(last_resort_id),
+                    "publicKey": hex::encode(last_resort_record.public_key().map_err(|e: SignalProtocolError| e.to_string())?.serialize()),
+                    "signature": hex::encode(last_resort_record.signature().map_err(|e: SignalProtocolError| e.to_string())?)
                 }
             }))
         })

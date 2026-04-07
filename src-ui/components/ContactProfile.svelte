@@ -2,7 +2,7 @@
   import { userStore, messageStore } from '../lib/stores/user';
   import { leaveGroup, addToGroup } from '../lib/actions/groups';
   import { deleteChat } from '../lib/actions/chat';
-  import { toggleBlock, setTrustLevel, startChat } from '../lib/actions/contacts';
+  import { toggleBlock, setTrustLevel, startChat, lookupNickname } from '../lib/actions/contacts';
   import { signalManager } from '../lib/signal_manager';
   import { 
     LucideX, LucideShieldCheck, LucideShieldAlert, LucideInfo,
@@ -59,10 +59,10 @@
     
     <div class="p-6 flex-1 overflow-y-auto custom-scrollbar space-y-8">
         <div class="flex flex-col items-center space-y-4">
-            <Avatar hash={activeChat.peerHash} alias={activeChat.localNickname || activeChat.peerNickname} size="w-24 h-24" textSize="text-3xl" rounded="rounded-3xl" />
+            <Avatar hash={activeChat.peerHash} alias={$userStore.nicknames[activeChat.peerHash]} size="w-24 h-24" textSize="text-3xl" rounded="rounded-3xl" />
             <div class="text-center">
                 <div class="flex items-center justify-center space-x-2">
-                    <h3 class="text-xl font-bold text-entropy-text-primary">{activeChat.localNickname || activeChat.peerNickname || 'Peer'}</h3>
+                    <h3 class="text-xl font-bold text-entropy-text-primary">{$userStore.nicknames[activeChat.peerHash] || 'Peer'}</h3>
                     {#if !activeChat.isGroup}
                         {#if activeChat.trustLevel >= 2}
                             <LucideShieldCheck size={18} class="text-green-500" />
@@ -73,8 +73,8 @@
                         {/if}
                     {/if}
                 </div>
-                {#if activeChat.localNickname && activeChat.peerNickname}
-                    <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Alias: {activeChat.peerNickname}</p>
+                {#if activeChat.localNickname && activeChat.globalNickname}
+                    <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Public: {activeChat.globalNickname}</p>
                 {/if}
                 <p class="text-[11px] font-mono text-entropy-text-secondary break-all opacity-80">{activeChat.peerHash}</p>
             </div>
@@ -153,11 +153,20 @@
                     <button onclick={async () => {
                         let input = await showPrompt("Enter Peer Hash or Nickname:", "", "Add Member");
                         if (input) {
-                            if (input.length === 64) {
-                                addToGroup(activeChat!.peerHash, [input]);
+                            input = input.trim();
+                            let hash = null;
+                            if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
+                                hash = input.toLowerCase();
+                            } else {
+                                // Try mapping nickname to hash
+                                hash = await lookupNickname(input);
+                            }
+
+                            if (hash) {
+                                addToGroup(activeChat!.peerHash, [hash]);
                                 addToast("Invitation sent!", 'success');
                             } else {
-                                addToast("Please provide a full 64-char ID for now.", 'info');
+                                addToast("Could not find user with that hash or nickname.", 'error');
                             }
                         }
                     }} class="text-[10px] font-black text-entropy-primary hover:underline uppercase">Add Member</button>
@@ -176,8 +185,8 @@
                             }}
                             role="button"
                         >
-                            <Avatar hash={member} alias={member.slice(0, 8)} size="w-5 h-5" textSize="text-[8px]" rounded="rounded-md" />
-                            <span class="text-[10px] font-mono text-entropy-text-secondary truncate flex-1 group-hover/member:text-entropy-primary transition-colors">{member.slice(0, 16)}...</span>
+                            <Avatar hash={member} alias={$userStore.nicknames[member] || member.slice(0, 8)} size="w-5 h-5" textSize="text-[8px]" rounded="rounded-md" />
+                            <span class="text-[10px] font-bold text-entropy-text-primary truncate flex-1 group-hover/member:text-entropy-primary transition-colors">{$userStore.nicknames[member] || member.slice(0, 16) + '...'}</span>
                             {#if member === $userStore.identityHash}
                                 <span class="text-[8px] font-black bg-entropy-primary/10 text-entropy-primary px-1 rounded">YOU</span>
                             {/if}

@@ -1,5 +1,5 @@
 use crate::app_state::DbState;
-use crate::commands::get_db_filename;
+use crate::commands::{get_db_filename, get_media_dirname};
 use std::io::{Read, Write};
 use tauri::{Manager, State};
 use walkdir::WalkDir;
@@ -38,7 +38,16 @@ pub async fn export_database(
         .map_err(|e| e.to_string())?;
     std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to stream DB to zip: {}", e))?;
 
-    let media_path = app_dir.join("media");
+    // 🛡️ Include the unique salt in the backup
+    let salt_path = app_dir.join("vault.salt");
+    if salt_path.exists() {
+        let mut sf = std::fs::File::open(&salt_path).map_err(|e| e.to_string())?;
+        zip.start_file("vault.salt", options).map_err(|e| e.to_string())?;
+        std::io::copy(&mut sf, &mut zip).map_err(|e| e.to_string())?;
+    }
+
+    let media_dir_name = get_media_dirname();
+    let media_path = app_dir.join(&media_dir_name);
     if media_path.exists() {
         let walker = WalkDir::new(&media_path).into_iter();
         for entry in walker.filter_map(|e| e.ok()) {
@@ -110,7 +119,8 @@ pub async fn import_database(
         let _ = std::fs::remove_file(shm_path);
     }
 
-    let media_path = app_dir.join("media");
+    let media_dir_name = get_media_dirname();
+    let media_path = app_dir.join(&media_dir_name);
     if media_path.exists() {
         std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
     }
@@ -120,11 +130,21 @@ pub async fn import_database(
 
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
+        
+        let mut name = file.name().to_string();
+        
+        // 🔄 NORMALIZE: Ensure backups from other profiles map to the ACTIVE profile
+        if name.starts_with("entropy") && name.ends_with(".db") {
+            name = filename.clone();
+        } else if name.starts_with("media") {
+            if let Some(pos) = name.find('/') {
+                name = format!("{}{}", media_dir_name, &name[pos..]);
+            } else {
+                name = media_dir_name.clone() + "/";
+            }
+        }
 
-        let outpath = match file.enclosed_name() {
-            Some(path) => app_dir.join(path),
-            None => continue,
-        };
+        let outpath = app_dir.join(name);
 
         if file.name().ends_with('/') {
             std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
@@ -139,14 +159,9 @@ pub async fn import_database(
         }
     }
 
-    println!("[Import] Restore complete. Re-opening connection...");
-    let new_conn = rusqlite::Connection::open(&dest_path)
-        .map_err(|e| format!("Failed to re-open DB: {}", e))?;
-    let mut state_lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    *state_lock = Some(new_conn);
-
+    println!("[Import] Restore complete. Restarting for fresh state...");
+    app.restart();
+    
+    #[allow(unreachable_code)]
     Ok(())
 }

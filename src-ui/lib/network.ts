@@ -100,6 +100,7 @@ export class NetworkLayer {
                     ...s.chats,
                     [groupId]: {
                         peerHash: groupId,
+                        localNickname: name,
                         peerNickname: name,
                         messages: [],
                         unreadCount: 1,
@@ -130,7 +131,7 @@ export class NetworkLayer {
                 const chat = s.chats[groupId];
                 if (chat) {
                     if (name) {
-                        chat.peerNickname = name;
+                        chat.localNickname = name;
                     }
                     if (members) {
                         chat.members = members;
@@ -138,6 +139,25 @@ export class NetworkLayer {
                     s.chats[groupId] = { ...chat };
                 }
                 return { ...s, chats: { ...s.chats } };
+            });
+        });
+
+        // Listen for contact profile updates (Nicknames/Aliases)
+        listen('contact-update', (event) => {
+            const { hash, alias } = event.payload as any;
+            if (!alias) return;
+
+            userStore.update(s => {
+                if (s.chats[hash]) {
+                    s.chats[hash] = { ...s.chats[hash], globalNickname: alias };
+                }
+                
+                // 🚀 GLOBAL SYNC: Always update the nickname cache for group-wide resolution
+                if (!s.chats[hash]?.localNickname || s.chats[hash]?.isGroup) {
+                    s.nicknames[hash] = alias;
+                }
+                
+                return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
             });
         });
 

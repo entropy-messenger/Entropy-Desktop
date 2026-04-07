@@ -4,8 +4,11 @@
         LucideCheck, LucideCheckCheck, LucideStar, LucideReply, 
         LucideExternalLink, LucideCheck as LucideCheckIcon 
     } from 'lucide-svelte';
+    import { userStore } from '../lib/stores/user';
+    import { resolveIdentity } from '../lib/actions/contacts';
     import AttachmentRenderer from './AttachmentRenderer.svelte';
     import MessageContent from './MessageContent.svelte';
+    import { onMount } from 'svelte';
 
     let { 
         msg, 
@@ -28,6 +31,38 @@
     }>();
 
     const isSelected = $derived(selectedIds.includes(msg.id));
+    
+    /**
+     * Deterministically derives a vibrant, readable color from a sender's hash.
+     * This ensures each user has a consistent visual identity in group chats.
+     */
+    const getSenderColor = (hash: string) => {
+        if (!hash) return 'var(--entropy-primary)';
+        
+        const colors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', 
+            '#FFEEAD', '#D4A5A5', '#9B59B6', '#3498DB', 
+            '#E67E22', '#2ECC71', '#F1C40F', '#E74C3C'
+        ];
+        
+        let hashValue = 0;
+        for (let i = 0; i < hash.length; i++) {
+            hashValue = hash.charCodeAt(i) + ((hashValue << 5) - hashValue);
+        }
+        
+        return colors[Math.abs(hashValue) % colors.length];
+    };
+
+    onMount(() => {
+        // 🔍 AUTO-RESOLVE: If we don't know this sender's nickname, ask the relay
+        if (!msg.isMine && msg.senderHash && !$userStore.nicknames[msg.senderHash]) {
+            resolveIdentity(msg.senderHash);
+        }
+        // 🔍 REPLY-RESOLVE: Also resolve the person being replied to
+        if (msg.replyTo?.senderHash && !$userStore.nicknames[msg.replyTo.senderHash]) {
+            resolveIdentity(msg.replyTo.senderHash);
+        }
+    });
 </script>
 
 <div id="msg-{msg.id}" class="flex {msg.isMine ? 'justify-end' : 'justify-start'} group items-center relative z-10 transition-opacity duration-300">
@@ -50,14 +85,21 @@
             role="button"
             tabindex="0"
             class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-pointer active:scale-[0.99]
-                {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'p-2.5 px-4 pb-1.5'}
+                {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'pt-1.5 px-4 pb-1.5'}
                 {msg.isMine ? (msg.isStarred ? 'bg-entropy-primary ring-1 ring-yellow-400/60 shadow-[0_0_10px_rgba(250,204,21,0.15)]' : 'bg-entropy-primary') : (msg.isStarred ? 'bg-entropy-surface-light ring-1 ring-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'bg-entropy-surface-light')}
                 {msg.isMine ? 'text-white rounded-tr-none' : 'text-entropy-text-primary rounded-tl-none'}
                 {isSelected ? 'ring-4 ring-entropy-accent ring-opacity-50 opacity-100 scale-100' : ''}
             "
         >
-            {#if activeChat.isGroup && !msg.isMine}
-                <div class="text-[10px] font-bold text-entropy-primary mb-1 opacity-80">{msg.senderAlias || msg.senderHash.slice(0, 6)}</div>
+            {#if activeChat?.isGroup && !msg.isMine && msg.senderHash}
+                <div class="mb-0.5 px-1">
+                    <span 
+                        class="text-[12.5px] font-bold tracking-tight"
+                        style="color: {getSenderColor(msg.senderHash)}"
+                    >
+                        {$userStore.nicknames[msg.senderHash] || msg.senderHash.slice(0, 8)}
+                    </span>
+                </div>
             {/if}
 
             <MessageContent 

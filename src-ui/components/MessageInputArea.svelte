@@ -144,7 +144,7 @@
                 <div class="flex-1 bg-entropy-surface-light rounded-lg p-2 px-3 border-l-2 border-entropy-primary flex items-center justify-between shadow-sm">
                     <div class="min-w-0 pr-4">
                         <div class="text-[10px] font-black text-entropy-primary truncate uppercase tracking-widest mb-0.5">
-                            {replyingTo.isMine ? 'You' : (replyingTo.senderAlias || replyingTo.senderHash.slice(0, 8))}
+                            {replyingTo.isMine ? 'You' : ($userStore.nicknames[replyingTo.senderHash] || replyingTo.senderAlias || replyingTo.senderHash.slice(0, 8))}
                         </div>
                         <div class="text-xs text-entropy-text-secondary line-clamp-2 opacity-80 break-words">{replyingTo.content}</div>
                     </div>

@@ -323,6 +323,7 @@ pub async fn process_incoming_binary(
                                     address: gid.clone(),
                                     is_group: true,
                                     alias: Some(name.clone()),
+                                    global_nickname: None,
                                     last_msg: Some(format!("Added to {}", name)),
                                     last_timestamp: Some(chrono::Utc::now().timestamp_millis()),
                                     unread_count: 1,
@@ -336,7 +337,14 @@ pub async fn process_incoming_binary(
                                     is_active: true,
                                 };
                                 let db_state = app.state::<DbState>();
-                                internal_db_upsert_chat(&db_state, chat).await?;
+                                internal_db_upsert_chat(&db_state, chat.clone()).await?;
+
+                                // 🚀 Broadcast real-time update to the UI
+                                app.emit("msg://group_update", json!({
+                                    "groupId": gid.clone(),
+                                    "name": name.clone(),
+                                    "members": members.clone(),
+                                })).ok();
 
                                 // 🕵️ Handle batch additions via 'newMembers'
                                 let mut handled_me = false;
@@ -688,8 +696,8 @@ pub async fn process_incoming_binary(
                             "profile_update" => {
                                 let alias = decrypted_json["alias"].as_str().map(|s| s.to_string());
                                 let db_state = app.state::<DbState>();
-                                // 💾 AUTO-PERSIST: Save nickname to SQLite immediately upon arrival
-                                let _ = db_set_contact_nickname(
+                                // 💾 AUTO-PERSIST: Save global nickname to SQLite immediately upon arrival
+                                let _ = db_set_contact_global_nickname(
                                     db_state,
                                     sender.clone(),
                                     alias.clone(),

@@ -54,7 +54,6 @@ export interface PrivacySettings {
  */
 export interface Chat {
     peerHash: string;
-    peerNickname?: string;
     messages?: Message[];
     hasMore?: boolean;
     unreadCount: number,
@@ -66,6 +65,7 @@ export interface Chat {
     isBlocked?: boolean;
     trustLevel: number;
     localNickname?: string;
+    globalNickname?: string;
     inviteCode?: string;
     lastMsg?: string;
     lastTimestamp?: number;

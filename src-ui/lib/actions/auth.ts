@@ -58,16 +58,27 @@ export const initApp = async (password: string) => {
         }
 
         // 2. Load relational Chat/Contact objects
+        let nicknames: Record<string, string> = {};
         try {
             const dbContacts = await invoke<any[]>('db_get_contacts');
             blockedHashes = dbContacts.filter(c => c.isBlocked).map(c => c.hash);
+            dbContacts.forEach(c => {
+                // Priority: Local Alias > Global Nickname
+                const name = c.alias || c.globalNickname;
+                if (name) nicknames[c.hash] = name;
+            });
 
             const dbChats = await invoke<any[]>('db_get_chats');
             for (const c of dbChats) {
+                // Also pull nicknames from chat objects if not already in contacts
+                const name = c.alias || c.globalNickname;
+                if (name && !nicknames[c.address]) nicknames[c.address] = name;
+                
                 chats[c.address] = {
                     peerHash: c.address,
                     isGroup: c.is_group || c.isGroup || false,
-                    peerNickname: c.alias,
+                    localNickname: c.alias,
+                    globalNickname: c.globalNickname,
                     members: c.members || undefined,
                     messages: [],
                     unreadCount: c.unread_count || c.unreadCount || 0,
@@ -94,6 +105,7 @@ export const initApp = async (password: string) => {
             globalNickname,
             blockedHashes,
             privacySettings,
+            nicknames,
             authError: null
         }));
         

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
   import { 
-    startChat, togglePin, toggleArchive, lookupNickname, updatePrivacy
+    startChat, togglePin, toggleArchive, lookupNickname, updatePrivacy, resolveIdentity
   } from '../lib/actions/contacts';
   import { deleteChat, loadChatMessages } from '../lib/actions/chat';
   import { leaveGroup } from '../lib/actions/groups';
@@ -23,6 +23,30 @@
   let activeHash = $state<string | null>(null);
   let searchQuery = $state("");
   let showCreateGroup = $state(false);
+
+  // 🕵️ AUTO-RESOLVE: Sequential queued resolution to prevent UI hangs and relay flood
+  const pendingResolutions = new Set<string>();
+  $effect(() => {
+     const unknownHashes = Object.values($userStore.chats)
+         .filter(chat => chat.isGroup && chat.lastSenderHash && !$userStore.nicknames[chat.lastSenderHash])
+         .map(chat => chat.lastSenderHash as string);
+
+     if (unknownHashes.length === 0) return;
+
+     unknownHashes.forEach(hash => {
+         if (pendingResolutions.has(hash)) return;
+         pendingResolutions.add(hash);
+         
+         // Stagger requests to avoid relay rate-limiting and UI thread saturation
+         setTimeout(async () => {
+             try {
+                await resolveIdentity(hash);
+             } finally {
+                pendingResolutions.delete(hash);
+             }
+         }, 500 + (Math.random() * 2000)); // 500ms - 2.5s jittered delay
+     });
+   });
   let filter = $state<'all' | 'archived'>('all');
   
   let { showStarredMessages = $bindable(false) } = $props();
@@ -33,7 +57,7 @@
     msgs.filter(m => m.isStarred).map(m => ({
         ...m,
         peerHash,
-        peerNickname: $userStore.chats[peerHash]?.localNickname || $userStore.chats[peerHash]?.peerNickname || peerHash.slice(0, 8)
+        displayNickname: $userStore.nicknames[peerHash] || peerHash.slice(0, 8)
     }))
   ).sort((a, b) => b.timestamp - a.timestamp));
   
@@ -81,7 +105,7 @@
                 const results = await invoke<any[]>('db_search_messages', { query });
                 searchMessages = results.map(m => ({
                     ...m,
-                    peerNickname: $userStore.chats[m.chatAddress]?.peerNickname || m.chatAddress.slice(0, 8)
+                    peerNickname: $userStore.nicknames[m.chatAddress] || m.chatAddress.slice(0, 8)
                 }));
             } catch (e) {
                 console.error("Search failed:", e);
@@ -96,7 +120,7 @@
 
   let filteredChats = $derived(Object.values($userStore.chats).filter(chat => {
     const query = searchQuery.toLowerCase();
-    const chatName = (chat.localNickname || chat.peerNickname || "").toLowerCase();
+    const chatName = ($userStore.nicknames[chat.peerHash] || "").toLowerCase();
     const matchesName = chatName.includes(query) || chat.peerHash.toLowerCase().includes(query);
     if (filter === 'archived' && !chat.isArchived) return false;
     if (filter === 'all' && chat.isArchived) return false;
@@ -178,13 +202,17 @@
     {#each filteredChats as chat (chat.peerHash)}
         <div class="group/item p-4 hover:bg-entropy-surface/50 cursor-pointer transition relative {activeHash === chat.peerHash ? 'bg-entropy-primary/10 shadow-[inset_4px_0_0_0_#8b5cf6]' : ''}" onclick={() => selectChat(chat.peerHash)} onkeypress={(e) => e.key === 'Enter' && selectChat(chat.peerHash)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3">
-                    <Avatar hash={chat.peerHash} alias={chat.localNickname || chat.peerNickname} />
+                    <Avatar hash={chat.peerHash} alias={$userStore.nicknames[chat.peerHash]} />
                     
                     <div class="flex-1 min-w-0">
                         <div class="flex justify-between items-baseline mb-0.5">
                             <div class="font-bold text-entropy-text-primary truncate flex items-center space-x-1">
                                 {#if chat.isGroup}<LucideUsers size={12} class="text-entropy-primary" />{/if}
-                                <span class="truncate">{chat.localNickname || chat.peerNickname || chat.peerHash.slice(0, 8)}</span>
+                                <span class="truncate">
+                                    {chat.isGroup 
+                                        ? (chat.localNickname || chat.peerHash.slice(0, 8)) 
+                                        : ($userStore.nicknames[chat.peerHash] || chat.peerHash.slice(0, 8))}
+                                </span>
                                 {#if chat.isPinned}<LucidePin size={10} class="text-entropy-primary fill-entropy-primary" />{/if}
                             </div>
                             {#if chat.lastTimestamp}
@@ -207,7 +235,7 @@
                                             {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}
                                         {/if}
                                         <span class="truncate">
-                                            {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{chat.lastSenderHash?.slice(0, 6) || ''}:</span>{/if}
+                                            {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{$userStore.nicknames[chat.lastSenderHash || ''] || chat.lastSenderHash?.slice(0, 6) || ''}:</span>{/if}
                                             {chat.lastMsg}
                                         </span>
                                     </div>

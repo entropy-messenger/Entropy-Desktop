@@ -91,6 +91,7 @@ fn main() {
             commands::db_get_contacts,
             commands::db_set_contact_blocked,
             commands::db_set_contact_nickname,
+            commands::db_set_contact_global_nickname,
             commands::db_set_chat_pinned,
             commands::db_set_chat_archived,
             commands::db_get_starred_messages,

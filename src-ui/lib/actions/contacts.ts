@@ -81,8 +81,17 @@ export const toggleStar = (peerHash: string, msgId: string) => {
 
 export const setLocalNickname = (peerHash: string, nickname: string | null) => {
     userStore.update(s => {
-        if (s.chats[peerHash]) s.chats[peerHash].peerNickname = nickname || undefined;
-        return { ...s, chats: { ...s.chats } };
+        if (s.chats[peerHash]) s.chats[peerHash].localNickname = nickname || undefined;
+        // Priority update: Local Alias > Global Nickname
+        if (nickname) {
+            s.nicknames[peerHash] = nickname;
+        } else {
+            // Revert to global if local is removed
+            const global = s.chats[peerHash]?.globalNickname;
+            if (global) s.nicknames[peerHash] = global;
+            else delete s.nicknames[peerHash];
+        }
+        return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
     });
     invoke('db_set_contact_nickname', { hash: peerHash, alias: nickname }).catch(console.error);
 };
@@ -132,14 +141,26 @@ export const lookupNickname = async (nickname: string): Promise<string | null> =
     }
 };
 
+const pendingResolutions = new Set<string>();
+
 export const resolveIdentity = async (peerHash: string): Promise<string | null> => {
+    if (pendingResolutions.has(peerHash)) return null;
+    pendingResolutions.add(peerHash);
+
     try {
         const res = await invoke<any>('identity_resolve', { identityHash: peerHash });
         const name = res?.nickname;
         if (name) {
+            // 💾 Persist to SQLite so it's loaded next startup
+            invoke('db_set_contact_global_nickname', { hash: peerHash, nickname: name }).catch(console.error);
+
             userStore.update(s => {
-                if (s.chats[peerHash]) s.chats[peerHash].peerNickname = name;
-                return { ...s, chats: { ...s.chats } };
+                if (s.chats[peerHash]) s.chats[peerHash].globalNickname = name;
+                // Only update display cache if no local override
+                if (!s.chats[peerHash]?.localNickname) {
+                    s.nicknames[peerHash] = name;
+                }
+                return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
             });
             return name;
         }
@@ -147,6 +168,8 @@ export const resolveIdentity = async (peerHash: string): Promise<string | null> 
     } catch (e) {
         console.warn(`[Identity] Failed to resolve nickname for ${peerHash}:`, e);
         return null;
+    } finally {
+        pendingResolutions.delete(peerHash);
     }
 };
 
@@ -155,10 +178,15 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
     userStore.update(s => {
         let chat = s.chats[peerHash];
         if (!chat) {
-            chat = { peerHash, peerNickname: alias || peerHash.slice(0, 8), unreadCount: 0, trustLevel: 1 };
+            chat = { peerHash, localNickname: alias || undefined, unreadCount: 0, trustLevel: 1 };
         } else if (alias) {
-            chat.peerNickname = alias;
+            chat.localNickname = alias;
         }
+        
+        // Update nicknames cache with priority
+        const display = chat.localNickname || chat.globalNickname;
+        if (display) s.nicknames[peerHash] = display;
+        
         chat.unreadCount = 0;
         syncChatToDb(chat);
         s.chats[peerHash] = chat;

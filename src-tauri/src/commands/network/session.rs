@@ -170,6 +170,7 @@ pub(crate) async fn internal_establish_network(
     if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token) {
         if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
             if let Some(tx) = &*sender_lock {
+                println!("[Network] Handshake: Attempting session-based authentication...");
                 let payload = json!({ "identity_hash": id, "session_token": token_val });
                 let auth_req = json!({"type": "auth", "payload": payload});
                 let _ = tx.send(PacedMessage {
@@ -180,8 +181,9 @@ pub(crate) async fn internal_establish_network(
     } else if let Some(id) = id_hash {
         if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
             if let Some(tx) = &*sender_lock {
+                println!("[Network] Handshake: No session token. Requesting PoW challenge...");
                 let challenge_req =
-                    json!({"type": "pow_challenge", "identity_hash": id, "id": "auto_challenge"});
+                    json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
                 let _ = tx.send(PacedMessage {
                     msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
                 });
@@ -305,7 +307,7 @@ pub(crate) async fn internal_establish_network(
                                                 handled = true;
                                             },
                                             "pow_challenge_res" => {
-                                                if val.get("req_id").is_none() {
+                                                if val.get("req_id").is_none() || val.get("req_id").and_then(|r| r.as_str()) == Some("auto_challenge") {
                                                     let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
                                                     let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
                                                     let id = app.state::<NetworkState>().identity_hash.lock().map(|l| l.clone()).unwrap_or(None);
@@ -351,6 +353,7 @@ pub(crate) async fn internal_establish_network(
                                                 let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");
                                                 let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
                                                 if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Handshake failed") || error_msg.contains("Challenge") || error_msg.contains("Jailed") {
+                                                    println!("[Network] Auth failed: {}. Clearing session token.", error_msg);
                                                     if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() { *l = None; }
                                                     if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
                                                     let app_inner = app.clone();
@@ -379,6 +382,9 @@ pub(crate) async fn internal_establish_network(
             }
         }
     }
+    if let Ok(mut l) = app.state::<NetworkState>().sender.lock() { *l = None; }
+    if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
+    let _ = app.emit("network-status", "disconnected");
     Ok(())
 }
 
@@ -411,18 +417,6 @@ async fn run_connection_loop(app: AppHandle) {
             {
                 eprintln!("[Network] Connection error: {}", e);
             } else {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    let net_state = app.state::<NetworkState>();
-                    let is_enabled = net_state.is_enabled.lock().map(|l| *l).unwrap_or(false);
-                    if token_val.is_cancelled() || !is_enabled {
-                        break;
-                    }
-                    let s_lock = net_state.sender.lock();
-                    if s_lock.is_err() || s_lock.map(|l| l.is_none()).unwrap_or(true) {
-                        break;
-                    }
-                }
                 retry_count = 0;
             }
         }

@@ -42,6 +42,7 @@ pub struct DbChat {
     #[serde(default = "default_active")]
     pub is_active: bool,
     pub members: Option<Vec<String>>,
+    pub global_nickname: Option<String>,
 }
 
 fn default_active() -> bool { true }
@@ -53,4 +54,5 @@ pub struct DbContact {
     pub alias: Option<String>,
     pub is_blocked: bool,
     pub trust_level: i32,
+    pub global_nickname: Option<String>,
 }

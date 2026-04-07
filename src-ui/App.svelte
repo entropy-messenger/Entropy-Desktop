@@ -95,6 +95,10 @@
     
     userStore.update(s => ({ ...s, authError: null }));
     
+    if (password.length < 4) {
+        userStore.update(s => ({ ...s, authError: "Password must be at least 4 digits." }));
+        return;
+    }
     isInitializing = true;
     try {
         await initApp(password);
@@ -107,7 +111,10 @@
   };
 
   const handleCreate = async () => {
-    if (!password) return;
+    if (password.length < 4) {
+        addToast("Password must be at least 4 digits", 'error');
+        return;
+    }
     isInitializing = true;
     try {
         await createIdentity(password);
@@ -313,10 +320,16 @@
                         </div>
 
                         {#if hasExistingIdentity}
+                            {#if password && password.length < 4}
+                                <div class="px-2 text-[10px] font-bold text-yellow-600 animate-in fade-in slide-in-from-top-1">
+                                    Password must be at least 4 digits
+                                </div>
+                            {/if}
+
                             <button 
                                 class="w-full py-5 bg-entropy-primary text-white rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-entropy-primary-dim transition-all shadow-xl shadow-entropy-primary/10 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
                                 onclick={handleLogin}
-                                disabled={isInitializing || !password}
+                                disabled={isInitializing || !password || password.length < 4}
                                 aria-label="Unlock Identity"
                             >
                                 {#if isInitializing}
@@ -328,10 +341,10 @@
                                 {/if}
                             </button>
                         {:else}
-                            <button 
+                             <button 
                                 class="w-full py-5 bg-white text-entropy-bg rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-white/90 transition-all shadow-2xl active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
                                 onclick={handleCreate}
-                                disabled={isInitializing || !password || !confirmPassword || password !== confirmPassword}
+                                disabled={isInitializing || !password || !confirmPassword || password !== confirmPassword || password.length < 4}
                                 aria-label="Create Identity"
                             >
                                 {#if isInitializing}

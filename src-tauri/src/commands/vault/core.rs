@@ -21,6 +21,15 @@ pub fn get_db_filename() -> String {
     "entropy.db".to_string()
 }
 
+pub fn get_media_dirname() -> String {
+    if let Ok(profile) = std::env::var("ENTROPY_PROFILE") {
+        if !profile.is_empty() {
+            return format!("media_{}", profile);
+        }
+    }
+    "media".to_string()
+}
+
 #[tauri::command]
 pub fn vault_exists(app: AppHandle) -> bool {
     if let Ok(app_data_dir) = app.path().app_data_dir() {
@@ -67,7 +76,7 @@ pub async fn init_vault(
                 let _ = std::fs::remove_file(app_data_dir.join(&filename));
                 let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
                 let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-                let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
+                let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
                 let _ = std::fs::remove_file(&attempts_file);
                 println!("[!] Panic password triggered. Wiping and restarting...");
                 app.restart();
@@ -81,7 +90,7 @@ pub async fn init_vault(
         let _ = std::fs::remove_file(app_data_dir.join(&filename));
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("media"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
         let _ = std::fs::remove_file(&attempts_file);
         println!("[!] Max attempts reached. Wiping and restarting...");
         app.restart();
@@ -96,10 +105,21 @@ pub async fn init_vault(
     };
 
     if !passphrase.is_empty() {
+        // 🛡️ SECURITY UPGRADE: Load or Generate a unique random salt
+        let salt_path = app_data_dir.join("vault.salt");
+        let salt_string = if salt_path.exists() {
+            std::fs::read_to_string(&salt_path).map_err(|e| format!("Failed to read salt: {}", e))?
+        } else {
+            let new_salt = SaltString::generate(&mut OsRng);
+            let s = new_salt.as_str().to_string();
+            std::fs::write(&salt_path, &s).map_err(|e| format!("Failed to save salt: {}", e))?;
+            s
+        };
+
         // Argon2id is intentionally slow — offload to blocking thread pool to keep UI responsive
         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
-            let salt = SaltString::from_b64("ZW50cm9weV9zYWx0XzI1Ng")
-                .map_err(|e| format!("Salt error: {}", e))?; // "entropy_salt_256"
+            let salt = SaltString::from_b64(&salt_string)
+                .map_err(|e| format!("Salt error: {}", e))?;
             let argon2 = Argon2::new(
                 argon2::Algorithm::Argon2id,
                 argon2::Version::V0x13,
@@ -202,6 +222,7 @@ pub async fn init_vault(
         CREATE TABLE IF NOT EXISTS contacts (
             hash TEXT PRIMARY KEY,
             alias TEXT,
+            global_nickname TEXT,
             is_blocked INTEGER DEFAULT 0,
             trust_level INTEGER DEFAULT 1
         );
@@ -210,6 +231,7 @@ pub async fn init_vault(
             address TEXT PRIMARY KEY,
             is_group INTEGER DEFAULT 0,
             alias TEXT,
+            global_nickname TEXT,
             last_msg TEXT,
             last_timestamp INTEGER,
             last_sender_hash TEXT,
@@ -408,7 +430,8 @@ pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Resul
     let db_path = app_dir.join(&filename);
     let wal_path = app_dir.join(format!("{}-wal", filename));
     let shm_path = app_dir.join(format!("{}-shm", filename));
-    let media_dir = app_dir.join("media");
+    let media_dir_name = get_media_dirname();
+    let media_dir = app_dir.join(&media_dir_name);
 
     if db_path.exists() {
         std::fs::remove_file(&db_path).map_err(|e| e.to_string())?;

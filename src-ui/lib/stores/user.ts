@@ -19,6 +19,7 @@ export interface AppState {
     connectionStatus: 'disconnected' | 'connecting' | 'mining' | 'connected' | 'sync_error';
     authError: string | null;
     relayUrl: string;
+    nicknames: Record<string, string>;
 }
 
 const initialState: AppState = {
@@ -40,7 +41,8 @@ const initialState: AppState = {
     isSynced: false,
     connectionStatus: 'disconnected',
     authError: null,
-    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080'
+    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080',
+    nicknames: {}
 };
 
 /**

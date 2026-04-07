@@ -19,7 +19,7 @@ export const createGroup = async (name: string, members: string[]) => {
         userStore.update(s => {
             s.chats[groupId] = { 
                 peerHash: groupId, 
-                peerNickname: name, 
+                localNickname: name, 
                 unreadCount: 0, 
                 isGroup: true, 
                 members: allMembers,
@@ -56,7 +56,7 @@ export const updateGroupName = async (groupId: string, newName: string) => {
         
         // Optimistically update local store
         userStore.update(s => {
-            if (s.chats[groupId]) s.chats[groupId].peerNickname = newName;
+            if (s.chats[groupId]) s.chats[groupId].localNickname = newName;
             return { ...s };
         });
     } catch (e) {

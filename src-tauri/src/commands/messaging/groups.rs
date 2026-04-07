@@ -45,6 +45,7 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
                 address: group_id.clone(),
                 is_group: true,
                 alias: Some(name.clone()),
+                global_nickname: None,
                 last_msg: None,
                 last_timestamp: None,
                 unread_count: 0,

@@ -18,7 +18,7 @@ pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let mut stmt = conn
-        .prepare("SELECT hash, alias, is_blocked, trust_level FROM contacts")
+        .prepare("SELECT hash, alias, is_blocked, trust_level, global_nickname FROM contacts")
         .map_err(|e| e.to_string())?;
 
     let rows = stmt
@@ -28,6 +28,7 @@ pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>
                 alias: row.get(1)?,
                 is_blocked: row.get::<_, i32>(2)? != 0,
                 trust_level: row.get(3)?,
+                global_nickname: row.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -78,7 +79,39 @@ pub async fn db_set_contact_nickname(
          ON CONFLICT(hash) DO UPDATE SET alias = excluded.alias",
         params![hash, alias],
     )
-    .map_err(|e| format!("Failed to update alias: {}", e))?;
+    .map_err(|e| format!("Failed to update local alias: {}", e))?;
+
+    let _ = conn.execute(
+        "UPDATE chats SET alias = ?1 WHERE address = ?2",
+        params![alias, hash],
+    );
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn db_set_contact_global_nickname(
+    state: State<'_, DbState>,
+    hash: String,
+    nickname: Option<String>,
+) -> Result<(), String> {
+    let lock = state
+        .conn
+        .lock()
+        .map_err(|_| "Database connection lock poisoned")?;
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "INSERT INTO contacts (hash, global_nickname) VALUES (?1, ?2)
+         ON CONFLICT(hash) DO UPDATE SET global_nickname = excluded.global_nickname",
+        params![hash, nickname],
+    )
+    .map_err(|e| format!("Failed to update global nickname: {}", e))?;
+
+    let _ = conn.execute(
+        "UPDATE chats SET global_nickname = ?1 WHERE address = ?2",
+        params![nickname, hash],
+    );
 
     Ok(())
 }
@@ -253,7 +286,8 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
             c.unread_count, c.is_archived, c.last_sender_hash, c.last_status, c.is_pinned,
             COALESCE((SELECT trust_level FROM signal_identities_remote WHERE address LIKE c.address || ':%' LIMIT 1), 1) as trust_level,
             COALESCE((SELECT is_blocked FROM contacts WHERE hash = c.address), 0) != 0 as is_blocked,
-            c.is_active
+            c.is_active,
+            c.global_nickname
         FROM chats c
         WHERE c.is_active != 0"
     ).map_err(|e| e.to_string())?;
@@ -275,6 +309,7 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
                 is_blocked: row.get(11)?,
                 is_active: row.get::<_, i32>(12)? != 0,
                 members: None,
+                global_nickname: row.get(13)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -504,10 +539,11 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
     let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
 
     conn.execute(
-        "INSERT INTO chats (address, is_group, alias, last_msg, last_timestamp, unread_count, is_archived, is_pinned, trust_level, is_blocked, last_sender_hash, last_status, is_active)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "INSERT INTO chats (address, is_group, alias, global_nickname, last_msg, last_timestamp, unread_count, is_archived, is_pinned, trust_level, is_blocked, last_sender_hash, last_status, is_active)
+         VALUES (?1, ?2, ?3, ?14, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(address) DO UPDATE SET
-            alias = excluded.alias,
+            alias = COALESCE(excluded.alias, chats.alias),
+            global_nickname = excluded.global_nickname,
             is_group = excluded.is_group,
             last_msg = excluded.last_msg,
             last_timestamp = excluded.last_timestamp,
@@ -533,6 +569,7 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
             chat.last_sender_hash,
             chat.last_status,
             chat.is_active as i32,
+            chat.global_nickname,
         ],
     ).map_err(|e| e.to_string())?;
 
