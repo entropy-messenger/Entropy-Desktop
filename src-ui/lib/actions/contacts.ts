@@ -36,7 +36,7 @@ export const togglePin = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
         const nextPinned = !s.chats[peerHash].isPinned;
         s.chats[peerHash] = { ...s.chats[peerHash], isPinned: nextPinned };
-        invoke('db_set_chat_pinned', { address: peerHash, is_pinned: nextPinned }).catch(console.error);
+        invoke('db_set_chat_pinned', { address: peerHash, isPinned: nextPinned }).catch(console.error);
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -46,7 +46,7 @@ export const toggleArchive = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
         const nextArchived = !s.chats[peerHash].isArchived;
         s.chats[peerHash] = { ...s.chats[peerHash], isArchived: nextArchived };
-        invoke('db_set_chat_archived', { address: peerHash, is_archived: nextArchived }).catch(console.error);
+        invoke('db_set_chat_archived', { address: peerHash, isArchived: nextArchived }).catch(console.error);
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -102,7 +102,7 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
     if (nextStatus) s.blockedHashes = [...s.blockedHashes, peerHash];
     else s.blockedHashes = s.blockedHashes.filter(h => h !== peerHash);
     if (s.chats[peerHash]) s.chats[peerHash].isBlocked = nextStatus;
-    invoke('db_set_contact_blocked', { hash: peerHash, is_blocked: nextStatus }).catch(console.error);
+    invoke('db_set_contact_blocked', { hash: peerHash, isBlocked: nextStatus }).catch(console.error);
     return { ...s };
 });
 

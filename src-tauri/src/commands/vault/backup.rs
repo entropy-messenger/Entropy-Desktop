@@ -133,6 +133,11 @@ pub async fn import_database(
         
         let mut name = file.name().to_string();
         
+        // 🛡️ SECURITY: Prevent Zip Slip (Path Traversal)
+        if name.contains("..") || name.starts_with('/') || name.contains(':') {
+            continue; // Skip dangerous entries
+        }
+
         // 🔄 NORMALIZE: Ensure backups from other profiles map to the ACTIVE profile
         if name.starts_with("entropy") && name.ends_with(".db") {
             name = filename.clone();

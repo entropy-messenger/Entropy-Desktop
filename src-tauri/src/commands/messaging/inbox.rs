@@ -711,10 +711,13 @@ pub async fn process_incoming_binary(
                                 .map_err(|e: tauri::Error| e.to_string())?;
                             }
                             "file" | "media" => {
-                                let msg_id = decrypted_json["id"]
-                                    .as_str()
-                                    .ok_or("Missing msg id")?
-                                    .to_string();
+                                let raw_msg_id = decrypted_json["id"].as_str().ok_or("Missing msg id")?;
+                                // 🛡️ SECURITY: Sanitize msg_id to prevent Path Traversal attacks
+                                let msg_id = raw_msg_id.chars()
+                                    .filter(|c| c.is_alphanumeric() || *c == '-')
+                                    .collect::<String>();
+                                if msg_id.is_empty() { return Err("Invalid message ID".into()); }
+
                                 let bundle = decrypted_json["bundle"].clone();
                                 let inner_transfer_id = decrypted_json["transfer_id"]
                                     .as_u64()

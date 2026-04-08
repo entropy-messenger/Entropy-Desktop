@@ -9,7 +9,7 @@ import { addToast } from '../stores/ui';
 
 export const exportVault = async (targetPath: string) => {
     try {
-        await invoke('export_database', { target_path: targetPath });
+        await invoke('export_database', { targetPath });
         addToast("Backup exported successfully!", 'success');
         return true;
     } catch (e: any) {
@@ -21,7 +21,7 @@ export const exportVault = async (targetPath: string) => {
 
 export const importVault = async (srcPath: string) => {
     try {
-        await invoke('import_database', { src_path: srcPath });
+        await invoke('import_database', { srcPath });
         addToast("Backup restored! Identity is being re-synchronized.", 'success');
         // Allow time for native cleanup before reload
         setTimeout(() => window.location.reload(), 2000);

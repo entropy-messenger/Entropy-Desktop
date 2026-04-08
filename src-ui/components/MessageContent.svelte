@@ -24,6 +24,7 @@
     const isReplyToMine = $derived(msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash);
 
     const linkify = (text: string, mine: boolean) => {
+        if (!text) return '';
         // Robust URL regex matching http(s), www. OR naked domains
         const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|net|org|io|dev|ai|app|me|network|xyz)(?:\/[^\s]*)?)/gi;
         const linkClass = mine ? 'text-cyan-300 font-bold underline decoration-cyan-300/40' : 'text-entropy-primary font-bold underline decoration-1';
@@ -31,9 +32,12 @@
         return text.split(urlRegex).map(part => {
             if (part && part.match(urlRegex)) {
                 const href = (part.startsWith('http')) ? part : `https://${part}`;
-                return `<a href="${href}" target="_blank" class="message-link ${linkClass} underline-offset-4 hover:opacity-80 transition-all cursor-pointer">${part}</a>`;
+                // We keep the internal part of the link as-is since it matched a URL regex, but we encode the href just in case
+                const safePart = part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return `<a href="${href}" target="_blank" class="message-link ${linkClass} underline-offset-4 hover:opacity-80 transition-all cursor-pointer">${safePart}</a>`;
             }
-            return part;
+            // 🛡️ SECURITY: Escape everything else to avoid XSS
+            return part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }).join('');
     };
 

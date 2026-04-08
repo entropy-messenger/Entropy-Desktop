@@ -12,6 +12,157 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
+const MIGRATIONS: &[&str] = &[
+    // Version 1: Initial Schema (Consolidated base tables, indexes, and FTS triggers)
+    "
+    /* Core Infrastructure */
+    CREATE TABLE IF NOT EXISTS kv_store (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pending_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        msg_id TEXT,
+        msg_type TEXT,
+        content BLOB,
+        timestamp INTEGER
+    );
+
+    /* Signal Protocol State */
+    CREATE TABLE IF NOT EXISTS signal_identity (
+        id INTEGER PRIMARY KEY CHECK (id = 0),
+        registration_id INTEGER,
+        public_key BLOB,
+        private_key BLOB,
+        session_token TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_pre_keys (
+        key_id INTEGER PRIMARY KEY,
+        key_data BLOB
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_signed_pre_keys (
+        key_id INTEGER PRIMARY KEY,
+        key_data BLOB,
+        signature BLOB,
+        timestamp INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_sessions (
+        address TEXT PRIMARY KEY,
+        session_data BLOB
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_identities_remote (
+        address TEXT PRIMARY KEY,
+        public_key BLOB NOT NULL,
+        trust_level INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_kyber_pre_keys (
+        key_id INTEGER PRIMARY KEY,
+        key_data BLOB NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS signal_kyber_base_keys_seen (
+        kyber_prekey_id INTEGER NOT NULL,
+        ec_prekey_id INTEGER NOT NULL,
+        base_key BLOB NOT NULL,
+        PRIMARY KEY (kyber_prekey_id, ec_prekey_id, base_key)
+    );
+
+    /* Chat & Messaging Entities */
+    CREATE TABLE IF NOT EXISTS contacts (
+        hash TEXT PRIMARY KEY,
+        alias TEXT,
+        global_nickname TEXT,
+        is_blocked INTEGER DEFAULT 0,
+        trust_level INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS chats (
+        address TEXT PRIMARY KEY,
+        is_group INTEGER DEFAULT 0,
+        alias TEXT,
+        global_nickname TEXT,
+        last_msg TEXT,
+        last_timestamp INTEGER,
+        last_sender_hash TEXT,
+        last_status TEXT,
+        unread_count INTEGER DEFAULT 0,
+        is_archived INTEGER DEFAULT 0,
+        is_pinned INTEGER DEFAULT 0,
+        trust_level INTEGER DEFAULT 1,
+        is_blocked INTEGER DEFAULT 0,
+        is_active INTEGER DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        chat_address TEXT,
+        sender_hash TEXT,
+        content TEXT,
+        timestamp INTEGER,
+        type TEXT,
+        status TEXT,
+        attachment_json TEXT,
+        is_group INTEGER DEFAULT 0,
+        is_starred INTEGER DEFAULT 0,
+        is_pinned INTEGER DEFAULT 0,
+        reply_to_json TEXT,
+        FOREIGN KEY(chat_address) REFERENCES chats(address)
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_members (
+        chat_address TEXT,
+        member_hash TEXT,
+        PRIMARY KEY (chat_address, member_hash),
+        FOREIGN KEY(chat_address) REFERENCES chats(address)
+    );
+
+    /* Performance Optimization: Indexes */
+    CREATE INDEX IF NOT EXISTS idx_messages_chat_addr ON messages(chat_address, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_chats_last_ts ON chats(last_timestamp);
+    CREATE INDEX IF NOT EXISTS idx_members_hash ON chat_members(member_hash);
+
+    /* Full-Text Search (FTS5) Engine */
+    CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
+        message_id UNINDEXED,
+        content,
+        chat_address UNINDEXED,
+        content='messages',
+        content_rowid='rowid'
+    );
+
+    /* FTS Synchronization Triggers */
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO message_search(rowid, message_id, content, chat_address) 
+        VALUES (new.rowid, new.id, new.content, new.chat_address);
+        
+        UPDATE chats SET 
+            last_msg = SUBSTR(new.content, 1, 100),
+            last_timestamp = new.timestamp,
+            last_sender_hash = new.sender_hash,
+            last_status = new.status
+        WHERE address = new.chat_address 
+        AND (last_timestamp IS NULL OR new.timestamp >= last_timestamp);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF status ON messages BEGIN
+        UPDATE chats SET last_status = new.status
+        WHERE address = new.chat_address
+        AND last_timestamp = new.timestamp;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO message_search(message_search, rowid, message_id, content, chat_address) 
+        VALUES('delete', old.rowid, old.id, old.content, old.chat_address);
+    END;
+    ",
+];
+
 pub fn get_db_filename() -> String {
     if let Ok(profile) = std::env::var("ENTROPY_PROFILE") {
         if !profile.is_empty() {
@@ -67,9 +218,21 @@ pub async fn init_vault(
     let panic_file = app_data_dir.join("panic.dat");
     if panic_file.exists() {
         if let Ok(stored_hash) = std::fs::read_to_string(&panic_file) {
-            let mut hasher = Sha256::new();
-            hasher.update(passphrase.clone());
-            let input_hash = hex::encode(hasher.finalize());
+            let argon2 = Argon2::new(
+                argon2::Algorithm::Argon2id,
+                argon2::Version::V0x13,
+                Params::new(65536, 3, 4, Some(32)).unwrap(),
+            );
+            
+            // We use the passphrase as the salt for the panic check (deterministic but slow)
+            // or better, we store a separate salt. Let's use the static SALT "panic-salt-v1" for simplicity
+            // since the goal is to prevent brute-force, not to ensure unique salts across users.
+            let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
+            
+            let password_hash = argon2
+                .hash_password(passphrase.as_bytes(), &salt)
+                .map_err(|e| format!("Argon2 hash failed: {}", e))?;
+            let input_hash = hex::encode(password_hash.hash.unwrap().as_ref());
 
             if input_hash == stored_hash.trim() {
                 let filename = get_db_filename();
@@ -156,158 +319,38 @@ pub async fn init_vault(
     // Enable WAL mode for better concurrency
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
 
-    // --- DATABASE SCHEMA INITIALIZATION ---
-    // Consolidated all table, index, and trigger creation into a single atomic batch
-    conn.execute_batch(
-        "
-        /* Core Infrastructure */
-        CREATE TABLE IF NOT EXISTS kv_store (
-            key TEXT PRIMARY KEY,
-            value TEXT
+    // --- DATABASE MIGRATIONS ---
+    // Consolidated all table, index, and trigger creation into version-controlled migrations.
+    let current_version: i32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(|e| format!("Schema version check failed: {}", e))?;
+
+    let target_version = MIGRATIONS.len() as i32;
+
+    if current_version < target_version {
+        println!(
+            "[DB] Schema Outdated: current v{}, target v{}. Starting migration...",
+            current_version, target_version
         );
+        for (idx, migration_sql) in MIGRATIONS.iter().enumerate() {
+            let migration_ver = (idx + 1) as i32;
+            if migration_ver > current_version {
+                println!("[DB] Applying migration to v{}...", migration_ver);
 
-        CREATE TABLE IF NOT EXISTS pending_outbox (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            msg_id TEXT,
-            msg_type TEXT,
-            content BLOB,
-            timestamp INTEGER
-        );
+                // We use execute_batch because each migration index could contain multiple SQL statements.
+                conn.execute_batch(migration_sql)
+                    .map_err(|e| format!("Migration to v{} failed: {}", migration_ver, e))?;
 
-        /* Signal Protocol State */
-        CREATE TABLE IF NOT EXISTS signal_identity (
-            id INTEGER PRIMARY KEY CHECK (id = 0),
-            registration_id INTEGER,
-            public_key BLOB,
-            private_key BLOB,
-            session_token TEXT
-        );
+                // After success, persistent the version number in the database file.
+                conn.execute(&format!("PRAGMA user_version = {}", migration_ver), [])
+                    .map_err(|e| {
+                        format!("Failed to update user_version to v{}: {}", migration_ver, e)
+                    })?;
+            }
+        }
+        println!("[DB] Database migration complete.");
+    }
 
-        CREATE TABLE IF NOT EXISTS signal_pre_keys (
-            key_id INTEGER PRIMARY KEY,
-            key_data BLOB
-        );
-
-        CREATE TABLE IF NOT EXISTS signal_signed_pre_keys (
-            key_id INTEGER PRIMARY KEY,
-            key_data BLOB,
-            signature BLOB,
-            timestamp INTEGER
-        );
-
-        CREATE TABLE IF NOT EXISTS signal_sessions (
-            address TEXT PRIMARY KEY,
-            session_data BLOB
-        );
-
-        CREATE TABLE IF NOT EXISTS signal_identities_remote (
-            address TEXT PRIMARY KEY,
-            public_key BLOB NOT NULL,
-            trust_level INTEGER DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS signal_kyber_pre_keys (
-            key_id INTEGER PRIMARY KEY,
-            key_data BLOB NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS signal_kyber_base_keys_seen (
-            kyber_prekey_id INTEGER NOT NULL,
-            ec_prekey_id INTEGER NOT NULL,
-            base_key BLOB NOT NULL,
-            PRIMARY KEY (kyber_prekey_id, ec_prekey_id, base_key)
-        );
-
-        /* Chat & Messaging Entities */
-        CREATE TABLE IF NOT EXISTS contacts (
-            hash TEXT PRIMARY KEY,
-            alias TEXT,
-            global_nickname TEXT,
-            is_blocked INTEGER DEFAULT 0,
-            trust_level INTEGER DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS chats (
-            address TEXT PRIMARY KEY,
-            is_group INTEGER DEFAULT 0,
-            alias TEXT,
-            global_nickname TEXT,
-            last_msg TEXT,
-            last_timestamp INTEGER,
-            last_sender_hash TEXT,
-            last_status TEXT,
-            unread_count INTEGER DEFAULT 0,
-            is_archived INTEGER DEFAULT 0,
-            is_pinned INTEGER DEFAULT 0,
-            trust_level INTEGER DEFAULT 1,
-            is_blocked INTEGER DEFAULT 0,
-            is_active INTEGER DEFAULT 1
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            chat_address TEXT,
-            sender_hash TEXT,
-            content TEXT,
-            timestamp INTEGER,
-            type TEXT,
-            status TEXT,
-            attachment_json TEXT,
-            is_group INTEGER DEFAULT 0,
-            is_starred INTEGER DEFAULT 0,
-            is_pinned INTEGER DEFAULT 0,
-            reply_to_json TEXT,
-            FOREIGN KEY(chat_address) REFERENCES chats(address)
-        );
-
-        CREATE TABLE IF NOT EXISTS chat_members (
-            chat_address TEXT,
-            member_hash TEXT,
-            PRIMARY KEY (chat_address, member_hash),
-            FOREIGN KEY(chat_address) REFERENCES chats(address)
-        );
-
-        /* Performance Optimization: Indexes */
-        CREATE INDEX IF NOT EXISTS idx_messages_chat_addr ON messages(chat_address, timestamp);
-        CREATE INDEX IF NOT EXISTS idx_chats_last_ts ON chats(last_timestamp);
-        CREATE INDEX IF NOT EXISTS idx_members_hash ON chat_members(member_hash);
-
-        /* Full-Text Search (FTS5) Engine */
-        CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
-            message_id UNINDEXED,
-            content,
-            chat_address UNINDEXED,
-            content='messages',
-            content_rowid='rowid'
-        );
-
-        /* FTS Synchronization Triggers */
-        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-            INSERT INTO message_search(rowid, message_id, content, chat_address) 
-            VALUES (new.rowid, new.id, new.content, new.chat_address);
-            
-            UPDATE chats SET 
-                last_msg = SUBSTR(new.content, 1, 100),
-                last_timestamp = new.timestamp,
-                last_sender_hash = new.sender_hash,
-                last_status = new.status
-            WHERE address = new.chat_address 
-            AND (last_timestamp IS NULL OR new.timestamp >= last_timestamp);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF status ON messages BEGIN
-            UPDATE chats SET last_status = new.status
-            WHERE address = new.chat_address
-            AND last_timestamp = new.timestamp;
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-            INSERT INTO message_search(message_search, rowid, message_id, content, chat_address) 
-            VALUES('delete', old.rowid, old.id, old.content, old.chat_address);
-        END;
-        ",
-    )
-    .map_err(|e| format!("Database initialization failed: {}", e))?;
 
     // Media Encryption Key Initialization
     let media_key = {
@@ -403,9 +446,18 @@ pub async fn init_vault(
 #[tauri::command]
 pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(), String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    hasher.update(password);
-    let hash = hex::encode(hasher.finalize());
+    
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        Params::new(65536, 3, 4, Some(32)).expect("valid params"),
+    );
+    let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
+    
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| format!("Argon2 hash failed: {}", e))?;
+    let hash = hex::encode(password_hash.hash.unwrap().as_ref());
 
     std::fs::write(app_data_dir.join("panic.dat"), hash).map_err(|e| e.to_string())?;
     Ok(())

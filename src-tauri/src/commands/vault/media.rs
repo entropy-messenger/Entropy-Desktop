@@ -31,6 +31,8 @@ pub async fn vault_save_media(
     id: String,
     data: Vec<u8>,
 ) -> Result<String, String> {
+    let id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
+    if id.is_empty() { return Err("Invalid ID".into()); }
     let key_bytes = {
         let lock = state
             .media_key
@@ -63,6 +65,8 @@ pub async fn vault_load_media(
     state: State<'_, DbState>,
     id: String,
 ) -> Result<Vec<u8>, String> {
+    let id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
+    if id.is_empty() { return Err("Invalid ID".into()); }
     let key_bytes = {
         let lock = state
             .media_key
@@ -102,7 +106,8 @@ pub async fn vault_load_media(
 pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<DbState>();
     let media_dir = get_media_dir(&app, &state)?;
-    let safe_id = id.replace("/", "").replace("..", "");
+    let safe_id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
+    if safe_id.is_empty() { return Ok(()); }
     let file_path = media_dir.join(&safe_id);
 
     if file_path.exists() {
@@ -153,8 +158,8 @@ pub async fn db_export_media(
             .write_all(&plaintext)
             .map_err(|e| format!("Failed to write to target file: {}", e))?;
     } else {
-        std::fs::copy(&src_path, &target_path)
-            .map_err(|e| format!("Failed to copy file: {}", e))?;
+        // 🛡️ SECURITY: Refuse to copy files from outside the media vault
+        return Err("Export denied: Source path is outside the allowed media vault".into());
     }
 
     Ok(())
