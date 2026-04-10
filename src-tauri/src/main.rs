@@ -39,6 +39,7 @@ fn main() {
             pending_media_links: Mutex::new(std::collections::HashMap::new()),
             binary_receiver: Mutex::new(None),
             is_refilling: Mutex::new(false),
+            jailed_until: Mutex::new(None),
             pending_transfers: Mutex::new(std::collections::HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())

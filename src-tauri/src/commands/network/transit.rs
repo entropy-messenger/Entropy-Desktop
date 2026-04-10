@@ -152,16 +152,17 @@ pub async fn internal_send_to_network(
                 .as_secs();
 
             if let Some(conn) = conn_lock.as_ref() {
-                for pm in paced_messages {
-                    let content = match &pm.msg {
-                        Message::Binary(b) => b.to_vec(),
-                        _ => vec![],
-                    };
-                    let _ = conn.execute(
-                        "INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
-                        rusqlite::params![msg_id.clone(), "binary", content, timestamp]
-                    );
+                let _ = conn.execute("BEGIN TRANSACTION", []);
+                if let Ok(mut stmt) = conn.prepare("INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)") {
+                    for pm in paced_messages {
+                        let content = match &pm.msg {
+                            Message::Binary(b) => b.to_vec(),
+                            _ => vec![],
+                        };
+                        let _ = stmt.execute(rusqlite::params![msg_id.clone(), "binary", content, timestamp]);
+                    }
                 }
+                let _ = conn.execute("COMMIT", []);
             }
             if let Some(id) = msg_id {
                 let db_lock = app.state::<DbState>();
@@ -204,39 +205,53 @@ pub async fn internal_send_to_network(
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
     let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
     if let Some(tx) = &*sender_lock {
-        let db_state = app.state::<DbState>();
-        let db_lock = db_state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = db_lock.as_ref() {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC",
-                )
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Vec<u8>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                    ))
-                })
-                .map_err(|e| e.to_string())?;
+        let mut msg_batch = Vec::new();
 
-            for (id, msg_type, content, _msg_id) in rows.flatten() {
-                let msg = if msg_type == "text" {
-                    Message::Text(Utf8Bytes::from(
-                        String::from_utf8_lossy(&content).to_string(),
-                    ))
-                } else {
-                    Message::Binary(content.into())
-                };
-                let _ = tx.send(PacedMessage { msg });
-                let _ = conn.execute("DELETE FROM pending_outbox WHERE id = ?", [id]);
+        { // Scope to minimize DB lock duration
+            let db_state = app.state::<DbState>();
+            let db_lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+            if let Some(conn) = db_lock.as_ref() {
+                if let Ok(mut stmt) = conn.prepare("SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC") {
+                    if let Ok(rows) = stmt.query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Vec<u8>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    }) {
+                        for row in rows.flatten() {
+                            msg_batch.push(row);
+                        }
+                    }
+                }
             }
+        }
+
+        let mut ids_to_delete = Vec::new();
+        for (id, msg_type, content, _msg_id) in msg_batch {
+            let msg = if msg_type == "text" {
+                Message::Text(Utf8Bytes::from(String::from_utf8_lossy(&content).to_string()))
+            } else {
+                Message::Binary(content.into())
+            };
+            let _ = tx.send(PacedMessage { msg });
+            ids_to_delete.push(id);
+        }
+
+        if !ids_to_delete.is_empty() {
+            let db_state = app.state::<DbState>();
+            if let Ok(db_lock) = db_state.conn.lock() {
+                if let Some(conn) = db_lock.as_ref() {
+                    let _ = conn.execute("BEGIN TRANSACTION", []);
+                    if let Ok(mut stmt) = conn.prepare("DELETE FROM pending_outbox WHERE id = ?") {
+                        for id in ids_to_delete {
+                            let _ = stmt.execute([id]);
+                        }
+                    }
+                    let _ = conn.execute("COMMIT", []);
+                }
+            };
         }
     }
     Ok(())

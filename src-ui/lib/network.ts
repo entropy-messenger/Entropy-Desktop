@@ -22,8 +22,16 @@ export class NetworkLayer {
         listen('network-status', (event) => {
             const payload = event.payload as any;
             const status = typeof payload === 'string' ? payload : payload.status;
-            
-            if (status === 'disconnected') {
+
+            if (status === 'reconnecting') {
+                userStore.update(s => ({ ...s, connectionStatus: 'reconnecting', reconnectTimer: payload.seconds }));
+            } else if (status === 'jailed') {
+                this.onJailed();
+            } else if (status === 'mining') {
+                userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
+            } else if (status === 'connecting') {
+                userStore.update(s => ({ ...s, connectionStatus: 'connecting' }));
+            } else if (status === 'disconnected') {
                 this.onDisconnect();
             } else if (status === 'authenticated') {
                 this.onAuthenticated();
@@ -34,7 +42,7 @@ export class NetworkLayer {
 
         listen('network-warning', async (event) => {
             const { type } = event.payload as any;
-            
+
             // 10-second debounce per warning type
             const now = Date.now();
             const last = this.lastWarningTime.get(type) || 0;
@@ -45,9 +53,9 @@ export class NetworkLayer {
             if (type === 'media_offline') {
                 addToast("Recipient is offline. Media cannot be sent.", 'warning');
             } else if (type === 'storage_full' || type === 'Mailbox full') {
-                addToast("Recipient's offline storage is full (200 limit).", 'error');
+                addToast("Recipient's offline storage is full (500 limit).", 'error');
             } else if (type === 'sender_quota_exceeded' || type === 'Sender quota exceeded') {
-                addToast("You've hit your limit for this user's mailbox (5/5).", 'error');
+                addToast("You've hit your limit for this user's mailbox (15/15).", 'error');
             } else if (type) {
                 addToast(`Relay Error: ${type}`, 'error');
             }
@@ -151,12 +159,12 @@ export class NetworkLayer {
                 if (s.chats[hash]) {
                     s.chats[hash] = { ...s.chats[hash], globalNickname: alias };
                 }
-                
+
                 // 🚀 GLOBAL SYNC: Always update the nickname cache for group-wide resolution
                 if (!s.chats[hash]?.localNickname || s.chats[hash]?.isGroup) {
                     s.nicknames[hash] = alias;
                 }
-                
+
                 return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
             });
         });
@@ -281,6 +289,19 @@ export class NetworkLayer {
         console.warn("[Network] Authentication failed by Rust. Resetting session.");
         this.isAuthenticated = false;
         userStore.update((s: any) => ({ ...s, connectionStatus: 'disconnected' }));
+    }
+    
+    private async onJailed() {
+        console.warn("[Network] IDENTITY JAILED. Suppression active.");
+        this.isAuthenticated = false;
+        const { addToast } = await import('./stores/ui');
+        addToast("Identity Jailed. Connection suspended for 5m.", 'error');
+        
+        userStore.update((s: any) => ({ 
+            ...s, 
+            connectionStatus: 'jailed',
+            jailTimeRemaining: 300
+        }));
     }
 
     private onDisconnect() {

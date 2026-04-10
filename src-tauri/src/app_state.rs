@@ -43,5 +43,6 @@ pub struct NetworkState {
     pub pending_media_links: Mutex<std::collections::HashMap<String, PendingMediaMetadata>>, // transfer_key -> (msg_id, dec_key)
     pub binary_receiver: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     pub is_refilling: Mutex<bool>,
+    pub jailed_until: Mutex<Option<tokio::time::Instant>>,
     pub pending_transfers: Mutex<std::collections::HashMap<u32, String>>,
 }

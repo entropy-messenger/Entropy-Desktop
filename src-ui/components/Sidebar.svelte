@@ -302,6 +302,12 @@
             {:else if $userStore.connectionStatus === 'connecting'}
                 <div class="w-3 h-3 border-2 border-entropy-text-dim/20 border-t-entropy-text-dim rounded-full animate-spin"></div>
                 <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-entropy-text-secondary tracking-tighter">Connecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">ESTABLISHING RELAY...</span></div>
+            {:else if $userStore.connectionStatus === 'reconnecting'}
+                <div class="w-3 h-3 border-2 border-yellow-500/20 border-t-yellow-500 rounded-full animate-spin"></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-yellow-500 tracking-tighter">Reconnecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">RETRIEVING LINK IN {$userStore.reconnectTimer || 0}s...</span></div>
+            {:else if $userStore.connectionStatus === 'jailed'}
+                <LucideWifiOff size={14} class="text-red-600 animate-pulse" />
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-600 tracking-tighter">Identity Jailed</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">SUSPENDED FOR REPEATED VIOLATIONS</span></div>
             {:else}
                 <LucideWifiOff size={14} class="text-red-500 animate-pulse" />
                 <div class="flex-1 flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-500 tracking-tighter">Offline</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">WAITING FOR NETWORK...</span></div>

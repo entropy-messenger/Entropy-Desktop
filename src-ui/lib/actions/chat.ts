@@ -134,12 +134,12 @@ export const addMessage = async (peerHash: string, msg: Message) => {
             };
         }
         const chat = { ...s.chats[peerHash] };
-        
+
         // Update alias if we got a better one from the message metadata
         if (msg.chatAlias && (!chat.peerNickname || chat.peerNickname === peerHash.slice(0, 8))) {
             chat.peerNickname = msg.chatAlias;
         }
-        
+
         // Update members if provided (for self-healing)
         if (msg.chatMembers && msg.chatMembers.length > 0) {
             chat.members = msg.chatMembers;
@@ -166,14 +166,14 @@ export const addMessage = async (peerHash: string, msg: Message) => {
     messageStore.update(mStore => {
         const msgs = mStore[peerHash] || [];
         if (msgs.some(m => m.id === msg.id)) return mStore;
-        
+
         // Merge and sort
         const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
-        
+
         // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
         const starredLimit = combined.filter(m => m.isStarred);
         const mostRecent = combined.filter(m => !m.isStarred).slice(-100);
-        
+
         const final = [...starredLimit, ...mostRecent].sort((a, b) => a.timestamp - b.timestamp);
         return { ...mStore, [peerHash]: final };
     });
@@ -211,35 +211,49 @@ export const syncChatToDb = async (chat: Chat) => {
     }
 };
 
+const pendingReceipts: Record<string, { ids: Set<string>, timeout: any }> = {};
+
 export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'delivered' | 'read') => {
-    const state = get(userStore);
-    if (state.blockedHashes.includes(peerHash)) return;
-    if (status === 'read' && !state.privacySettings.readReceipts) return;
+    const key = `${peerHash}:${status}`;
 
-    try {
-        await invoke('send_receipt', { peerHash, msgIds, status });
-
-        // Also update our own local state to reflect that we've read/received these
-        messageStore.update(mStore => {
-            if (!mStore[peerHash]) return mStore;
-            mStore[peerHash] = mStore[peerHash].map(m => msgIds.includes(m.id) ? { ...m, status } : m);
-            return { ...mStore };
-        });
-
-        if (status === 'read') {
-            userStore.update(s => {
-                const chat = s.chats[peerHash];
-                if (chat) {
-                    s.chats[peerHash] = { ...chat, unreadCount: 0 };
-                }
-                return { ...s, chats: { ...s.chats } };
-            });
-            // Persist the status to DB
-            invoke('db_update_messages', { ids: msgIds, status: 'read' }).catch(console.error);
-        }
-    } catch (e) {
-        console.error("[Chat] Send receipt failed:", e);
+    if (!pendingReceipts[key]) {
+        pendingReceipts[key] = { ids: new Set(), timeout: null };
     }
+
+    const entry = pendingReceipts[key];
+    msgIds.forEach(id => entry.ids.add(id));
+
+    if (entry.timeout) clearTimeout(entry.timeout);
+
+    entry.timeout = setTimeout(async () => {
+        const finalIds = Array.from(entry.ids);
+        delete pendingReceipts[key];
+
+        const state = get(userStore);
+        if (state.blockedHashes.includes(peerHash)) return;
+        if (status === 'read' && !state.privacySettings.readReceipts) return;
+
+        try {
+            await invoke('send_receipt', { peerHash, msgIds: finalIds, status });
+
+            messageStore.update(mStore => {
+                if (!mStore[peerHash]) return mStore;
+                mStore[peerHash] = mStore[peerHash].map(m => finalIds.includes(m.id) ? { ...m, status } : m);
+                return { ...mStore };
+            });
+
+            if (status === 'read') {
+                userStore.update(s => {
+                    const chat = s.chats[peerHash];
+                    if (chat) s.chats[peerHash] = { ...chat, unreadCount: 0 };
+                    return { ...s, chats: { ...s.chats } };
+                });
+                invoke('db_update_messages', { ids: finalIds, status: 'read' }).catch(console.error);
+            }
+        } catch (e) {
+            console.error("[Chat] Receipt failed:", e);
+        }
+    }, 300);
 };
 
 const triggerNativeNotification = (chat: Chat, msg: Message) => {
@@ -277,7 +291,7 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
 
         messageStore.update(mStore => {
             const existing = mStore[peerHash] || [];
-            
+
             // Merge newly loaded messages with existing ones
             const combined = [...existing];
             messages.forEach(newMsg => {
@@ -285,17 +299,24 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
                     combined.push(newMsg);
                 }
             });
-            
+
             // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
             const sorted = combined.sort((a, b) => a.timestamp - b.timestamp);
             const starred = sorted.filter(m => m.isStarred);
             const latestNonStarred = sorted.filter(m => !m.isStarred).slice(-100);
-            
+
             const final = [...starred, ...latestNonStarred].sort((a, b) => a.timestamp - b.timestamp);
             return {
                 ...mStore,
                 [peerHash]: final
             };
+        });
+
+        userStore.update(s => {
+            if (s.chats[peerHash]) {
+                s.chats[peerHash] = { ...s.chats[peerHash], hasMore: messages.length === limit };
+            }
+            return { ...s, chats: { ...s.chats } };
         });
 
         return messages.length;
@@ -310,7 +331,7 @@ export const loadStarredMessages = async () => {
         const state = get(userStore);
         const identityHash = state.identityHash;
         const rawMsgs = await invoke<any[]>('db_get_starred_messages');
-        
+
         messageStore.update(mStore => {
             const newStore = { ...mStore };
             rawMsgs.forEach(m => {
@@ -327,7 +348,7 @@ export const loadStarredMessages = async () => {
                     isStarred: !!m.isStarred,
                     replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
                 };
-                
+
                 if (!newStore[peerHash]) newStore[peerHash] = [];
                 if (!newStore[peerHash].some(existing => existing.id === msg.id)) {
                     newStore[peerHash].push(msg);
@@ -429,7 +450,7 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
                 const updatedMessages = [...mStore[chatAddress]];
                 updatedMessages[index] = { ...updatedMessages[index], status };
                 mStore[chatAddress] = updatedMessages;
-                
+
                 userStore.update(s => {
                     if (s.chats[chatAddress]) {
                         // Immutably update the chat object same way
@@ -451,7 +472,7 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
 
                 userStore.update(s => {
                     if (s.chats[peerHash]) {
-                         s.chats[peerHash] = { ...s.chats[peerHash], lastStatus: status };
+                        s.chats[peerHash] = { ...s.chats[peerHash], lastStatus: status };
                     }
                     return { ...s, chats: { ...s.chats } };
                 });
@@ -467,13 +488,13 @@ export const markAsDownloaded = async (peerHash: string, msgId: string, exported
         if (!mStore[peerHash]) return mStore;
         const msgs = mStore[peerHash].map(m => {
             if (m.id === msgId && m.attachment) {
-                const updatedMsg = { 
-                    ...m, 
-                    attachment: { 
-                        ...m.attachment, 
+                const updatedMsg = {
+                    ...m,
+                    attachment: {
+                        ...m.attachment,
                         isDownloaded: true,
                         exportedPath: exportedPath || m.attachment.exportedPath
-                    } 
+                    }
                 };
                 invoke('db_update_messages', {
                     ids: [msgId],

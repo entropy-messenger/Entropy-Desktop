@@ -91,7 +91,8 @@ export const initApp = async (password: string) => {
                     lastTimestamp: c.last_timestamp || c.lastTimestamp,
                     lastStatus: c.last_status || c.lastStatus,
                     lastIsMine: (c.last_sender_hash || c.lastSenderHash) === idHash,
-                    lastSenderHash: c.last_sender_hash || c.lastSenderHash
+                    lastSenderHash: c.last_sender_hash || c.lastSenderHash,
+                    hasMore: true
                 };
             }
         } catch (e) {

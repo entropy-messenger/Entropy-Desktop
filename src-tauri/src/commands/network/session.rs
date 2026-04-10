@@ -51,6 +51,8 @@ pub(crate) async fn internal_establish_network(
     let host = url.host_str().ok_or("Invalid host")?;
     let port = url.port_or_known_default().ok_or("Invalid port")?;
 
+    let _ = app.emit("network-status", "connecting");
+
     let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
     config.max_frame_size = Some(64 * 1024 * 1024);
     config.max_message_size = Some(64 * 1024 * 1024);
@@ -322,28 +324,38 @@ pub(crate) async fn internal_establish_network(
                                                                 let _ = send_paced_json(&app_inner, auth_val).await;
                                                             });
                                                         } else {
-                                                            tokio::task::spawn_local(async move {
-                                                                let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                let app_sig = app_inner.clone();
-                                                                let sig_res = tauri::async_runtime::spawn_blocking(move || {
-                                                                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
-                                                                    rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await.map_err(|e: libsignal_protocol::SignalProtocolError| e.to_string()) })
-                                                                }).await.map_err(|e: tauri::Error| e.to_string());
-                                                                let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
+                                                            let jailed = if let Ok(l) = app_inner.state::<NetworkState>().jailed_until.lock() {
+                                                                l.as_ref().map(|until| *until > tokio::time::Instant::now()).unwrap_or(false)
+                                                            } else { false };
+
+                                                            if jailed {
+                                                                println!("[Network] PoW mining SUPPRESSED due to active Jail.");
+                                                                let _ = app_inner.emit("network-status", "jailed");
+                                                            } else {
+                                                                let _ = app_inner.emit("network-status", "mining");
+                                                                tokio::task::spawn_local(async move {
+                                                                    let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
+                                                                    let app_sig = app_inner.clone();
+                                                                    let sig_res = tauri::async_runtime::spawn_blocking(move || {
+                                                                        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
+                                                                        rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await.map_err(|e: libsignal_protocol::SignalProtocolError| e.to_string()) })
+                                                                    }).await.map_err(|e: tauri::Error| e.to_string());
+                                                                    let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
                                                                     if let Ok(Ok(kp)) = sig_res {
                                                                         let kp: IdentityKeyPair = kp;
                                                                         let mut rng = StdRng::from_os_rng();
                                                                         let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
                                                                         if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
-                                                                        auth_payload["signature"] = json!(hex::encode(sig));
-                                                                        let mut pk = kp.identity_key().serialize().to_vec();
-                                                                        if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
-                                                                        auth_payload["public_key"] = json!(hex::encode(pk));
+                                                                            auth_payload["signature"] = json!(hex::encode(sig));
+                                                                            let mut pk = kp.identity_key().serialize().to_vec();
+                                                                            if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
+                                                                            auth_payload["public_key"] = json!(hex::encode(pk));
+                                                                        }
                                                                     }
-                                                                }
-                                                                let auth_val = json!({"type": "auth", "payload": auth_payload});
-                                                                let _ = send_paced_json(&app_inner, auth_val).await;
-                                                            });
+                                                                    let auth_val = json!({"type": "auth", "payload": auth_payload});
+                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
+                                                                });
+                                                            }
                                                         }
                                                     }
                                                     handled = true;
@@ -352,7 +364,14 @@ pub(crate) async fn internal_establish_network(
                                             "error" => {
                                                 let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");
                                                 let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
-                                                if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Handshake failed") || error_msg.contains("Challenge") || error_msg.contains("Jailed") {
+                                                if error_msg.contains("Jailed") || error_msg.contains("Identity Jailed") {
+                                                     println!("[Network] IDENTITY JAILED. Suppression active for 5m.");
+                                                     if let Ok(mut l) = app.state::<NetworkState>().jailed_until.lock() {
+                                                         *l = Some(tokio::time::Instant::now() + Duration::from_secs(300));
+                                                     }
+                                                     let _ = app.emit("network-status", "jailed");
+                                                     handled = true;
+                                                } else if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Handshake failed") || error_msg.contains("Challenge") {
                                                     println!("[Network] Auth failed: {}. Clearing session token.", error_msg);
                                                     if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() { *l = None; }
                                                     if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
@@ -391,7 +410,7 @@ pub(crate) async fn internal_establish_network(
 async fn run_connection_loop(app: AppHandle) {
     let mut retry_count = 0;
     let backoff = [1, 2, 4, 8, 15, 30, 60];
-    loop {
+    'outer_loop: loop {
         let (enabled, url, proxy_url, token) = {
             let state = app.state::<NetworkState>();
             let enabled = state.is_enabled.lock().map(|l| *l).unwrap_or(false);
@@ -411,6 +430,7 @@ async fn run_connection_loop(app: AppHandle) {
             break;
         }
         if let Some(target_url) = url {
+            let _ = app.emit("network-status", "connecting");
             if let Err(e) =
                 internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone())
                     .await
@@ -429,11 +449,15 @@ async fn run_connection_loop(app: AppHandle) {
         if !is_enabled || token_val.is_cancelled() {
             break;
         }
-        let delay = backoff[retry_count.min(backoff.len() - 1)];
-        tokio::select! {
-            _ = token_val.cancelled() => break,
-            _ = tokio::time::sleep(Duration::from_secs(delay)) => { retry_count += 1; }
+        let delay_sec = backoff[retry_count.min(backoff.len() - 1)];
+        for s in (1..=delay_sec).rev() {
+            let _ = app.emit("network-status", json!({ "status": "reconnecting", "seconds": s }));
+            tokio::select! {
+                _ = token_val.cancelled() => break 'outer_loop,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
         }
+        retry_count += 1;
     }
 }
 

@@ -66,6 +66,8 @@ export interface Chat {
     trustLevel: number;
     localNickname?: string;
     globalNickname?: string;
+    peerNickname?: string;
+    isVerified?: boolean;
     inviteCode?: string;
     lastMsg?: string;
     lastTimestamp?: number;
