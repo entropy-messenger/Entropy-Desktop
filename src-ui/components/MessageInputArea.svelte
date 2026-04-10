@@ -108,7 +108,7 @@
                   sendTypingStatus(activeChat.peerHash, false).catch(() => {});
               }
           });
-      }, 5000);
+      }, 3000); // 3s inactivity timeout
 
       return () => clearTimeout(timeout);
   });
@@ -119,7 +119,7 @@
               if (isLocallyTyping && activeChat) {
                   sendTypingStatus(activeChat.peerHash, true).catch(() => {});
               }
-          }, 4000);
+          }, 2000); // 2s heartbeat
           return () => clearInterval(interval);
       }
   });
@@ -127,7 +127,7 @@
 </script>
 
 <div class="flex flex-col w-full z-10">
-    {#if activeChat.isBlocked}
+    {#if $userStore.chats[activeChat.peerHash]?.isBlocked}
         <div class="p-4 mx-6 mb-6 bg-red-500/10 backdrop-blur-md border border-red-500/20 rounded-2xl flex flex-col items-center justify-center space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <LucideBan size={20} class="text-red-500" />
             <p class="text-xs font-bold text-red-500 uppercase tracking-widest">This contact is blocked</p>

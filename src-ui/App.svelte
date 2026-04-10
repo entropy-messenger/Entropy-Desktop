@@ -394,7 +394,7 @@
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
             <Sidebar bind:showStarredMessages />
             <div class="flex-1 relative flex flex-col min-w-0">
-                <ChatWindow {showStarredMessages} onCloseStarred={() => showStarredMessages = false} />
+                <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
             
             </div>
         </div>

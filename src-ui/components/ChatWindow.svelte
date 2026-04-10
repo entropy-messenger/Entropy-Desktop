@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
   import { toggleStar, toggleBlock } from '../lib/actions/contacts';
-  import { setReplyingTo, loadChatMessages, loadMoreMessages, sendReceipt } from '../lib/actions/chat';
+  import { setReplyingTo, loadChatMessages, loadMoreMessages, loadNewerMessages, jumpToMessage, jumpToPresent, sendReceipt } from '../lib/actions/chat';
   import { LucideSearch, LucideX, LucideInfo, LucideLoader, LucideChevronDown, LucideBan } from 'lucide-svelte';
   
   import MessageBubble from './MessageBubble.svelte';
@@ -13,7 +13,7 @@
   import { tick } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   
-  let { showStarredMessages = false, onCloseStarred }: { showStarredMessages?: boolean; onCloseStarred?: () => void } = $props();
+  let { showStarredMessages = $bindable(false), onCloseStarred }: { showStarredMessages?: boolean; onCloseStarred?: () => void } = $props();
   
   let messageSearchQuery = $state("");
   let showMessageSearch = $state(false);
@@ -65,6 +65,11 @@
   const scrollToBottom = async () => {
       await tick();
       if (scrollContainer && !selectionMode) {
+          // If we were in a historical context, reloading chat messages resets back to current
+          const state = $userStore;
+          if (state.activeChatHash && state.chats[state.activeChatHash]?.hasMoreNewer) {
+              await jumpToPresent(state.activeChatHash);
+          }
           scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior: 'instant' });
       }
   };
@@ -96,7 +101,7 @@
     // Only auto-scroll if the NUMBER of messages increased (new message sent/received)
     // Avoid jumps for background status updates or starring.
     if (activeMessages.length > lastMessageCount) {
-        if (!isLoadingMore) {
+        if (!isLoadingMore && !activeChat?.hasMoreNewer) {
             scrollToBottom();
         }
     }
@@ -119,10 +124,18 @@
           isLoadingMore = false;
       }
 
-      // 2. Visibility: Always show scroll-to-bottom if we are far enough from the floor
+      // 2. Newer Messages: Load if we hit bottom and have "future" context
+      const isNearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 50;
+      if (isNearBottom && !isLoadingMore && activeChat.hasMoreNewer) {
+          isLoadingMore = true;
+          await loadNewerMessages(activeChat.peerHash);
+          isLoadingMore = false;
+      }
+
+      // 3. Visibility: Always show scroll-to-bottom if we are far enough from the floor or in history mode
       const threshold = 100;
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-      showScrollToBottom = distanceFromBottom > threshold;
+      showScrollToBottom = distanceFromBottom > threshold || !!activeChat.hasMoreNewer;
   };
 
   const scrollToMessage = (id: string) => {
@@ -145,9 +158,9 @@
     <StarredMessages onClose={() => onCloseStarred && onCloseStarred()} onSelectChat={async (hash, msgId) => {
         userStore.update(s => ({ ...s, activeChatHash: hash }));
         if (onCloseStarred) onCloseStarred();
-        await loadChatMessages(hash); // 📦 Load history first!
-        await tick(); // 🎨 Wait for DOM to render
-        scrollToMessage(msgId); // 🚀 Then jump
+        await jumpToMessage(hash, msgId); 
+        await tick(); 
+        scrollToMessage(msgId); 
     }}/>
 {:else if !activeChat}
     <div class="h-full w-full flex items-center justify-center bg-entropy-bg flex-col text-center p-8">

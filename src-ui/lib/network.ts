@@ -183,7 +183,6 @@ export class NetworkLayer {
 
         this.connectingPromise = (async () => {
             try {
-                this.url = get(userStore).relayUrl.replace('http', 'ws') + '/ws';
 
                 let proxyUrl = undefined;
                 const state = get(userStore) as any;
@@ -197,9 +196,8 @@ export class NetworkLayer {
                     }
                 }
 
-                console.log(`Commanding autonomous native connection to ${this.url}...`);
+                console.log(`Commanding autonomous native connection...`);
                 await invoke('connect_network', {
-                    url: this.url,
                     proxyUrl
                 });
                 // Note: isConnected will be set by the 'network-status' event listener

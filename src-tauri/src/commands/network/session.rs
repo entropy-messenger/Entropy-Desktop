@@ -21,6 +21,7 @@ use crate::signal_store::SqliteSignalStore;
 
 use super::pacing::{send_paced_json, PACKET_SIZE};
 use super::transit::flush_outbox;
+const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]
 pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
@@ -365,9 +366,10 @@ pub(crate) async fn internal_establish_network(
                                                 let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");
                                                 let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
                                                 if error_msg.contains("Jailed") || error_msg.contains("Identity Jailed") {
-                                                     println!("[Network] IDENTITY JAILED. Suppression active for 5m.");
+                                                     let retry_after = val.get("retry_after").and_then(|t| t.as_u64()).unwrap_or(300);
+                                                     println!("[Network] IDENTITY JAILED. Suppression active for {}s.", retry_after);
                                                      if let Ok(mut l) = app.state::<NetworkState>().jailed_until.lock() {
-                                                         *l = Some(tokio::time::Instant::now() + Duration::from_secs(300));
+                                                         *l = Some(tokio::time::Instant::now() + Duration::from_secs(retry_after));
                                                      }
                                                      let _ = app.emit("network-status", "jailed");
                                                      handled = true;
@@ -465,7 +467,6 @@ async fn run_connection_loop(app: AppHandle) {
 pub async fn connect_network(
     app: AppHandle,
     state: State<'_, NetworkState>,
-    url: String,
     proxy_url: Option<String>,
     id_hash: Option<String>,
     session_token: Option<String>,
@@ -516,7 +517,7 @@ pub async fn connect_network(
             *l = true;
         }
         if let Ok(mut l) = state.url.lock() {
-            *l = Some(url.clone());
+            *l = Some(RELAY_URL.to_string());
         }
         if let Ok(mut l) = state.proxy_url.lock() {
             *l = proxy_url.clone();

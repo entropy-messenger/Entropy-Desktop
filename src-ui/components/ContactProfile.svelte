@@ -1,13 +1,13 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
-  import { leaveGroup, addToGroup } from '../lib/actions/groups';
+  import { leaveGroup, addToGroup, updateGroupName } from '../lib/actions/groups';
   import { deleteChat } from '../lib/actions/chat';
   import { toggleBlock, setTrustLevel, startChat, lookupNickname } from '../lib/actions/contacts';
   import { signalManager } from '../lib/signal_manager';
   import { 
-    LucideX, LucideShieldCheck, LucideShieldAlert, LucideInfo,
     LucideImage, LucideLink, LucideTrash2, LucideCheck as LucideCheckIcon, 
-    LucideCopy, LucideLoader, LucideExternalLink
+    LucideCopy, LucideLoader, LucideExternalLink, LucideEdit2,
+    LucideInfo, LucideX, LucideShieldCheck, LucideShieldAlert, LucideBan
   } from 'lucide-svelte';
   import MediaThumbnail from './MediaThumbnail.svelte';
   import Avatar from './Avatar.svelte';
@@ -63,7 +63,21 @@
             <div class="text-center">
                 <div class="flex items-center justify-center space-x-2">
                     <h3 class="text-xl font-bold text-entropy-text-primary">{$userStore.nicknames[activeChat.peerHash] || 'Peer'}</h3>
-                    {#if !activeChat.isGroup}
+                    {#if activeChat.isGroup}
+                        <button 
+                            onclick={async () => {
+                                const newName = await showPrompt("Enter new group name:", $userStore.nicknames[activeChat.peerHash] || "", "Rename Group");
+                                if (newName) {
+                                    await updateGroupName(activeChat.peerHash, newName.trim());
+                                    addToast("Group renamed", 'success');
+                                }
+                            }}
+                            class="p-1.5 hover:bg-entropy-primary/10 rounded-full text-entropy-primary transition shadow-sm"
+                            title="Rename Group"
+                        >
+                            <LucideEdit2 size={14} />
+                        </button>
+                    {:else}
                         {#if activeChat.trustLevel >= 2}
                             <LucideShieldCheck size={18} class="text-green-500" />
                         {:else if activeChat.trustLevel === 0}
@@ -224,7 +238,19 @@
                 </button>
             </div>
         {:else}
-            <div class="pt-4 border-t border-entropy-border/10">
+            {@const isBlocked = $userStore.chats[activeChat.peerHash]?.isBlocked}
+            <div class="pt-4 border-t border-entropy-border/10 space-y-2">
+                <button 
+                    onclick={async () => { 
+                        await toggleBlock(activeChat!.peerHash); 
+                        addToast(isBlocked ? "Contact unblocked" : "Contact blocked", 'info');
+                    }}
+                    class="w-full flex items-center justify-center space-x-2 p-3 rounded-xl border border-red-500/20 text-red-500 hover:bg-red-500/10 font-bold text-xs transition active:scale-[0.98]"
+                >
+                    <LucideBan size={16} />
+                    <span>{isBlocked ? 'Unblock Contact' : 'Block Contact'}</span>
+                </button>
+
                 <button 
                     onclick={async () => { if (await showConfirm("Are you sure you want to delete this conversation? This will permanently erase all messages and cannot be undone.", "Delete Chat")) { deleteChat(activeChat!.peerHash); onClose(); } }}
                     class="w-full flex items-center justify-center space-x-2 p-3 rounded-xl bg-red-500/10 text-red-500 hover:bg-red-500/20 font-bold text-xs transition active:scale-[0.98]"
@@ -233,6 +259,7 @@
                     <span>Delete Conversation</span>
                 </button>
             </div>
+
         {/if}
     </div>
 </div>

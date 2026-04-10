@@ -48,6 +48,7 @@ commands.allow = [
     "db_set_chat_pinned",
     "db_set_chat_archived",
     "db_get_starred_messages",
+    "db_get_message_offset",
     "db_export_media",
     "register_nickname",
     "burn_account",

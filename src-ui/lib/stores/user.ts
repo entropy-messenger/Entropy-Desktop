@@ -20,7 +20,6 @@ export interface AppState {
     reconnectTimer: number | null;
     jailTimeRemaining: number | null;
     authError: string | null;
-    relayUrl: string;
     nicknames: Record<string, string>;
 }
 
@@ -45,7 +44,6 @@ const initialState: AppState = {
     reconnectTimer: null,
     jailTimeRemaining: null,
     authError: null,
-    relayUrl: import.meta.env.VITE_RELAY_URL || 'http://localhost:8080',
     nicknames: {}
 };
 

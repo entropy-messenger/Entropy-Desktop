@@ -56,6 +56,9 @@ export interface Chat {
     peerHash: string;
     messages?: Message[];
     hasMore?: boolean;
+    hasMoreNewer?: boolean;
+    topOffset?: number;
+    bottomOffset?: number;
     unreadCount: number,
     isTyping?: boolean,
     isGroup?: boolean;

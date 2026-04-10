@@ -37,8 +37,8 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
             all_members.sort();
             all_members.dedup();
 
-            if all_members.len() > 64 {
-                return Err("Group too large (max 64 members)".into());
+            if all_members.len() > 16 {
+                return Err("Group too large (max 16 members)".into());
             }
 
             let chat = DbChat {
@@ -157,8 +157,8 @@ pub fn add_to_group(
                 if !all_members.contains(nm) { all_members.push(nm.clone()); }
             }
 
-            if all_members.len() > 64 {
-                return Err("Group reached its limit (max 64 members)".into());
+            if all_members.len() > 16 {
+                return Err("Group reached its limit (max 16 members)".into());
             }
 
             // Update DB
@@ -263,109 +263,6 @@ pub fn update_group_name(app: AppHandle, group_id: String, new_name: String) -> 
             Ok(())
         })
     }).join().map_err(|_| "Thread panicked".to_string())?
-}
-
-#[tauri::command]
-pub fn remove_from_group(
-    app: AppHandle,
-    group_id: String,
-    member_to_remove: String,
-) -> Result<(), String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let state = app.state::<NetworkState>();
-            let id_hash = state
-                .identity_hash
-                .lock()
-                .map_err(|_| "Network state poisoned")?
-                .clone()
-                .ok_or("No identity")?;
-
-            let current_members = {
-                let mut m = Vec::new();
-                let lock = db_state
-                    .conn
-                    .lock()
-                    .map_err(|_| "Database connection lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute(
-                        "DELETE FROM chat_members WHERE chat_address = ?1 AND member_hash = ?2",
-                        params![group_id, member_to_remove],
-                    );
-                    let mut stmt = conn
-                        .prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                        .map_err(|e| e.to_string())?;
-                    let rows = stmt
-                        .query_map([&group_id], |row| row.get::<_, String>(0))
-                        .map_err(|e| e.to_string())?;
-                    for ma in rows.flatten() {
-                        m.push(ma);
-                    }
-                }
-                m
-            };
-
-            // Notify everyone (including the removed member)
-            let update =
-                json!({ "type": "group_update", "groupId": group_id, "members": current_members });
-            let update_str = update.to_string();
-
-            // Send to current members
-            for member in &current_members {
-                if member == &id_hash {
-                    continue;
-                }
-                if let Ok(ciphertext) =
-                    internal_signal_encrypt(app.clone(), &state, member, update_str.clone()).await
-                {
-                    let _ = internal_send_to_network(
-                        app.clone(),
-                        &state,
-                        Some(member.clone()),
-                        None,
-                        None,
-                        Some(ciphertext.to_string().into_bytes()),
-                        true,
-                        false,
-                        None,
-                        false,
-                    )
-                    .await;
-                }
-            }
-
-            // Also notify the removed member specifically
-            if let Ok(ciphertext) =
-                internal_signal_encrypt(app.clone(), &state, &member_to_remove, update_str).await
-            {
-                let _ = internal_send_to_network(
-                    app.clone(),
-                    &state,
-                    Some(member_to_remove),
-                    None,
-                    None,
-                    Some(ciphertext.to_string().into_bytes()),
-                    true,
-                    false,
-                    None,
-                    false,
-                )
-                .await;
-            }
-
-            // Trigger UI update
-            let _ = app.emit("msg://group_update", json!({ "groupId": group_id, "members": current_members }));
-
-            Ok(())
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]

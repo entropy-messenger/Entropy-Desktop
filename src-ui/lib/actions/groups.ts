@@ -65,19 +65,7 @@ export const updateGroupName = async (groupId: string, newName: string) => {
     }
 };
 
-/**
- * Removes a specific member from the group.
- */
-export const removeFromGroup = async (groupId: string, memberToRemove: string) => {
-    try {
-        await invoke('remove_from_group', { groupId, memberToRemove });
-        
-        // UI will be updated via the 'msg://group_update' event handler
-    } catch (e) {
-        console.error("[Groups] Failed to remove member:", e);
-        throw e;
-    }
-};
+
 
 /**
  * Removes the local user from a group and notifies remaining members.

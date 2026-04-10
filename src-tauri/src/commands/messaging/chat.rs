@@ -211,6 +211,28 @@ pub async fn db_search_messages(
 }
 
 #[tauri::command]
+pub async fn db_get_message_offset(
+    state: State<'_, DbState>,
+    chat_address: String,
+    message_id: String,
+) -> Result<u32, String> {
+    let lock = state
+        .conn
+        .lock()
+        .map_err(|_| "Database connection lock poisoned")?;
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    let count: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM messages 
+         WHERE chat_address = ?1 AND timestamp > (SELECT timestamp FROM messages WHERE id = ?2)",
+        params![chat_address, message_id],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    Ok(count)
+}
+
+#[tauri::command]
 pub async fn db_update_messages(
     state: State<'_, DbState>,
     ids: Vec<String>,

@@ -72,7 +72,7 @@ export const toggleStar = (peerHash: string, msgId: string) => {
         if (idx !== -1) {
             const nextStarred = !msgs[idx].isStarred;
             msgs[idx] = { ...msgs[idx], isStarred: nextStarred };
-            invoke('db_set_message_starred', { id: msgId, isStarred: nextStarred }).catch(console.error);
+            invoke('db_update_messages', { ids: [msgId], isStarred: nextStarred }).catch(console.error);
             return { ...mStore, [peerHash]: msgs };
         }
         return mStore;

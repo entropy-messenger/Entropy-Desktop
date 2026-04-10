@@ -3,7 +3,8 @@
   import { 
     startChat, togglePin, toggleArchive, lookupNickname, updatePrivacy, resolveIdentity
   } from '../lib/actions/contacts';
-  import { deleteChat, loadChatMessages } from '../lib/actions/chat';
+  import { deleteChat, jumpToMessage, jumpToPresent } from '../lib/actions/chat';
+  import { tick } from 'svelte';
   import { leaveGroup } from '../lib/actions/groups';
   import {
     LucidePlus, LucideSettings, LucideSearch,
@@ -70,7 +71,20 @@
         if (s.chats[hash]) { s.chats[hash] = { ...s.chats[hash], unreadCount: 0 }; }
         return { ...s, activeChatHash: hash, chats: { ...s.chats } };
     });
-    loadChatMessages(hash);
+    showStarredMessages = false;
+    jumpToPresent(hash);
+  };
+
+  const jumpToChat = async (hash: string, msgId: string) => {
+    userStore.update(s => {
+        if (s.chats[hash]) { s.chats[hash] = { ...s.chats[hash], unreadCount: 0 }; }
+        return { ...s, activeChatHash: hash, chats: { ...s.chats } };
+    });
+    showStarredMessages = false;
+    await jumpToMessage(hash, msgId);
+    await tick();
+    const el = document.getElementById(`msg-${msgId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   const createChatPrompt = async () => {
@@ -178,7 +192,7 @@
         {/if}
 
         {#each searchMessages as msg}
-            <div class="p-4 hover:bg-entropy-surface/50 cursor-pointer border-b border-entropy-border/5 transition group/search" onclick={() => selectChat(msg.chatAddress)} onkeypress={(e) => e.key === 'Enter' && selectChat(msg.chatAddress)} role="button" tabindex="0">
+            <div class="p-4 hover:bg-entropy-surface/50 cursor-pointer border-b border-entropy-border/5 transition group/search" onclick={() => jumpToChat(msg.chatAddress, msg.id)} onkeypress={(e) => e.key === 'Enter' && jumpToChat(msg.chatAddress, msg.id)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3 mb-3">
                     <Avatar hash={msg.chatAddress} alias={msg.peerNickname} size="w-6 h-6" textSize="text-[10px]" rounded="rounded-md" />
                     <div class="flex justify-between items-baseline flex-1 min-w-0">
@@ -323,7 +337,7 @@
                 {:else}
                     <div class="w-1.5 h-1.5 bg-yellow-500 rounded-full shadow-[0_0_4px_rgba(234,179,8,0.5)]"></div>
                     <span class="text-[8px] font-black uppercase tracking-widest text-yellow-500/80">Signal Sync Degraded</span>
-                    <button onclick={() => signalManager.ensureKeysUploaded($userStore.relayUrl)} class="ml-1 text-[8px] font-black uppercase text-blue-500 hover:underline">Retry</button>
+                    <button onclick={() => signalManager.ensureKeysUploaded()} class="ml-1 text-[8px] font-black uppercase text-blue-500 hover:underline">Retry</button>
                 {/if}
             </div>
         </div>

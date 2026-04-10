@@ -163,20 +163,45 @@ export const addMessage = async (peerHash: string, msg: Message) => {
     });
 
     // 3. Update History (Transient Store) - Keep starred messages immune from slicing!
+    let needsSnapToPresent = false;
     messageStore.update(mStore => {
         const msgs = mStore[peerHash] || [];
         if (msgs.some(m => m.id === msg.id)) return mStore;
 
-        // Merge and sort
+        const chat = get(userStore).chats[peerHash];
+
+        // THE "GAP" PROTECTOR:
+        // If we receive a message from someone else while reading history, DO NOT put it on the screen.
+        // It's saved in the DB, and the unread counter increased, but we protect the historical DOM.
+        if (chat?.hasMoreNewer && !msg.isMine) {
+            return mStore;
+        }
+
+        // If we SEND a message while deep in history, we should snap back to the present.
+        if (chat?.hasMoreNewer && msg.isMine) {
+            needsSnapToPresent = true;
+            return mStore; // We will let the snapshot loader handle it
+        }
+
         const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
+        
+        // Prune exactly like loadChatMessages
+        let final = combined;
+        if (combined.length > 2000) {
+            if (chat?.hasMoreNewer) {
+                const mid = Math.floor(combined.length / 2);
+                final = combined.slice(mid - 500, mid + 500);
+            } else {
+                final = combined.slice(-1000);
+            }
+        }
 
-        // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
-        const starredLimit = combined.filter(m => m.isStarred);
-        const mostRecent = combined.filter(m => !m.isStarred).slice(-100);
-
-        const final = [...starredLimit, ...mostRecent].sort((a, b) => a.timestamp - b.timestamp);
         return { ...mStore, [peerHash]: final };
     });
+
+    if (needsSnapToPresent) {
+        jumpToPresent(peerHash); // Force load the 'Present' state and clear gaps
+    }
 
     // 4. Persistence & Notifications
     if (updatedChatMetadata) {
@@ -271,7 +296,7 @@ const triggerNativeNotification = (chat: Chat, msg: Message) => {
     }
 };
 
-export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0) => {
+export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0, direction: 'jump' | 'older' | 'newer' = 'jump') => {
     try {
         const state = get(userStore);
         const identityHash = state.identityHash;
@@ -300,12 +325,22 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
                 }
             });
 
-            // Slicing Strategy: Keep ALL starred messages + latest 100 non-starred
             const sorted = combined.sort((a, b) => a.timestamp - b.timestamp);
-            const starred = sorted.filter(m => m.isStarred);
-            const latestNonStarred = sorted.filter(m => !m.isStarred).slice(-100);
+            
+            // Smarter Pruning: If we are in history mode, we allow the buffer to grow 
+            // slightly larger to avoid "flickering" out the messages you are reading.
+            // We only prune if the store exceeds 2,000 messages.
+            let final = sorted;
+            if (sorted.length > 2000) {
+                const chat = get(userStore).chats[peerHash];
+                if (chat?.hasMoreNewer) {
+                    const mid = Math.floor(sorted.length / 2);
+                    final = sorted.slice(mid - 500, mid + 500);
+                } else {
+                    final = sorted.slice(-1000);
+                }
+            }
 
-            const final = [...starred, ...latestNonStarred].sort((a, b) => a.timestamp - b.timestamp);
             return {
                 ...mStore,
                 [peerHash]: final
@@ -314,7 +349,17 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0)
 
         userStore.update(s => {
             if (s.chats[peerHash]) {
-                s.chats[peerHash] = { ...s.chats[peerHash], hasMore: messages.length === limit };
+                const chat = s.chats[peerHash];
+                const newTop = direction === 'older' || direction === 'jump' ? offset + messages.length : chat.topOffset || 0;
+                const newBottom = direction === 'newer' || direction === 'jump' ? offset : chat.bottomOffset || 0;
+
+                s.chats[peerHash] = { 
+                    ...chat, 
+                    hasMore: direction === 'older' || direction === 'jump' ? messages.length === limit : chat.hasMore,
+                    hasMoreNewer: newBottom > 0,
+                    topOffset: newTop,
+                    bottomOffset: newBottom
+                };
             }
             return { ...s, chats: { ...s.chats } };
         });
@@ -368,10 +413,64 @@ export const loadStarredMessages = async () => {
 };
 
 export const loadMoreMessages = async (peerHash: string) => {
-    const msgs = get(messageStore)[peerHash] || [];
-    // Calculate offset based on non-starred messages to maintain standard pagination windows
-    const nonStarredCount = msgs.filter(m => !m.isStarred).length;
-    return await loadChatMessages(peerHash, 50, nonStarredCount);
+    const chat = get(userStore).chats[peerHash];
+    const topOffset = chat?.topOffset || 0;
+    
+    return await loadChatMessages(peerHash, 50, topOffset, 'older');
+};
+
+export const loadNewerMessages = async (peerHash: string) => {
+    const chat = get(userStore).chats[peerHash];
+    if (!chat || !chat.hasMoreNewer) return 0;
+
+    const bottomOffset = chat.bottomOffset || 0;
+    const fetchLimit = Math.min(50, bottomOffset);
+    const newOffset = bottomOffset - fetchLimit;
+
+    return await loadChatMessages(peerHash, fetchLimit, newOffset, 'newer');
+};
+
+export const jumpToMessage = async (peerHash: string, msgId: string) => {
+    try {
+        const offset = await invoke<number>('db_get_message_offset', { chatAddress: peerHash, messageId: msgId });
+        
+        const startOffset = Math.max(0, offset - 25);
+        
+        messageStore.update(mStore => {
+            return { ...mStore, [peerHash]: [] };
+        });
+
+        userStore.update(s => {
+            if (s.chats[peerHash]) {
+                const c = s.chats[peerHash];
+                s.chats[peerHash] = { ...c, topOffset: startOffset + 100, bottomOffset: startOffset };
+            }
+            return { ...s, activeChatHash: peerHash };
+        });
+
+        await loadChatMessages(peerHash, 100, startOffset, 'jump');
+        
+        return true;
+    } catch (e) {
+        console.error("[Chat] Jump failed:", e);
+        return false;
+    }
+};
+
+export const jumpToPresent = async (peerHash: string) => {
+    // Clear the memory aggressively to prevent historical islands
+    messageStore.update(mStore => {
+        return { ...mStore, [peerHash]: [] };
+    });
+
+    userStore.update(s => {
+        if (s.chats[peerHash]) {
+            s.chats[peerHash] = { ...s.chats[peerHash], topOffset: 0, bottomOffset: 0, hasMoreNewer: false };
+        }
+        return { ...s };
+    });
+
+    await loadChatMessages(peerHash, 50, 0, 'jump');
 };
 
 export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
@@ -416,11 +515,28 @@ export const bulkStar = async (peerHash: string, msgIds: string[]) => {
 };
 
 // --- SIGNAL HANDLERS ---
+let typingTimeouts: Record<string, any> = {};
+
 export const handleTypingSignal = (senderHash: string, payload: any) => {
+    if (typingTimeouts[senderHash]) {
+        clearTimeout(typingTimeouts[senderHash]);
+        delete typingTimeouts[senderHash];
+    }
+
     userStore.update(s => {
         if (s.chats[senderHash]) s.chats[senderHash] = { ...s.chats[senderHash], isTyping: payload.isTyping };
         return { ...s, chats: { ...s.chats } };
     });
+
+    if (payload.isTyping) {
+        typingTimeouts[senderHash] = setTimeout(() => {
+            userStore.update(s => {
+                if (s.chats[senderHash]) s.chats[senderHash] = { ...s.chats[senderHash], isTyping: false };
+                return { ...s, chats: { ...s.chats } };
+            });
+            delete typingTimeouts[senderHash];
+        }, 4000); // 4s safety timeout (sender pulses every 2s)
+    }
 };
 
 export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status: 'delivered' | 'read') => {

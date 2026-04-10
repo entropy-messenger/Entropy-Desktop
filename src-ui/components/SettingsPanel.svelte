@@ -228,7 +228,7 @@
                         </div>
 
                          <button 
-                            onclick={() => burnAccount($userStore.relayUrl)}
+                            onclick={() => burnAccount()}
                             class="w-full py-3 bg-red-500/10 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition-all transform active:scale-[0.98] flex items-center justify-center space-x-2"
                          ><LucideTrash2 size={14} /><span>Nuke Account (Forensic Burn)</span></button>
                     </div>

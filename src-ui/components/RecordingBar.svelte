@@ -57,7 +57,7 @@
         
         mediaRecorder = new MediaRecorder(stream, { 
             mimeType,
-            audioBitsPerSecond: 48000 
+            audioBitsPerSecond: 16000 
         });
         const chunks: Blob[] = [];
         
