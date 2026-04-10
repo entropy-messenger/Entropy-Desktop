@@ -61,13 +61,11 @@ export class NetworkLayer {
             }
         });
 
-        // Listen for authoritative message creation from Rust (Headless Core)
+        // Listen for authoritative message creation from RustW
         listen('msg://added', (event) => {
             const m = event.payload as any;
             const state = get(userStore);
 
-            // Payload is now natively camelCase from Rust
-            console.debug("[Network] Received msg://added:", m.id, "for chat:", m.chatAddress);
             const uiMsg: any = {
                 ...m,
                 isMine: m.senderHash === state.identityHash,
@@ -75,7 +73,6 @@ export class NetworkLayer {
                 replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
             };
 
-            // Update UI
             addMessage(m.chatAddress, uiMsg);
         });
 
@@ -90,7 +87,6 @@ export class NetworkLayer {
             }
         });
 
-        // Listen for volatile UI-only signals
         listen('msg://typing', (event) => {
             const { sender, payload } = event.payload as any;
             handleTypingSignal(sender, payload);
@@ -150,7 +146,6 @@ export class NetworkLayer {
             });
         });
 
-        // Listen for contact profile updates (Nicknames/Aliases)
         listen('contact-update', (event) => {
             const { hash, alias } = event.payload as any;
             if (!alias) return;
@@ -160,7 +155,7 @@ export class NetworkLayer {
                     s.chats[hash] = { ...s.chats[hash], globalNickname: alias };
                 }
 
-                // 🚀 GLOBAL SYNC: Always update the nickname cache for group-wide resolution
+                // Update the nickname cache for group-wide resolution
                 if (!s.chats[hash]?.localNickname || s.chats[hash]?.isGroup) {
                     s.nicknames[hash] = alias;
                 }
@@ -196,7 +191,6 @@ export class NetworkLayer {
                     }
                 }
 
-                console.log(`Commanding autonomous native connection...`);
                 await invoke('connect_network', {
                     proxyUrl
                 });
@@ -204,7 +198,6 @@ export class NetworkLayer {
                 this.onConnect();
             } catch (e: any) {
                 const errorStr = e.toString();
-                console.error("Native connection failed:", errorStr);
 
                 if (errorStr.includes("Proxy connection failed")) {
                     const { addToast } = await import('./stores/ui');
@@ -223,12 +216,11 @@ export class NetworkLayer {
      * Forcefully terminates the active connection and clears background tasks.
      */
     async disconnect() {
-        console.log("[Network] Manual disconnect requested.");
         this.isManualDisconnect = true;
         try {
             await invoke('disconnect_network');
         } catch (e) {
-            console.error("[Network] Native disconnect failed:", e);
+            // Native disconnect failed
         }
 
         this.isConnected = false;
@@ -253,16 +245,13 @@ export class NetworkLayer {
 
 
     private onConnect() {
-        console.log('Native network layer connected');
 
 
         userStore.update((s: any) => ({ ...s, isConnected: true }));
 
-        // Handshake now handled autonomously in Rust
     }
 
     private async onAuthenticated() {
-        console.log('Network layer authenticated via autonomous handshake');
         this.isAuthenticated = true;
 
         // 1. Sync connection status
@@ -272,41 +261,28 @@ export class NetworkLayer {
             isSynced: true
         }));
 
-        // 2. Automated Signal Key Sync (High Priority on connect)
-        // Handled autonomously by Rust backend `auth_success` delta replenishment.
-
-        // 3. Trigger pending outbox flush
-        // Handled autonomously by Rust backend on auth_success.
-
-        // 4. Presence/Heartbeat logic removed as per privacy requirements.
-
-        // 5. Profile Broadcast logic removed to prevent accidental Presence/Online leaks.
     }
 
     private onAuthFailed() {
-        console.warn("[Network] Authentication failed by Rust. Resetting session.");
         this.isAuthenticated = false;
         userStore.update((s: any) => ({ ...s, connectionStatus: 'disconnected' }));
     }
-    
+
     private async onJailed() {
-        console.warn("[Network] IDENTITY JAILED. Suppression active.");
         this.isAuthenticated = false;
         const { addToast } = await import('./stores/ui');
         addToast("Identity Jailed. Connection suspended for 5m.", 'error');
-        
-        userStore.update((s: any) => ({ 
-            ...s, 
+
+        userStore.update((s: any) => ({
+            ...s,
             connectionStatus: 'jailed',
             jailTimeRemaining: 300
         }));
     }
 
     private onDisconnect() {
-        console.log('Native network layer disconnected');
 
         if (this.isManualDisconnect) {
-            console.log("[Network] Ignoring disconnect event due to manual cycle.");
             this.isManualDisconnect = false;
             this.isConnected = false;
             this.isAuthenticated = false;
@@ -326,7 +302,7 @@ export class NetworkLayer {
                 connectionStatus: 'disconnected'
             };
             if (!wasAuthenticated) {
-                console.log("[Network] Re-auth required on next connect.");
+                // Re-auth required on next connect
             }
             return newState;
         });

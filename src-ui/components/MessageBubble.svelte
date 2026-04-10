@@ -54,11 +54,11 @@
     };
 
     onMount(() => {
-        // 🔍 AUTO-RESOLVE: If we don't know this sender's nickname, ask the relay
+        // Identity resolution: Fetch sender nickname if missing from local cache
         if (!msg.isMine && msg.senderHash && !$userStore.nicknames[msg.senderHash]) {
             resolveIdentity(msg.senderHash);
         }
-        // 🔍 REPLY-RESOLVE: Also resolve the person being replied to
+        // Resolve metadata for referenced messages in replies
         if (msg.replyTo?.senderHash && !$userStore.nicknames[msg.replyTo.senderHash]) {
             resolveIdentity(msg.replyTo.senderHash);
         }
@@ -84,7 +84,7 @@
             onclick={() => selectionMode && toggleSelect(msg.id)}
             role="button"
             tabindex="0"
-            class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-pointer active:scale-[0.99]
+            class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-default active:scale-[0.99]
                 {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'pt-1.5 px-4 pb-1.5'}
                 {msg.isMine ? (msg.isStarred ? 'bg-entropy-primary ring-1 ring-yellow-400/60 shadow-[0_0_10px_rgba(250,204,21,0.15)]' : 'bg-entropy-primary') : (msg.isStarred ? 'bg-entropy-surface-light ring-1 ring-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'bg-entropy-surface-light')}
                 {msg.isMine ? 'text-white rounded-tr-none' : 'text-entropy-text-primary rounded-tl-none'}
@@ -92,7 +92,7 @@
             "
         >
             {#if activeChat?.isGroup && !msg.isMine && msg.senderHash}
-                <div class="mb-0.5 px-1">
+                <div class="mb-0.5 px-1 select-text">
                     <span 
                         class="text-[12.5px] font-bold tracking-tight"
                         style="color: {getSenderColor(msg.senderHash)}"

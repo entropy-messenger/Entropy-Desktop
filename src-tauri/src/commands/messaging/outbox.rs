@@ -85,7 +85,7 @@ pub fn process_outgoing_text(
                 id_lock.clone().ok_or("Not authenticated")?
             };
 
-            // UI-FIRST: Save locally as 'sending'
+            // Save message locally with 'sending' status
             let db_msg = DbMessage {
                 id: msg_id.clone(),
                 chat_address: payload.recipient.clone(),
@@ -189,12 +189,6 @@ pub fn process_outgoing_media(
             .build()
             .map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
-            println!(
-                "[Media] Outgoing media: recipient={}, path={:?}, data_len={:?}",
-                payload.recipient,
-                payload.file_path,
-                payload.file_data.as_ref().map(|d| d.len())
-            );
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
@@ -204,7 +198,7 @@ pub fn process_outgoing_media(
                 .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
 
-            // 1. Get raw data with strict 10MB limit
+            // Retrieve raw data ensuring adherence to the 10MB size limit
             let data = if let Some(p) = &payload.file_path {
                 let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
                 if metadata.len() > 10 * 1024 * 1024 {
@@ -223,7 +217,7 @@ pub fn process_outgoing_media(
                 return Err("No data provided".into());
             };
 
-            // 2. Encrypt for peer (AES-GCM-256)
+            // Encrypt payload for peer using AES-GCM-256
             let key = Aes256Gcm::generate_key(&mut OsRng);
             let cipher = Aes256Gcm::new(&key);
             let (nonce, ciphertext) = {
@@ -239,7 +233,7 @@ pub fn process_outgoing_media(
             combined.extend_from_slice(&ciphertext);
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
 
-            // 3. Save to Local Vault (encrypted with local media_key)
+            // Persist to local vault using internal media key
             let local_file_path = {
                 let local_key_bytes = {
                     let lock = db_state.media_key.lock().map_err(|_| "State poisoned")?;
@@ -262,7 +256,7 @@ pub fn process_outgoing_media(
             };
             let saved_vault_path = local_file_path;
 
-            // 4. Construct Signal-layer payload
+            // Construct Signal protocol layer payload
             let transfer_id: u32 = rand::random();
             let bundle = json!({
                 "type": "signal_media",
@@ -285,7 +279,7 @@ pub fn process_outgoing_media(
                 "replyTo": payload.reply_to,
             });
 
-            // 5. Save metadata to local DB
+            // Save message metadata to local database
             let own_id = net_state
                 .identity_hash
                 .lock()
@@ -306,7 +300,7 @@ pub fn process_outgoing_media(
                     .msg_type
                     .clone()
                     .unwrap_or_else(|| "file".to_string()),
-                status: "sent".to_string(), // Instant update for non-critical assets
+                status: "sent".to_string(), 
                 attachment_json: Some(
                     serde_json::json!({
                         "fileName": payload.file_name,
@@ -329,13 +323,12 @@ pub fn process_outgoing_media(
             internal_db_save_message(&db_state, db_msg.clone()).await?;
             let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
             if let Some(obj) = final_json.as_object_mut() {
-                // For 1:1 media, we do not have payload.group_name, but we can emit chatAlias as null or peerNickname
                 obj.insert("chatAlias".to_string(), serde_json::json!(null));
             }
             app.emit("msg://added", final_json.clone())
                 .map_err(|e| e.to_string())?;
 
-            // 6. Signal-Encrypt metadata and send
+            // Encrypt metadata via Signal protocol and dispatch
             let encrypted = internal_signal_encrypt(
                 app.clone(),
                 &net_state,
@@ -428,10 +421,6 @@ pub fn send_typing_status(
         }
     }
 
-    println!(
-        "[Typing] Command called for {} (isTyping={})",
-        peer_hash, is_typing
-    );
     tauri::async_runtime::block_on(async move {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -455,7 +444,7 @@ pub fn send_typing_status(
                 )
                 .await;
             }
-            Err(e) => println!("[Typing] Encryption FAILED for {}: {}", peer_hash, e),
+            Err(_) => (),
         }
         Ok(())
     })
@@ -471,7 +460,7 @@ pub fn send_receipt(
     status: String,
 ) -> Result<(), String> {
     // Receipts are currently only supported for 1:1 chats. 
-    // Groups stay at 'Sent/Delivered' status.
+    // Groups stay at sent status.
     {
         let lock = db_state
             .conn
@@ -492,15 +481,11 @@ pub fn send_receipt(
         }
     }
 
-    println!(
-        "[Receipt] Command called for {} (ids={:?}, status={})",
-        peer_hash, msg_ids, status
-    );
     tauri::async_runtime::block_on(async move {
         let message = json!({ "type": "receipt", "msgIds": msg_ids, "status": status }).to_string();
         match internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
             Ok(encrypted) => {
-                // Flag as is_binary=true, is_media=false (opaque) to skip JSON check
+                // Flag as is_binary=true, is_media=false
                 let _ = internal_send_to_network(
                     app.clone(),
                     &net_state,
@@ -515,7 +500,7 @@ pub fn send_receipt(
                 )
                 .await;
             }
-            Err(e) => println!("[Receipt] Encryption FAILED for {}: {}", peer_hash, e),
+            Err(_) => (),
         }
         Ok(())
     })
@@ -539,7 +524,7 @@ pub fn send_profile_update(
         if let Ok(encrypted) =
             internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
         {
-            // 🛡️ PERSISTENT PROFILE: Using internal_send_to_network with is_volatile=false (Frame Type 0x01)
+            // Dispatch persistent profile update using frame type 0x01
             // This ensures the nickname is stored on the relay if the contact is offline.
             let payload_bytes = encrypted.to_string().into_bytes();
             let _ = internal_send_to_network(
@@ -552,7 +537,7 @@ pub fn send_profile_update(
                 true,  // is_binary
                 false, // is_media
                 None,  // transfer_id_override
-                false, // is_volatile (STORE ON RELAY)
+                false, // is_volatile
             )
             .await;
         }
@@ -648,8 +633,8 @@ pub fn process_outgoing_group_text(
                         )
                         .await;
                     }
-                    Err(e) => {
-                        tracing::warn!("[Group] Skipping member {}: {}", member_id, e);
+                    Err(_e) => {
+                        // Skipping member
                     }
                 }
             }
@@ -689,8 +674,6 @@ pub fn process_outgoing_group_media(
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
         rt.block_on(async move {
-            println!("[GroupMedia] Outgoing group media: recipient={}, path={:?}, data_len={:?}", 
-                payload.recipient, payload.file_path, payload.file_data.as_ref().map(|d| d.len()));
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
@@ -792,13 +775,12 @@ pub fn process_outgoing_group_media(
                          let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.clone()), Some(msg_id.clone()), None, Some(encrypted_metadata.to_string().into_bytes()), true, false, Some(transfer_id), true).await;
                          let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash), Some(msg_id.clone()), None, Some(combined.clone()), true, true, Some(transfer_id), false).await;
                     },
-                    Err(e) => {
-                        tracing::warn!("[Group Media] Skipping member {}: {}", member_id, e);
+                    Err(_e) => {
+                        // Skipping member
                     }
                 }
             }
 
-            // Persist 'sent' BEFORE emitting to prevent frontend syncChatToDb race.
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {

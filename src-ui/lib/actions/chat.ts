@@ -5,8 +5,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Message, Chat } from '../types';
 
 /**
- * CACHE & ATTACHMENT ORCHESTRATION
- * Low-level memory cache for media and indexing logic.
+ * Cache and attachment orchestration:
+ * Memory cache for media assets and indexing logic.
  */
 const attachmentCache = new Map<string, Uint8Array>();
 
@@ -23,8 +23,8 @@ export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
 };
 
 /**
- * OUTGOING MESSAGE PIPELINE
- * Orchestrates the flow: UI -> Rust (Encrypt & Send) -> Success
+ * Outgoing message pipeline:
+ * Orchestrates the flow from UI through native encryption and transmission.
  */
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
 
@@ -54,7 +54,7 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
         });
         setReplyingTo(null);
     } catch (e) {
-        console.error("[Chat] Send failed:", e);
+        // Send failed
     }
 };
 
@@ -69,9 +69,7 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
         if (file.data) {
             fileData = file.data instanceof ArrayBuffer ? new Uint8Array(file.data) : file.data;
         } else if (file && (file instanceof File || typeof (file as any).arrayBuffer === 'function')) {
-            // Logic for DOM File objects or Blobs (e.g. from recording)
-            // Svelte 5 proxies might not satisfy 'instanceof File', so we check for arrayBuffer()
-            const source = (file as any)._target || file; // Try to unwrap proxy if possible
+            const source = (file as any)._target || file;
             const buffer = await (source as any).arrayBuffer();
             fileData = new Uint8Array(buffer);
         }
@@ -100,15 +98,15 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
         });
         setReplyingTo(null);
     } catch (e: any) {
-        console.error("[Chat] Media send failed:", e);
         const { addToast } = await import('../stores/ui');
         addToast(e.toString(), 'error');
     }
 };
 
 /**
- * INCOMING & DATA MANAGEMENT
- * Synchronizes store state with the SQLite database and native notification engine.
+ * Persistence synchronization:
+ * Automatically serializes and saves metadata whenever the store changes.
+ * Debounced to 1000ms to prevent excessive disk I/O.
  */
 export const addMessage = async (peerHash: string, msg: Message) => {
     // 1. Index attachments
@@ -170,22 +168,16 @@ export const addMessage = async (peerHash: string, msg: Message) => {
 
         const chat = get(userStore).chats[peerHash];
 
-        // THE "GAP" PROTECTOR:
-        // If we receive a message from someone else while reading history, DO NOT put it on the screen.
-        // It's saved in the DB, and the unread counter increased, but we protect the historical DOM.
         if (chat?.hasMoreNewer && !msg.isMine) {
             return mStore;
         }
-
-        // If we SEND a message while deep in history, we should snap back to the present.
         if (chat?.hasMoreNewer && msg.isMine) {
             needsSnapToPresent = true;
             return mStore; // We will let the snapshot loader handle it
         }
 
         const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
-        
-        // Prune exactly like loadChatMessages
+
         let final = combined;
         if (combined.length > 2000) {
             if (chat?.hasMoreNewer) {
@@ -200,7 +192,7 @@ export const addMessage = async (peerHash: string, msg: Message) => {
     });
 
     if (needsSnapToPresent) {
-        jumpToPresent(peerHash); // Force load the 'Present' state and clear gaps
+        jumpToPresent(peerHash);
     }
 
     // 4. Persistence & Notifications
@@ -232,7 +224,7 @@ export const syncChatToDb = async (chat: Chat) => {
             }
         });
     } catch (e) {
-        console.error("[Chat] DB sync failed:", e);
+        // DB sync failed
     }
 };
 
@@ -273,10 +265,10 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
                     if (chat) s.chats[peerHash] = { ...chat, unreadCount: 0 };
                     return { ...s, chats: { ...s.chats } };
                 });
-                invoke('db_update_messages', { ids: finalIds, status: 'read' }).catch(console.error);
+                invoke('db_update_messages', { ids: finalIds, status: 'read' }).catch(() => { });
             }
         } catch (e) {
-            console.error("[Chat] Receipt failed:", e);
+            // Receipt failed
         }
     }, 300);
 };
@@ -326,10 +318,7 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0,
             });
 
             const sorted = combined.sort((a, b) => a.timestamp - b.timestamp);
-            
-            // Smarter Pruning: If we are in history mode, we allow the buffer to grow 
-            // slightly larger to avoid "flickering" out the messages you are reading.
-            // We only prune if the store exceeds 2,000 messages.
+
             let final = sorted;
             if (sorted.length > 2000) {
                 const chat = get(userStore).chats[peerHash];
@@ -353,8 +342,8 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0,
                 const newTop = direction === 'older' || direction === 'jump' ? offset + messages.length : chat.topOffset || 0;
                 const newBottom = direction === 'newer' || direction === 'jump' ? offset : chat.bottomOffset || 0;
 
-                s.chats[peerHash] = { 
-                    ...chat, 
+                s.chats[peerHash] = {
+                    ...chat,
                     hasMore: direction === 'older' || direction === 'jump' ? messages.length === limit : chat.hasMore,
                     hasMoreNewer: newBottom > 0,
                     topOffset: newTop,
@@ -366,7 +355,6 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0,
 
         return messages.length;
     } catch (e) {
-        console.error("[Chat] Load failed:", e);
         return 0;
     }
 };
@@ -407,7 +395,6 @@ export const loadStarredMessages = async () => {
         });
         return rawMsgs.length;
     } catch (e) {
-        console.error("[Chat] Load starred failed:", e);
         return 0;
     }
 };
@@ -415,7 +402,7 @@ export const loadStarredMessages = async () => {
 export const loadMoreMessages = async (peerHash: string) => {
     const chat = get(userStore).chats[peerHash];
     const topOffset = chat?.topOffset || 0;
-    
+
     return await loadChatMessages(peerHash, 50, topOffset, 'older');
 };
 
@@ -433,9 +420,9 @@ export const loadNewerMessages = async (peerHash: string) => {
 export const jumpToMessage = async (peerHash: string, msgId: string) => {
     try {
         const offset = await invoke<number>('db_get_message_offset', { chatAddress: peerHash, messageId: msgId });
-        
+
         const startOffset = Math.max(0, offset - 25);
-        
+
         messageStore.update(mStore => {
             return { ...mStore, [peerHash]: [] };
         });
@@ -449,16 +436,14 @@ export const jumpToMessage = async (peerHash: string, msgId: string) => {
         });
 
         await loadChatMessages(peerHash, 100, startOffset, 'jump');
-        
+
         return true;
     } catch (e) {
-        console.error("[Chat] Jump failed:", e);
         return false;
     }
 };
 
 export const jumpToPresent = async (peerHash: string) => {
-    // Clear the memory aggressively to prevent historical islands
     messageStore.update(mStore => {
         return { ...mStore, [peerHash]: [] };
     });
@@ -510,11 +495,10 @@ export const bulkStar = async (peerHash: string, msgIds: string[]) => {
     for (const id of msgIds) {
         const msgs = get(messageStore)[peerHash];
         const msg = msgs?.find(m => m.id === id);
-        if (msg) invoke('db_update_messages', { ids: [id], isStarred: msg.isStarred }).catch(console.error);
+        if (msg) invoke('db_update_messages', { ids: [id], isStarred: msg.isStarred }).catch(() => { });
     }
 };
 
-// --- SIGNAL HANDLERS ---
 let typingTimeouts: Record<string, any> = {};
 
 export const handleTypingSignal = (senderHash: string, payload: any) => {
@@ -558,11 +542,10 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
 
 export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string) => {
     messageStore.update(mStore => {
-        // 🏎️ FAST PATH: Direct lookup if chatAddress is known
+        // Direct lookup if chatAddress is known
         if (chatAddress && mStore[chatAddress]) {
             const index = mStore[chatAddress].findIndex(m => m.id === msgId);
             if (index !== -1) {
-                // Immutably update the message array to trigger Svelte 5 reactivity
                 const updatedMessages = [...mStore[chatAddress]];
                 updatedMessages[index] = { ...updatedMessages[index], status };
                 mStore[chatAddress] = updatedMessages;
@@ -578,7 +561,7 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
             }
         }
 
-        // 🐢 FALLBACK: Search all chats (Legacy or missing addr)
+        // Search all chats if address is missing
         for (const peerHash of Object.keys(mStore)) {
             const index = mStore[peerHash].findIndex(m => m.id === msgId);
             if (index !== -1) {
@@ -615,7 +598,7 @@ export const markAsDownloaded = async (peerHash: string, msgId: string, exported
                 invoke('db_update_messages', {
                     ids: [msgId],
                     attachmentJson: JSON.stringify(updatedMsg.attachment)
-                }).catch(console.error);
+                }).catch(() => { });
                 return updatedMsg;
             }
             return m;

@@ -9,11 +9,9 @@ import { fromHex } from '../crypto';
  * This shifts the "heavy lifting" (decryption, fragment assembly, DB persistence) to Rust.
  */
 export function setupBackgroundHandlers() {
-    console.log("[Background] Setting up event listeners for native orchestration.");
 
     listen('new-relational-message', (event: any) => {
         const dbMsg = event.payload;
-        console.debug("[Background] Received new message from Rust:", dbMsg.id);
 
         const msg: Message = {
             id: dbMsg.id,
@@ -26,7 +24,7 @@ export function setupBackgroundHandlers() {
             replyTo: dbMsg.reply_to_id ? { id: dbMsg.reply_to_id, content: "", type: 'text' as any } : undefined
         };
 
-        // Handle Voicenotes and Files correctly!
+        // Handle Voicenotes and Files correctly
         if ((msg.type === 'voice_note' || msg.type === 'file') && dbMsg.body) {
             try {
                 const parsedBody = JSON.parse(dbMsg.body);
@@ -44,16 +42,15 @@ export function setupBackgroundHandlers() {
                         try {
                             msg.attachment.data = fromHex(parsedBody.data);
                         } catch (e) {
-                            console.error("[Background] Error decoding hex data for attachment:", e);
+                            // Error decoding hex data
                         }
                     }
                 }
             } catch (e) {
-                console.debug("[Background] Could not parse dbMsg.body as JSON for attachment recovery.");
+                // Could not parse dbMsg.body
             }
         }
 
-        console.debug("[Background] Adding message to store:", msg.id, "Chat:", dbMsg.chat_id);
         addMessage(dbMsg.chat_id, msg);
     });
 

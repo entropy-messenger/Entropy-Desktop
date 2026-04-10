@@ -17,7 +17,7 @@ export const broadcastProfile = async (peerHash: string) => {
     try {
         await invoke('send_profile_update', { peerHash, alias: state.globalNickname || undefined });
     } catch (e) {
-        console.warn(`[Profile] Failed to broadcast to ${peerHash}:`, e);
+        // Failed to broadcast
     }
 };
 
@@ -28,7 +28,7 @@ export const sendTypingStatus = async (peerHash: string, isTyping: boolean) => {
     try {
         await invoke('send_typing_status', { peerHash, isTyping });
     } catch (e) {
-        console.error(`[Typing] Failed to send to ${peerHash}:`, e);
+        // Failed to send typing status
     }
 };
 
@@ -36,7 +36,7 @@ export const togglePin = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
         const nextPinned = !s.chats[peerHash].isPinned;
         s.chats[peerHash] = { ...s.chats[peerHash], isPinned: nextPinned };
-        invoke('db_set_chat_pinned', { address: peerHash, isPinned: nextPinned }).catch(console.error);
+        invoke('db_set_chat_pinned', { address: peerHash, isPinned: nextPinned }).catch(() => { });
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -46,7 +46,7 @@ export const toggleArchive = (peerHash: string) => userStore.update(s => {
     if (s.chats[peerHash]) {
         const nextArchived = !s.chats[peerHash].isArchived;
         s.chats[peerHash] = { ...s.chats[peerHash], isArchived: nextArchived };
-        invoke('db_set_chat_archived', { address: peerHash, isArchived: nextArchived }).catch(console.error);
+        invoke('db_set_chat_archived', { address: peerHash, isArchived: nextArchived }).catch(() => { });
         syncChatToDb(s.chats[peerHash]);
     }
     return { ...s, chats: { ...s.chats } };
@@ -60,7 +60,7 @@ export const setTrustLevel = async (peerHash: string, trustLevel: number) => {
             return { ...s, chats: { ...s.chats } };
         });
     } catch (e) {
-        console.error("Failed to update trust level:", e);
+        // Failed to update trust level
     }
 };
 
@@ -72,7 +72,7 @@ export const toggleStar = (peerHash: string, msgId: string) => {
         if (idx !== -1) {
             const nextStarred = !msgs[idx].isStarred;
             msgs[idx] = { ...msgs[idx], isStarred: nextStarred };
-            invoke('db_update_messages', { ids: [msgId], isStarred: nextStarred }).catch(console.error);
+            invoke('db_update_messages', { ids: [msgId], isStarred: nextStarred }).catch(() => { });
             return { ...mStore, [peerHash]: msgs };
         }
         return mStore;
@@ -93,7 +93,7 @@ export const setLocalNickname = (peerHash: string, nickname: string | null) => {
         }
         return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
     });
-    invoke('db_set_contact_nickname', { hash: peerHash, alias: nickname }).catch(console.error);
+    invoke('db_set_contact_nickname', { hash: peerHash, alias: nickname }).catch(() => { });
 };
 
 export const toggleBlock = (peerHash: string) => userStore.update(s => {
@@ -102,7 +102,7 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
     if (nextStatus) s.blockedHashes = [...s.blockedHashes, peerHash];
     else s.blockedHashes = s.blockedHashes.filter(h => h !== peerHash);
     if (s.chats[peerHash]) s.chats[peerHash].isBlocked = nextStatus;
-    invoke('db_set_contact_blocked', { hash: peerHash, isBlocked: nextStatus }).catch(console.error);
+    invoke('db_set_contact_blocked', { hash: peerHash, isBlocked: nextStatus }).catch(() => { });
     return { ...s };
 });
 
@@ -151,8 +151,7 @@ export const resolveIdentity = async (peerHash: string): Promise<string | null> 
         const res = await invoke<any>('identity_resolve', { identityHash: peerHash });
         const name = res?.nickname;
         if (name) {
-            // 💾 Persist to SQLite so it's loaded next startup
-            invoke('db_set_contact_global_nickname', { hash: peerHash, nickname: name }).catch(console.error);
+            invoke('db_set_contact_global_nickname', { hash: peerHash, nickname: name }).catch(() => { });
 
             userStore.update(s => {
                 if (s.chats[peerHash]) s.chats[peerHash].globalNickname = name;
@@ -166,7 +165,6 @@ export const resolveIdentity = async (peerHash: string): Promise<string | null> 
         }
         return null;
     } catch (e) {
-        console.warn(`[Identity] Failed to resolve nickname for ${peerHash}:`, e);
         return null;
     } finally {
         pendingResolutions.delete(peerHash);
@@ -182,11 +180,11 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
         } else if (alias) {
             chat.localNickname = alias;
         }
-        
+
         // Update nicknames cache with priority
         const display = chat.localNickname || chat.globalNickname;
         if (display) s.nicknames[peerHash] = display;
-        
+
         chat.unreadCount = 0;
         syncChatToDb(chat);
         s.chats[peerHash] = chat;

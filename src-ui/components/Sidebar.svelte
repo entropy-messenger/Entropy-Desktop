@@ -25,7 +25,7 @@
   let searchQuery = $state("");
   let showCreateGroup = $state(false);
 
-  // 🕵️ AUTO-RESOLVE: Sequential queued resolution to prevent UI hangs and relay flood
+  // Identity resolution: Sequential queued resolution to prevent UI hangs and relay flood
   const pendingResolutions = new Set<string>();
   $effect(() => {
      const unknownHashes = Object.values($userStore.chats)
@@ -122,7 +122,7 @@
                     peerNickname: $userStore.nicknames[m.chatAddress] || m.chatAddress.slice(0, 8)
                 }));
             } catch (e) {
-                console.error("Search failed:", e);
+                // Search failed
             } finally { isSearching = false; }
         }, 300);
         return () => clearTimeout(timer);
@@ -243,7 +243,7 @@
                                 {:else if chat.lastMsg}
                                     <div class="flex items-center space-x-1">
                                         {#if chat.lastIsMine}
-                                            {#if chat.lastStatus === 'pending' || chat.lastStatus === 'sending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
+                                            {#if chat.lastStatus === 'sending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
                                             {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
                                             {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary" />
                                             {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}

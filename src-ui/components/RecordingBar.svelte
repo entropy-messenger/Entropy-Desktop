@@ -87,7 +87,7 @@
             recordingSeconds = Math.floor((performance.now() - startTime) / 1000); 
         }, 200);
     } catch (e: any) { 
-        console.error("[Voice] Start Error:", e);
+        // Start Error
         recordingState = 'error';
         if (e.name === 'NotAllowedError') {
             errorMessage = "Microphone Permission Denied";

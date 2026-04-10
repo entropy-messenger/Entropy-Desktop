@@ -66,12 +66,12 @@
         }
       }
     } catch (e) {
-      console.error("Update check failed:", e);
+      // Update check failed
     }
   };
 
   onMount(async () => {
-    if (window.__TAURI_INTERNALS__) {
+    if ((window as any).__TAURI_INTERNALS__) {
         await new Promise(r => setTimeout(r, 100));
         
         // Background update check
@@ -81,11 +81,11 @@
     isInitializing = false;
     hasExistingIdentity = await hasVault();
 
-    if (window.__TAURI_INTERNALS__) {
+    if ((window as any).__TAURI_INTERNALS__) {
       try {
         await checkNotificationPermission();
       } catch (e) {
-        console.error("Tauri permission failed:", e);
+        // Notification permission failed
       }
     }
   });
@@ -103,7 +103,6 @@
     try {
         await initApp(password);
     } catch (e: any) {
-        console.error("Login component caught error:", e);
         userStore.update(s => ({ ...s, authError: e.toString() }));
     } finally {
         isInitializing = false;
@@ -137,7 +136,7 @@
             e.key === 'F12' ||
             (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C'))
         ) {
-            // Let dev tools open in dev mode? 
+            // Prevent opening dev tools in production mode
             if (!import.meta.env.DEV) e.preventDefault();
         }
 
@@ -176,7 +175,7 @@
                 addToast("Export not supported in web mode.", 'warning');
             }
         } catch (e) {
-            console.error("Export component UI error:", e);
+            // Export failed
         }
     }
 
@@ -204,7 +203,7 @@
                 addToast("Import not supported in web mode.", 'warning');
             }
         } catch (e) {
-            console.error("Import component UI error:", e);
+            // Import failed
         }
     }
 </script>

@@ -26,7 +26,7 @@
                 blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
             }
         } catch (e) {
-            console.error("[MediaThumbnail] Load error:", e);
+            // Load error
         } finally {
             loading = false;
         }

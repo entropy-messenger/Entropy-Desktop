@@ -28,7 +28,6 @@ export const createGroup = async (name: string, members: string[]) => {
             return { ...s, activeChatHash: groupId };
         });
     } catch (e) {
-        console.error("[Groups] Failed to create group:", e);
         throw e;
     }
 };
@@ -42,7 +41,6 @@ export const addToGroup = async (groupId: string, newMembers: string[]) => {
         
         // UI will be updated via the 'msg://group_update' event handler in background_handlers.ts
     } catch (e) {
-        console.error("[Groups] Failed to add members:", e);
         throw e;
     }
 };
@@ -60,7 +58,6 @@ export const updateGroupName = async (groupId: string, newName: string) => {
             return { ...s };
         });
     } catch (e) {
-        console.error("[Groups] Failed to update group name:", e);
         throw e;
     }
 };
@@ -87,7 +84,6 @@ export const leaveGroup = async (groupId: string) => {
             return { ...mStore };
         });
     } catch (e) {
-        console.error("[Groups] Failed to leave group:", e);
         throw e;
     }
 };

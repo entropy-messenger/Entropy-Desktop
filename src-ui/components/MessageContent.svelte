@@ -46,7 +46,7 @@
         if (target.classList.contains('message-link')) {
             e.preventDefault();
             const href = target.getAttribute('href');
-            if (href) open(href).catch(console.error);
+            if (href) open(href).catch(() => {});
         }
     };
 
@@ -70,7 +70,7 @@
             const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
             const matches = msg.content.match(hashRegex);
             if (matches) {
-                matches.forEach(hash => {
+                matches.forEach((hash: string) => {
                     const h = hash.toLowerCase();
                     if (!$userStore.nicknames[h]) {
                         resolveIdentity(h);
@@ -122,7 +122,7 @@
              </div>
         {/if}
     {:else}
-        <div class="text-[14px] leading-snug whitespace-pre-wrap break-words relative overflow-hidden pb-0.5">
+        <div class="text-[14px] leading-snug whitespace-pre-wrap break-words relative overflow-hidden pb-0.5 select-text">
             {@html linkify(resolveHashesInText(msg.content), isMine)}
             <!-- Native float wrap for the timestamp block -->
             {#if !compactMode}

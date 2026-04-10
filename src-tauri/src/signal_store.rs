@@ -160,10 +160,6 @@ impl IdentityKeyStore for SqliteSignalStore {
             if existing_pub == pub_bytes.as_ref() {
                 (IdentityChange::NewOrUnchanged, old_trust)
             } else {
-                println!(
-                    "[SignalStore] IDENTITY CHANGED for {}. Setting trust to 0.",
-                    address_str
-                );
                 (IdentityChange::ReplacedExisting, 0)
             }
         } else {
@@ -351,7 +347,6 @@ impl PreKeyStore for SqliteSignalStore {
             })?;
             Ok(PreKeyRecord::deserialize(&data)?)
         } else {
-            println!("[SignalStore] ERROR: PreKey {} not found!", id_u32);
             Err(SignalProtocolError::InvalidPreKeyId)
         }
     }
@@ -499,7 +494,6 @@ impl KyberPreKeyStore for SqliteSignalStore {
             })?;
             Ok(KyberPreKeyRecord::deserialize(&data)?)
         } else {
-            println!("[SignalStore] ERROR: KyberPreKey {} not found!", id_u32);
             Err(SignalProtocolError::InvalidKyberPreKeyId)
         }
     }

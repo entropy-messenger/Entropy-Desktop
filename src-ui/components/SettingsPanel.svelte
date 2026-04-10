@@ -26,7 +26,7 @@
               width: 400,
               margin: 2,
               color: { dark: '#000000', light: '#ffffff' }
-          }).then(url => qrCodeUrl = url).catch(console.error);
+          }).then(url => qrCodeUrl = url).catch(() => {});
       }
   });
 

@@ -22,7 +22,6 @@ export const initApp = async (password: string) => {
     try {
         await initVault(password);
     } catch (e: any) {
-        console.error("Vault init failed:", e);
         userStore.update(s => ({ ...s, authError: e.toString() || "Failed to open vault." }));
         return;
     }
@@ -31,7 +30,7 @@ export const initApp = async (password: string) => {
     try {
         idHash = await signalManager.init();
     } catch (e) {
-        console.error("Signal init failed:", e);
+        // Signal init failed
     }
 
     if (idHash) {
@@ -53,7 +52,7 @@ export const initApp = async (password: string) => {
                 globalNickname = meta.globalNickname || meta.myAlias || null;
                 privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
-                console.error("Failed to parse vault metadata:", e);
+                // Failed to parse vault metadata
             }
         }
 
@@ -96,7 +95,7 @@ export const initApp = async (password: string) => {
                 };
             }
         } catch (e) {
-            console.error("Failed to load chats/contacts from DB:", e);
+            // Failed to load chats/contacts from DB
         }
 
         userStore.update(s => ({
@@ -111,7 +110,7 @@ export const initApp = async (password: string) => {
         }));
         
         // 3. Prime the Starred Messages Cache
-        loadStarredMessages().catch(console.error);
+        loadStarredMessages().catch(() => {});
         
         network.connect();
     } else {
@@ -126,23 +125,19 @@ export const createIdentity = async (password: string) => {
     try {
         await initVault(password);
     } catch (e: any) {
-        console.error("Vault initialization failed:", e);
         throw new Error(`Local vault setup failed: ${e.message || e}`);
     }
 
     let idHash;
     try {
         idHash = await signalManager.init();
-        console.debug("Identity generated:", idHash);
     } catch (e: any) {
-        console.error("Identity generation failed:", e);
         throw new Error(`Identity generation failed: ${e.message || e}`);
     }
 
     if (idHash) {
         userStore.update(s => ({ ...s, identityHash: idHash }));
 
-        console.debug("Connecting to network...");
         // Status and handshake are now managed by native layer
         network.connect();
     } else {
@@ -181,7 +176,7 @@ export const burnAccount = async () => {
         
         await invoke('reset_database');
     } catch (err) {
-        console.error("[Account] Burn Failed:", err);
+        // Burn failed
     }
 }
 
@@ -210,7 +205,6 @@ export const exportVault = async () => {
             addToast("Export not supported in web mode.", 'warning');
         }
     } catch (e) {
-        console.error("Export failed:", e);
         addToast("Export failed: " + e, 'error');
     }
 };
@@ -241,7 +235,6 @@ export const importVault = async () => {
             addToast("Import not supported in web mode.", 'warning');
         }
     } catch (e) {
-        console.error("Import failed:", e);
         addToast("Import failed: " + e, 'error');
     }
 };

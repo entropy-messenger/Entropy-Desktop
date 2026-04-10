@@ -74,10 +74,6 @@ pub(crate) async fn internal_signal_encrypt(
             }))
         }
         Err(e) if e.to_string().to_lowercase().contains("session") || e.to_string().to_lowercase().contains("not found") => {
-            println!(
-                "[Signal] Session not found for {}, fetching bundle...",
-                remote_hash
-            );
 
             let response = internal_request(
                 net_state,
@@ -112,10 +108,6 @@ pub(crate) async fn internal_signal_encrypt(
 
             internal_establish_session_logic(app.clone(), remote_hash, bundle).await?;
 
-            println!(
-                "[Signal] Session established for {}, retrying encryption...",
-                remote_hash
-            );
             let mut store = SqliteSignalStore::new(app.clone());
             let mut rng = StdRng::from_os_rng();
             let ciphertext = message_encrypt(

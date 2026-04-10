@@ -58,7 +58,7 @@
               addToast("Nickname updated", 'success');
           }
       } catch (e) {
-          console.error("Failed to set nickname:", e);
+          // Failed to set nickname
           addToast("Failed to set nickname", 'error');
       }
   };

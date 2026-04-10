@@ -23,7 +23,6 @@ export const vaultSave = async (key: string, value: string): Promise<void> => {
         try {
             await invoke('vault_save', { key, value });
         } catch (e) {
-            console.error(`[Vault] Save failed for ${key}:`, e);
             throw e;
         }
     } else {
@@ -55,7 +54,7 @@ export const vaultDelete = async (key: string): Promise<void> => {
         try {
             await invoke('vault_delete', { key });
         } catch (e) {
-            console.error(`[Vault] Delete failed for ${key}:`, e);
+            // Delete failed
         }
     } else {
        if (import.meta.env.DEV) localStorage.removeItem(`vlt:${key}`);

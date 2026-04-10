@@ -61,7 +61,7 @@
       lastGeneratedId = id;
       drawWaveform();
     } catch (e) {
-      console.error("Waveform generation failed:", e);
+      // Waveform generation failed
       waveformData = Array(45).fill(0.2);
     }
   }
@@ -107,7 +107,7 @@
     } else {
       playingVoiceNoteId.set(id);
       audioEl.play().catch(err => {
-          console.error("Playback failed:", err);
+          // Playback failed
           isPlaying = false;
           playingVoiceNoteId.set(null);
       });

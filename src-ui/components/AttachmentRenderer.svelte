@@ -35,7 +35,7 @@
         if (msg.attachment.data) {
             let bytes = msg.attachment.data;
             if (typeof bytes === 'string') bytes = fromBase64(bytes);
-            blobUrl = URL.createObjectURL(new Blob([bytes], {type: msg.attachment.fileType}));
+            blobUrl = URL.createObjectURL(new Blob([bytes as any], {type: msg.attachment.fileType}));
             wasCreatedInternally = true;
             return;
         }
@@ -45,7 +45,7 @@
         try {
             const data = await getAttachment(msg.id);
             if (data) {
-                blobUrl = URL.createObjectURL(new Blob([data], {type: msg.attachment.fileType}));
+                blobUrl = URL.createObjectURL(new Blob([data as any], {type: msg.attachment.fileType}));
                 wasCreatedInternally = true;
             } else {
                 error = true;
@@ -62,7 +62,7 @@
         try {
             await invoke('open_file', { path: exportedPath });
         } catch (e) {
-            console.error("[Attachment] Failed to open file:", e);
+            // Failed to open file
             addToast("Failed to open file", 'error');
         }
     }
@@ -96,7 +96,7 @@
             }
 
         } catch (e) {
-            console.error("[Attachment] Export failed:", e);
+            // Export failed
             addToast("Failed to save file", 'error');
         } finally {
             isExporting = false;

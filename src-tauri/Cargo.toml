@@ -1,6 +1,6 @@
 [package]
 name = "entropy"
-version = "0.1.0"
+version = "0.0.5"
 description = "Sovereign, Decentralized Messaging Client"
 authors = ["Entropy Team <contact@entropy.network>"]
 edition = "2021"

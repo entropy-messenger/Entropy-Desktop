@@ -23,8 +23,6 @@ pub fn signal_decrypt_media(data: Vec<u8>, bundle: serde_json::Value) -> Result<
     crypto_decrypt_media(ciphertext_hex, key_b64.to_string())
 }
 
-// --- HEADLESS RECEIVER LOGIC ---
-
 async fn internal_signal_decrypt(
     app: AppHandle,
     remote_hash: &str,
@@ -96,16 +94,13 @@ pub async fn process_incoming_binary(
         lock.clone().ok_or("No identity found")?
     };
 
-    // CRITICAL: DO NOT trim zeros globally anymore.
-    // Data is random binary and zero bytes are valid.
-    // Reassembly will handle the exact byte counts from fragments.
     let trimmed = &payload;
 
     if trimmed.len() < 65 {
         return Ok(()); // Invalid
     }
 
-    // FAST-DROP 0x03 (Dummy Pacing from Relay)
+    // Discard dummy pacing packets from relay
     if payload[0] == 0x03 {
         return Ok(());
     }
@@ -117,7 +112,7 @@ pub async fn process_incoming_binary(
         .unwrap_or_else(|| header_str.trim().to_string())
         .to_lowercase();
 
-    // 🛑 Block check: Drop binary if sender is in contacts and is_blocked=1
+    // Discard binary if sender is blocked in contacts
     if !sender.is_empty() {
         let lock = db_state
             .conn
@@ -134,7 +129,6 @@ pub async fn process_incoming_binary(
                 != 0;
 
             if is_blocked {
-                // Return Ok implicitly, dropping the data without further reassembly or decryption
                 return Ok(());
             }
         }
@@ -149,12 +143,8 @@ pub async fn process_incoming_binary(
     let payload_data = &body_data[1..];
 
     if frame_type == 0x01 || frame_type == 0x02 || frame_type == 0x04 {
-        // Universal Reassembly Flow: [4B TID] [4B Idx] [4B Total] [4B Length] [Data]
+        // Reassembly Flow: [4B TID] [4B Idx] [4B Total] [4B Length] [Data]
         if payload_data.len() < 16 {
-            eprintln!(
-                "[Network] Received malformed binary fragment (len={})",
-                payload_data.len()
-            );
             return Err("Invalid binary fragment header (too short)".into());
         }
 
@@ -185,17 +175,11 @@ pub async fn process_incoming_binary(
         ) as usize;
 
         // Security: Prevent Fragment Bombing (Limit to ~10MB reassembly)
-        if total > 7680 {
-            tracing::warn!("[Security] Dropped Oversized Fragmented Payload from peer {} (total={} > max=7680)", sender, total);
+        if total > 8000 {
             return Err("Payload exceeds peer-to-peer reassembly limit".into());
         }
 
         if raw_chunk_data.len() < chunk_len {
-            eprintln!(
-                "[Network] Fragment truncated: expected {} bytes, got {}",
-                chunk_len,
-                raw_chunk_data.len()
-            );
             return Err("Fragment data too short".into());
         }
         let chunk_data = &raw_chunk_data[..chunk_len];
@@ -219,12 +203,8 @@ pub async fn process_incoming_binary(
 
             // Guard: reject fragments whose index is outside the committed total, and cap
             // the HashMap at 7680 entries so a peer cannot bypass the limit by lying about
-            // `total` in the first fragment and then sending additional out-of-range chunks.
+            // total in the first fragment and sending additional out-of-range chunks.
             if index >= entry.total || entry.chunks.len() >= 7680 {
-                tracing::warn!(
-                    "[Security] Dropped out-of-range fragment from {} (tid={} idx={} committed_total={})",
-                    sender, transfer_id, index, entry.total
-                );
                 return Err("Fragment index out of range".into());
             }
 
@@ -242,7 +222,7 @@ pub async fn process_incoming_binary(
                         data.extend_from_slice(chunk);
                     }
                 }
-                assembler.remove(&assembler_key); // Clean up immediately using our isolated key
+                assembler.remove(&assembler_key); 
             }
             (complete, data, tot, cur)
         };
@@ -255,10 +235,6 @@ pub async fn process_incoming_binary(
 
                 let envelope: serde_json::Value =
                     serde_json::from_slice(&complete_data).map_err(|e| {
-                        eprintln!(
-                            "[Network] JSON parse FAILED for reassembled envelope: {}",
-                            e
-                        );
                         format!("Failed to parse reassembled message envelope: {}", e)
                     })?;
 
@@ -274,7 +250,7 @@ pub async fn process_incoming_binary(
                         let decrypted_json: serde_json::Value =
                             serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
 
-                        // 🛑 GLOBAL INACTIVE CHECK: Drop messages for groups the user has left
+                        // Discard messages for groups the user has left
                         if let Some(p_type) = decrypted_json["type"].as_str() {
                             if p_type != "group_invite" {
                                 if let Some(gid) = decrypted_json["groupId"].as_str() {
@@ -289,7 +265,6 @@ pub async fn process_incoming_binary(
                                             .unwrap_or(1); // Default to 1 (active) if group not found yet
 
                                         if is_active == 0 {
-                                            println!("[Inbox] Dropping {} for inactive group: {}", p_type, gid);
                                             return Ok(());
                                         }
                                     }
@@ -339,14 +314,13 @@ pub async fn process_incoming_binary(
                                 let db_state = app.state::<DbState>();
                                 internal_db_upsert_chat(&db_state, chat.clone()).await?;
 
-                                // 🚀 Broadcast real-time update to the UI
                                 app.emit("msg://group_update", json!({
                                     "groupId": gid.clone(),
                                     "name": name.clone(),
                                     "members": members.clone(),
                                 })).ok();
 
-                                // 🕵️ Handle batch additions via 'newMembers'
+                                // Process batch additions via 'newMembers' field
                                 let mut handled_me = false;
                                 if let Some(new_m_list) = decrypted_json["newMembers"].as_array() {
                                     for nm_val in new_m_list {
@@ -378,7 +352,7 @@ pub async fn process_incoming_binary(
                                     }
                                 }
 
-                                // 📢 Fallback SYSTEM INDICATOR: 'You were added' (if not in newMembers or missing)
+                                // Fallback: 'You were added'
                                 if !handled_me {
                                     let sys_id = uuid::Uuid::new_v4().to_string();
                                     let sys_ts = chrono::Utc::now().timestamp_millis();
@@ -483,7 +457,7 @@ pub async fn process_incoming_binary(
                                     {
                                         let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
                                         if let Some(conn) = lock.as_ref() {
-                                            // 🕵️ Member Change Detection
+                                            // Detection of changes in group membership
                                             if let Some(new_members) = decrypted_json["newMembers"].as_array() {
                                                 for nm_val in new_members {
                                                     if let Some(m) = nm_val.as_str() {
@@ -529,7 +503,6 @@ pub async fn process_incoming_binary(
                                         }
                                     }
 
-                                    // 📢 Save and Emit collected system notifications AFTER releasing lock
                                     for content in system_messages {
                                         let sys_id = uuid::Uuid::new_v4().to_string();
                                         let sys_ts = chrono::Utc::now().timestamp_millis();
@@ -546,11 +519,11 @@ pub async fn process_incoming_binary(
                                             is_group: true,
                                             reply_to_json: None,
                                         };
-                                        if let Err(e) = internal_db_save_message(&db_state, sys_msg.clone()).await {
-                                            println!("[Inbox] ERROR: Failed to save group system message: {}", e);
+                                        if let Err(_) = internal_db_save_message(&db_state, sys_msg.clone()).await {
+                                            // Handle error
                                         }
-                                        if let Err(e) = app.emit("msg://added", json!(sys_msg)) {
-                                            println!("[Inbox] ERROR: Failed to emit group system message: {}", e);
+                                        if let Err(_) = app.emit("msg://added", json!(sys_msg)) {
+                                            // Handle error
                                         }
                                     }
                                 }
@@ -604,7 +577,7 @@ pub async fn process_incoming_binary(
 
                                 let db_state = app.state::<DbState>();
 
-                                // NEW: If it's a group and we have a name, ensure the chat record exists with the CORRECT name
+                                // If it's a group and we have a name, ensure the chat record exists with the CORRECT name
                                 if is_group {
                                     let lock = db_state
                                         .conn
@@ -641,7 +614,7 @@ pub async fn process_incoming_binary(
                                 app.emit("msg://added", final_json.clone())
                                     .map_err(|e| e.to_string())?;
 
-                                // 🟢 Automatic Receipts: ONLY for 1:1 chats. Groups stay 'single tick' (sent).
+                                // Automated delivery receipts for 1:1 chats
                                 if !is_group {
                                     let receipt_payload = json!({
                                         "type": "receipt",
@@ -696,14 +669,13 @@ pub async fn process_incoming_binary(
                             "profile_update" => {
                                 let alias = decrypted_json["alias"].as_str().map(|s| s.to_string());
                                 let db_state = app.state::<DbState>();
-                                // 💾 AUTO-PERSIST: Save global nickname to SQLite immediately upon arrival
+                                // Update contact nickname in local storage on receipt
                                 let _ = db_set_contact_global_nickname(
                                     db_state,
                                     sender.clone(),
                                     alias.clone(),
                                 )
                                 .await;
-                                // 📣 UI SYNC: Update the frontend store
                                 app.emit(
                                     "contact-update",
                                     json!({ "hash": sender, "alias": alias }),
@@ -712,7 +684,7 @@ pub async fn process_incoming_binary(
                             }
                             "file" | "media" => {
                                 let raw_msg_id = decrypted_json["id"].as_str().ok_or("Missing msg id")?;
-                                // 🛡️ SECURITY: Sanitize msg_id to prevent Path Traversal attacks
+                                // Sanitize msg_id to mitigate path traversal risks
                                 let msg_id = raw_msg_id.chars()
                                     .filter(|c| c.is_alphanumeric() || *c == '-')
                                     .collect::<String>();
@@ -726,7 +698,7 @@ pub async fn process_incoming_binary(
 
                                 let size = decrypted_json["size"].as_u64().ok_or("Missing size")?;
                                 if size > 10 * 1024 * 1024 {
-                                    tracing::warn!("[Security] Rejected metadata for oversized file from {}: {} bytes", sender, size);
+                                    // Rejected oversized file metadata
                                     return Err("File metadata exceeds size limit".into());
                                 }
                                 let m_type = decrypted_json["msg_type"]
@@ -756,12 +728,9 @@ pub async fn process_incoming_binary(
                                 let key_str =
                                     bundle["key"].as_str().unwrap_or_default().to_string();
 
-                                println!("[Net-Link] Metadata for TID={} msg={} arrived. Checking temp_path: {:?}", inner_transfer_id, msg_id, temp_path);
-
                                 if temp_path.exists() {
-                                    // 🚀 MEDIA ARRIVED FIRST: Decrypt and save to vault
+                                    // Decrypt and save media arriving before metadata
                                     if let Ok(encrypted_bytes) = std::fs::read(&temp_path) {
-                                        println!("[Net-Link] SUCCESS! Found orphaned binary file for TID={} ({} bytes). Decrypting...", inner_transfer_id, encrypted_bytes.len());
                                         if let Ok(plaintext) = crypto_decrypt_media(
                                             hex::encode(encrypted_bytes),
                                             key_str.clone(),
@@ -774,13 +743,12 @@ pub async fn process_incoming_binary(
                                             )
                                             .await;
                                             let _ = std::fs::remove_file(&temp_path);
-                                            println!("[Network] JSON linked & DECRYPTED from existing file: {}", inner_transfer_id);
                                         } else {
-                                            eprintln!("[Net-Link] ERROR: Decryption failed for orphaned file TID={}", inner_transfer_id);
+                                            // Decryption failed silently
                                         }
                                     }
                                 } else {
-                                    // 🕒 JSON ARRIVED FIRST: Wait for fragments
+                                    // Buffer metadata while waiting for fragments
                                     let mut links = net_state
                                         .pending_media_links
                                         .lock()
@@ -791,10 +759,6 @@ pub async fn process_incoming_binary(
                                             id: msg_id.clone(),
                                             key: key_str,
                                         },
-                                    );
-                                    println!(
-                                        "[Network] JSON stored pending link+key for transfer: {}",
-                                        inner_transfer_id
                                     );
                                 }
 
@@ -831,14 +795,14 @@ pub async fn process_incoming_binary(
                                     reply_to_json: decrypted_json["replyTo"].as_object().map(|r| serde_json::to_string(r).unwrap_or_default()),
                                 };
 
-                                // NEW: Auto-create/rename chat for media too
+                                // Auto-create/rename chat for media too
                                 if is_group {
                                     let lock = db_state
                                         .conn
                                         .lock()
                                         .map_err(|_| "Database connection lock poisoned")?;
                                     if let Some(conn) = lock.as_ref() {
-                                        // MUCH MORE AGGRESSIVE: Always update the alias to the one provided in the message metadata
+                                        // Always update the alias to the one provided in the message metadata
                                         let _ = conn.execute(
                                             "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
                                              ON CONFLICT(address) DO UPDATE SET 
@@ -847,7 +811,7 @@ pub async fn process_incoming_binary(
                                             params![chat_address, group_name],
                                         );
 
-                                        // 🧬 AUTO-SYNC MEMBERS: Keep the group membership in sync
+                                        // Keep the group membership in sync
                                         if let Some(members) =
                                             decrypted_json["groupMembers"].as_array()
                                         {
@@ -882,7 +846,7 @@ pub async fn process_incoming_binary(
                                 app.emit("msg://added", final_json.clone())
                                     .map_err(|e| e.to_string())?;
 
-                                // 🟢 Automatic Receipts: ONLY for 1:1 chats. Groups stay 'single tick' (sent).
+                                // ONLY for 1:1 chats. Groups stay 'single tick' (sent).
                                 if !is_group {
                                     let receipt_payload = json!({ "type": "receipt", "msgIds": vec![msg_id], "status": "delivered" });
                                     if let Ok(encrypted) = internal_signal_encrypt(
@@ -908,8 +872,8 @@ pub async fn process_incoming_binary(
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[Signal] Decryption FAILED for {}: {}", sender, e);
+                    Err(_) => {
+                        // Decryption failed
                         return Err(e);
                     }
                 }
@@ -927,7 +891,7 @@ pub async fn process_incoming_binary(
                     };
 
                     if let Some(m) = meta {
-                        // 🔐 Decrypt using peer key and re-encrypt for local vault
+                        // Decrypt using peer key and re-encrypt for local vault
                         if let Ok(plaintext) =
                             crypto_decrypt_media(hex::encode(complete_data.clone()), m.key)
                         {
@@ -938,10 +902,6 @@ pub async fn process_incoming_binary(
                                 plaintext,
                             )
                             .await;
-                            println!(
-                                "[Network] Media reassembly + DECRYPTION COMPLETE for TID={}",
-                                transfer_id
-                            );
                             app.emit(
                                 "network-bin-complete",
                                 json!({
@@ -952,7 +912,7 @@ pub async fn process_incoming_binary(
                             )
                             .map_err(|e| e.to_string())?;
                         } else {
-                            eprintln!("[Network] Media decryption FAILED for TID={}", transfer_id);
+                            // Media decryption failed
                         }
                     } else {
                         // Metadata not arrived yet, save raw Encrypted fragments to temp file
@@ -960,19 +920,14 @@ pub async fn process_incoming_binary(
                         let file_path = media_dir.join(&temp_filename);
                         if let Ok(mut f) = std::fs::File::create(&file_path) {
                             let _ = f.write_all(&complete_data);
-                            println!("[Network] Media reassembly COMPLETE (Encrypted), waiting for JSON: TID={}", transfer_id);
+                            // Media reassembly complete
                         }
                     }
                 }
             }
 
-            // Reassembly is complete, entry removed from assembler in the scope above.
         } else {
             // Fragment received, reassembly in progress
-            println!(
-                "[Network] Reassembly progress for TID={}: {}/{}",
-                transfer_id, current_count, total_actual
-            );
             app.emit(
                 "network-bin-progress",
                 json!({
@@ -986,7 +941,7 @@ pub async fn process_incoming_binary(
             .map_err(|e: tauri::Error| e.to_string())?;
         }
     } else if frame_type == 0x03 {
-        // Dummy/Pacing - ignore
+        // ignore
     }
 
     Ok(())
@@ -998,14 +953,11 @@ async fn internal_send_volatile(
     to: &str,
     payload: serde_json::Value,
 ) -> Result<(), String> {
-    // Volatile signals (receipts, typing) are served via the Universal Binary Frame Type 0x01.
-    // We now send 'volatile' signals (receipts, typing) through the Universal Binary Frame Type 0x01.
-    // This provides metadata blindness and consistency.
+    // reciepts sent with 0x01 so it can be delivered even if offline
     let payload_str = payload.to_string();
     let payload_bytes = payload_str.into_bytes();
 
     let routing_hash = to.split('.').next().unwrap_or(to);
-    // Call internal_send_to_network with is_binary=true, is_media=false (Type 0x01)
     internal_send_to_network(
         app,
         net_state,

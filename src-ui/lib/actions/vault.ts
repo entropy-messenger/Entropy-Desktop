@@ -13,7 +13,6 @@ export const exportVault = async (targetPath: string) => {
         addToast("Backup exported successfully!", 'success');
         return true;
     } catch (e: any) {
-        console.error("[Vault] Export failed:", e);
         addToast("Export failed: " + e.toString(), 'error');
         return false;
     }
@@ -27,7 +26,6 @@ export const importVault = async (srcPath: string) => {
         setTimeout(() => window.location.reload(), 2000);
         return true;
     } catch (e: any) {
-        console.error("[Vault] Import failed:", e);
         addToast("Import failed: " + e.toString(), 'error');
         return false;
     }
@@ -41,7 +39,6 @@ export const resetDatabase = async () => {
         // Native process will likely terminate/restart
         return true;
     } catch (e: any) {
-        console.error("[Vault] Nuclear reset failed:", e);
         addToast("Reset failed: " + e.toString(), 'error');
         return false;
     }

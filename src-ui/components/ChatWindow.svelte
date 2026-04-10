@@ -76,7 +76,7 @@
 
   $effect(() => {
     if (activeMessages.length > 0 && activeChat && $userStore.activeChatHash === activeChat.peerHash) {
-        // 1. Always clear local unread count for current active chat
+        // Reset local unread count for current active chat
         if (activeChat.unreadCount > 0) {
             userStore.update(s => {
                 const c = s.chats[activeChat.peerHash];
@@ -85,7 +85,7 @@
             });
         }
 
-        // 2. Only send network-level Signal receipts for 1:1 chats
+        // Only send network-level Signal receipts for 1:1 chats
         if (activeChat.isGroup) return;
 
         const unreadIncoming = activeMessages.filter(m => !m.isMine && m.status !== 'read');
@@ -112,7 +112,7 @@
       const target = e.target as HTMLElement;
       if (!activeChat) return;
 
-      // 1. Pagination: Show "load more" if we hit the top and have more to load
+      // Pagination: Show "load more" if we hit the top and have more to load
       if (target.scrollTop < 50 && !isLoadingMore && activeChat.hasMore) {
           isLoadingMore = true;
           lastScrollHeight = target.scrollHeight;
@@ -124,7 +124,7 @@
           isLoadingMore = false;
       }
 
-      // 2. Newer Messages: Load if we hit bottom and have "future" context
+      // Newer Messages: Load if we hit bottom and have "future" context
       const isNearBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 50;
       if (isNearBottom && !isLoadingMore && activeChat.hasMoreNewer) {
           isLoadingMore = true;
@@ -132,7 +132,7 @@
           isLoadingMore = false;
       }
 
-      // 3. Visibility: Always show scroll-to-bottom if we are far enough from the floor or in history mode
+      // Visibility: Always show scroll-to-bottom if we are far enough from the floor or in history mode
       const threshold = 100;
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
       showScrollToBottom = distanceFromBottom > threshold || !!activeChat.hasMoreNewer;

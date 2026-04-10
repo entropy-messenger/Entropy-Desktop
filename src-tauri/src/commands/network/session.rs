@@ -21,7 +21,7 @@ use crate::signal_store::SqliteSignalStore;
 
 use super::pacing::{send_paced_json, PACKET_SIZE};
 use super::transit::flush_outbox;
-const RELAY_URL: &str = "ws://localhost:8080/ws";
+const RELAY_URL: &str = "wss://entropyserverfork.onrender.com/ws";
 
 #[tauri::command]
 pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
@@ -173,7 +173,6 @@ pub(crate) async fn internal_establish_network(
     if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token) {
         if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
             if let Some(tx) = &*sender_lock {
-                println!("[Network] Handshake: Attempting session-based authentication...");
                 let payload = json!({ "identity_hash": id, "session_token": token_val });
                 let auth_req = json!({"type": "auth", "payload": payload});
                 let _ = tx.send(PacedMessage {
@@ -184,7 +183,6 @@ pub(crate) async fn internal_establish_network(
     } else if let Some(id) = id_hash {
         if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
             if let Some(tx) = &*sender_lock {
-                println!("[Network] Handshake: No session token. Requesting PoW challenge...");
                 let challenge_req =
                     json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
                 let _ = tx.send(PacedMessage {
@@ -330,7 +328,6 @@ pub(crate) async fn internal_establish_network(
                                                             } else { false };
 
                                                             if jailed {
-                                                                println!("[Network] PoW mining SUPPRESSED due to active Jail.");
                                                                 let _ = app_inner.emit("network-status", "jailed");
                                                             } else {
                                                                 let _ = app_inner.emit("network-status", "mining");
@@ -367,14 +364,12 @@ pub(crate) async fn internal_establish_network(
                                                 let error_code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
                                                 if error_msg.contains("Jailed") || error_msg.contains("Identity Jailed") {
                                                      let retry_after = val.get("retry_after").and_then(|t| t.as_u64()).unwrap_or(300);
-                                                     println!("[Network] IDENTITY JAILED. Suppression active for {}s.", retry_after);
                                                      if let Ok(mut l) = app.state::<NetworkState>().jailed_until.lock() {
                                                          *l = Some(tokio::time::Instant::now() + Duration::from_secs(retry_after));
                                                      }
                                                      let _ = app.emit("network-status", "jailed");
                                                      handled = true;
                                                 } else if error_code == "auth_failed" || error_msg.contains("Invalid Token") || error_msg.contains("Handshake failed") || error_msg.contains("Challenge") {
-                                                    println!("[Network] Auth failed: {}. Clearing session token.", error_msg);
                                                     if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() { *l = None; }
                                                     if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
                                                     let app_inner = app.clone();
@@ -433,11 +428,11 @@ async fn run_connection_loop(app: AppHandle) {
         }
         if let Some(target_url) = url {
             let _ = app.emit("network-status", "connecting");
-            if let Err(e) =
+            if let Err(_) =
                 internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone())
                     .await
             {
-                eprintln!("[Network] Connection error: {}", e);
+                // Connection error handled by loop
             } else {
                 retry_count = 0;
             }

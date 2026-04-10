@@ -224,9 +224,6 @@ pub async fn init_vault(
                 Params::new(65536, 3, 4, Some(32)).unwrap(),
             );
             
-            // We use the passphrase as the salt for the panic check (deterministic but slow)
-            // or better, we store a separate salt. Let's use the static SALT "panic-salt-v1" for simplicity
-            // since the goal is to prevent brute-force, not to ensure unique salts across users.
             let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
             
             let password_hash = argon2
@@ -241,7 +238,6 @@ pub async fn init_vault(
                 let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
                 let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
                 let _ = std::fs::remove_file(&attempts_file);
-                println!("[!] Panic password triggered. Wiping and restarting...");
                 app.restart();
             }
         }
@@ -255,7 +251,6 @@ pub async fn init_vault(
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
         let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
         let _ = std::fs::remove_file(&attempts_file);
-        println!("[!] Max attempts reached. Wiping and restarting...");
         app.restart();
     }
 
@@ -268,7 +263,7 @@ pub async fn init_vault(
     };
 
     if !passphrase.is_empty() {
-        // 🛡️ SECURITY UPGRADE: Load or Generate a unique random salt
+        // Load or Generate a unique random salt
         let salt_path = app_data_dir.join("vault.salt");
         let salt_string = if salt_path.exists() {
             std::fs::read_to_string(&salt_path).map_err(|e| format!("Failed to read salt: {}", e))?
@@ -279,7 +274,6 @@ pub async fn init_vault(
             s
         };
 
-        // Argon2id is intentionally slow — offload to blocking thread pool to keep UI responsive
         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
             let salt = SaltString::from_b64(&salt_string)
                 .map_err(|e| format!("Salt error: {}", e))?;
@@ -316,11 +310,9 @@ pub async fn init_vault(
         let _ = std::fs::remove_file(attempts_file);
     }
 
-    // Enable WAL mode for better concurrency
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
 
     // --- DATABASE MIGRATIONS ---
-    // Consolidated all table, index, and trigger creation into version-controlled migrations.
     let current_version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| format!("Schema version check failed: {}", e))?;
@@ -328,27 +320,19 @@ pub async fn init_vault(
     let target_version = MIGRATIONS.len() as i32;
 
     if current_version < target_version {
-        println!(
-            "[DB] Schema Outdated: current v{}, target v{}. Starting migration...",
-            current_version, target_version
-        );
         for (idx, migration_sql) in MIGRATIONS.iter().enumerate() {
             let migration_ver = (idx + 1) as i32;
             if migration_ver > current_version {
-                println!("[DB] Applying migration to v{}...", migration_ver);
 
-                // We use execute_batch because each migration index could contain multiple SQL statements.
                 conn.execute_batch(migration_sql)
                     .map_err(|e| format!("Migration to v{} failed: {}", migration_ver, e))?;
 
-                // After success, persistent the version number in the database file.
                 conn.execute(&format!("PRAGMA user_version = {}", migration_ver), [])
                     .map_err(|e| {
                         format!("Failed to update user_version to v{}: {}", migration_ver, e)
                     })?;
             }
         }
-        println!("[DB] Database migration complete.");
     }
 
 
@@ -389,7 +373,7 @@ pub async fn init_vault(
         *state_key = Some(media_key);
     }
 
-    // 🦾 Autonomous Identity Recovery: Restore the secure session from the vault synchronously
+    //  Restore the secure session from the vault synchronously
     let pub_key_opt: Option<Vec<u8>> = {
         let lock = state
             .conn
@@ -433,7 +417,6 @@ pub async fn init_vault(
         }
 
         if let Some(t) = token_opt {
-            println!("[Network] Autonomous Recovery: Found deep-cached session token.");
             if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() {
                 *l = Some(t);
             }
@@ -498,7 +481,6 @@ pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Resul
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    println!("[!] Nuclear reset initiated. Restarting application...");
     app.restart();
     #[allow(unreachable_code)]
     Ok(())

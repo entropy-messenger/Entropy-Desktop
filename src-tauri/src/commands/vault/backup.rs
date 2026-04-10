@@ -164,7 +164,6 @@ pub async fn import_database(
         }
     }
 
-    println!("[Import] Restore complete. Restarting for fresh state...");
     app.restart();
     
     #[allow(unreachable_code)]

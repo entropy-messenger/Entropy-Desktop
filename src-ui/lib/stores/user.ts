@@ -59,7 +59,7 @@ export const userStore = writable<AppState>(initialState);
 export const messageStore = writable<Record<string, Message[]>>({});
 
 /**
- * TRIGGERED PERSISTENCE
+ * Persistence synchronization:
  * Automatically serializes and saves metadata whenever the store changes.
  * Debounced to 1000ms to prevent excessive disk I/O.
  */
@@ -75,7 +75,7 @@ async function performSave(state: AppState) {
         };
         await vaultSave(`entropy_meta_${state.identityHash}`, JSON.stringify(metadata));
     } catch (e) {
-        console.error("[Persistence] Auto-save failed:", e);
+        // Auto-save failed
     }
 }
 

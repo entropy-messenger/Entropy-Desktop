@@ -56,7 +56,6 @@ export const fromBase64 = (base64: string): Uint8Array => {
         }
         return bytes;
     } catch (e) {
-        console.error("[Crypto] Base64 decode failed:", e);
-        return new Uint8Array(0);
+        return new Uint8Array();
     }
 };

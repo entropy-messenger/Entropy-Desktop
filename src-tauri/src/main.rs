@@ -113,7 +113,7 @@ fn main() {
             commands::process_outgoing_group_media
         ])
         .setup(|app| {
-            // 🎙️ LINUX Fix: WebKitGTK requires manual signal handling for microphone permission
+            // Linux-specific fix: Allow microphone permission request for WebKitGTK
             #[cfg(target_os = "linux")]
             {
                 use webkit2gtk::{PermissionRequest, PermissionRequestExt, WebViewExt};

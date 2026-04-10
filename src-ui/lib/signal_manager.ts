@@ -20,10 +20,8 @@ export class SignalManager {
             await invoke<string>('signal_init');
             const idHash = await invoke<string>('signal_get_identity_hash');
             this.userIdentity = idHash;
-            console.log("[Signal] Protocol Initialized. Identity:", idHash);
             return idHash;
         } catch (e) {
-            console.error("[Signal] Init failed:", e);
             return null;
         }
     }
@@ -40,7 +38,6 @@ export class SignalManager {
             await invoke('signal_sync_keys');
             userStore.update(s => ({ ...s, isSynced: true, connectionStatus: 'connected' }));
         } catch (e: any) {
-            console.error("[Signal] Key sync failed:", e);
             userStore.update(s => ({ ...s, isSynced: false, connectionStatus: 'sync_error' }));
             throw e;
         }
@@ -53,7 +50,6 @@ export class SignalManager {
                 message
             });
         } catch (e: any) {
-            console.error("[Signal] Encryption failed:", e);
             throw e;
         }
     }
@@ -70,7 +66,6 @@ export class SignalManager {
             });
             return new Uint8Array(result);
         } catch (e: any) {
-            console.error("[Signal] Media decryption failed:", e);
             throw e;
         }
     }
@@ -85,7 +80,6 @@ export class SignalManager {
                 trustLevel: result.trustLevel
             };
         } catch (e: any) {
-            console.error("[Signal] Fingerprint retrieval failed:", e);
             throw e;
         }
     }
@@ -97,7 +91,6 @@ export class SignalManager {
                 trustLevel // 0=untrusted, 1=trusted, 2=verified
             });
         } catch (e: any) {
-            console.error("[Signal] Session verification failed:", e);
             throw e;
         }
     }

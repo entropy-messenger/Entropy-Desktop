@@ -36,7 +36,7 @@
             });
         }
     } catch (e) {
-        console.error("Error loading safety number:", e);
+        // Error loading safety number
     } finally {
         loadingSafetyNumber = false;
     }
@@ -90,7 +90,7 @@
                 {#if activeChat.localNickname && activeChat.globalNickname}
                     <p class="text-[10px] font-bold text-entropy-primary uppercase mb-1 tracking-wide">Public: {activeChat.globalNickname}</p>
                 {/if}
-                <p class="text-[11px] font-mono text-entropy-text-secondary break-all opacity-80">{activeChat.peerHash}</p>
+                <p class="text-[11px] font-mono text-entropy-text-secondary break-all opacity-80 select-text">{activeChat.peerHash}</p>
             </div>
         </div>
 
