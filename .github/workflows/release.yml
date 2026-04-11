@@ -47,6 +47,8 @@ jobs:
         run: |
           vcpkg install openssl:x64-windows-static-md
           vcpkg integrate install
+          echo "OPENSSL_DIR=C:/vcpkg/installed/x64-windows-static-md" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -59,9 +61,6 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
-          # Apply Windows-specific env vars only on Windows platform
-          OPENSSL_DIR: ${{ matrix.platform == 'windows-latest' && 'C:/vcpkg/installed/x64-windows-static-md' || '' }}
-          OPENSSL_STATIC: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
         with:
           owner: entropy-messenger
           repo: entropydesktop-releases
