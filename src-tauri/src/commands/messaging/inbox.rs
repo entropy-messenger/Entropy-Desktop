@@ -872,7 +872,7 @@ pub async fn process_incoming_binary(
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         // Decryption failed
                         return Err(e);
                     }

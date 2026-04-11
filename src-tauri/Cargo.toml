@@ -16,8 +16,7 @@ keyring = "3"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-process = "2.3"
-webkit2gtk = { version = "2.0", features = ["v2_10"] }
+# webkit2gtk moved to target-specific dependencies below
 rusqlite = { version = "0.33.0", features = ["bundled-sqlcipher"] }
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
@@ -43,7 +42,12 @@ aes-gcm = "0.10"
 tokio-rustls = "0.26.4"
 tokio-util = "0.7.18"
 tracing = "0.1"
-tauri-plugin-updater = "2.10"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_10"] }
+
+[target.'cfg(windows)'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [features]
 default = ["custom-protocol"]

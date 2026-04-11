@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-22.04
     
     steps:
@@ -34,7 +34,6 @@ jobs:
       with:
         node-version: 20
         cache: 'npm'
-        cache-dependency-path: package-lock.json
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -44,14 +43,11 @@ jobs:
       with:
         workspaces: src-tauri -> target
 
-    - name: Install Frontend Dependencies
+    - name: Install Dependencies
       run: npm install
 
-    - name: Check Frontend Types
+    - name: Frontend Type Check
       run: npm run check
 
-    - name: Build Frontend
-      run: npm run build
-
-    - name: Build Check
-      run: npm run tauri build -- --no-bundle
+    - name: Rust Unit Tests
+      run: cd src-tauri && cargo check

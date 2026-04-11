@@ -15,6 +15,26 @@
   import Modal from './components/Modal.svelte';
   import { addToast, showConfirm } from './lib/stores/ui';
   import { exportVault, importVault, resetDatabase as resetAccountAction } from './lib/actions/vault';
+  import { getVersion } from '@tauri-apps/api/app';
+
+  let updateAvailable = $state<string | null>(null);
+
+  const checkManualUpdate = async () => {
+    if (!(window as any).__TAURI_INTERNALS__) return;
+    try {
+      const currentVersion = await getVersion();
+      const response = await fetch('https://entropymessenger.com/update.json');
+      if (!response.ok) return;
+      const data = await response.json();
+      
+      // Basic version comparison (check if different)
+      if (data.version && data.version !== currentVersion) {
+        updateAvailable = data.version;
+      }
+    } catch (e) {
+      // Silent fail
+    }
+  };
 
   
   $effect(() => {
@@ -48,34 +68,13 @@
     }
   };
 
-  /**
-   * Checks for application updates using the Tauri Updater plugin.
-   * If an update is available, it prompts the user to download and install it.
-   */
-  const checkForUpdates = async () => {
-    try {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const { relaunch } = await import('@tauri-apps/plugin-process');
-      
-      const update = await check();
-      if (update && update.available) {
-        if (await showConfirm(`Update ${update.version} is available! Would you like to install it now?`, "Update Available")) {
-          addToast("Downloading update...", 'info');
-          await update.downloadAndInstall();
-          await relaunch();
-        }
-      }
-    } catch (e) {
-      // Update check failed
-    }
-  };
+
 
   onMount(async () => {
     if ((window as any).__TAURI_INTERNALS__) {
         await new Promise(r => setTimeout(r, 100));
         
-        // Background update check
-        checkForUpdates();
+        checkManualUpdate();
     }
     
     isInitializing = false;
@@ -211,6 +210,7 @@
 <svelte:window oncontextmenu={handleContextMenu} onkeydown={handleKeydown} />
 
 <main class="h-screen w-screen bg-entropy-bg overflow-hidden flex flex-col font-sans antialiased text-entropy-text-primary select-none">
+    <TitleBar />
     
     {#if !$userStore.identityHash}
         
@@ -223,7 +223,6 @@
             </div>
 
             <div class="bg-entropy-surface/80 backdrop-blur-xl rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.5)] w-[440px] text-center overflow-hidden animate-in zoom-in-95 duration-700 relative z-10">
-                <TitleBar />
                 <div class="p-12 space-y-10">
                     <div class="relative inline-block">
                         <div class="w-20 h-20 bg-entropy-surface rounded-2xl shadow-xl flex items-center justify-center mx-auto transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group">
@@ -388,8 +387,6 @@
             </div>
         </div>
     {:else}
-        
-        <TitleBar />
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
             <Sidebar bind:showStarredMessages />
             <div class="flex-1 relative flex flex-col min-w-0">

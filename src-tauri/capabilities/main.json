@@ -20,7 +20,14 @@
         {
             "identifier": "shell:allow-open",
             "allow": [
-                { "schemes": ["http", "https", "mailto", "tel"] }
+                {
+                    "schemes": [
+                        "http",
+                        "https",
+                        "mailto",
+                        "tel"
+                    ]
+                }
             ]
         },
         "notification:default",
@@ -29,8 +36,6 @@
         "dialog:allow-open",
         "core:path:default",
         "default",
-        "allow-commands",
-        "updater:default",
-        "process:allow-restart"
+        "allow-commands"
     ]
 }
