@@ -42,12 +42,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev nm-tray libvips-dev libsoup-3.0-dev rpm libopus-dev libmp3lame-dev
 
-      - name: Setup OpenSSL (Windows)
+      - name: Install OpenSSL (Windows)
         if: matrix.platform == 'windows-latest'
         run: |
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL" >> $GITHUB_ENV
-          echo "OPENSSL_INCLUDE_DIR=C:\Program Files\OpenSSL\include" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=C:\Program Files\OpenSSL\lib" >> $GITHUB_ENV
+          # Use vcpkg as it's the most reliable way to get a static-linked OpenSSL for SQLCipher
+          vcpkg install openssl:x64-windows-static-md
+          vcpkg integrate install
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -60,6 +60,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          # Point to vcpkg installed OpenSSL for the SQLCipher build
+          OPENSSL_DIR: C:/vcpkg/installed/x64-windows-static-md
+          OPENSSL_STATIC: 1
         with:
           owner: entropy-messenger
           repo: entropydesktop-releases
