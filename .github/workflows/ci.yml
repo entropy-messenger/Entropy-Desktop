@@ -50,5 +50,9 @@ jobs:
     - name: Frontend Type Check
       run: npm run check
 
+    - name: Prepare Dummy Dist
+      # Tauri macro needs the dist folder to exist even for a cargo check
+      run: mkdir -p dist
+
     - name: Backend Ready Check
       run: cd src-tauri && cargo check
