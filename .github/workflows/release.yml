@@ -45,7 +45,6 @@ jobs:
       - name: Install OpenSSL (Windows)
         if: matrix.platform == 'windows-latest'
         run: |
-          # Use vcpkg as it's the most reliable way to get a static-linked OpenSSL for SQLCipher
           vcpkg install openssl:x64-windows-static-md
           vcpkg integrate install
 
@@ -60,9 +59,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
-          # Point to vcpkg installed OpenSSL for the SQLCipher build
-          OPENSSL_DIR: C:/vcpkg/installed/x64-windows-static-md
-          OPENSSL_STATIC: 1
+          # Apply Windows-specific env vars only on Windows platform
+          OPENSSL_DIR: ${{ matrix.platform == 'windows-latest' && 'C:/vcpkg/installed/x64-windows-static-md' || '' }}
+          OPENSSL_STATIC: ${{ matrix.platform == 'windows-latest' && '1' || '' }}
         with:
           owner: entropy-messenger
           repo: entropydesktop-releases
