@@ -17,6 +17,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          protobuf-compiler \
           libwebkit2gtk-4.1-dev \
           libjavascriptcoregtk-4.1-dev \
           libsoup-3.0-dev \
@@ -49,5 +50,5 @@ jobs:
     - name: Frontend Type Check
       run: npm run check
 
-    - name: Rust Unit Tests
+    - name: Backend Ready Check
       run: cd src-tauri && cargo check
