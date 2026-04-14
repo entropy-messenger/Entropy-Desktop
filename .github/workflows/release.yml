@@ -74,7 +74,6 @@ jobs:
         with:
           owner: entropy-messenger
           repo: entropydesktop-releases
-          commit: main
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
           releaseBody: "See the assets below for the latest Entropy binaries. Verified & Signed."
