@@ -2,8 +2,6 @@ name: "Publish Release"
 
 on:
   push:
-    branches:
-      - updatetest
     tags:
       - 'v*'
 
@@ -80,8 +78,8 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
           releaseBody: "See the assets below for the latest Entropy binaries. Verified & Signed."
-          releaseDraft: true
-          prerelease: true
+          releaseDraft: false
+          prerelease: false
           args: ${{ matrix.args }}
 
   finalize-release:
