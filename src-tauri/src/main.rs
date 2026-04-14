@@ -25,7 +25,7 @@ use tauri::{
 
 fn main() {
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
-    println!("[*] Starting Entropy (Profile: {})", profile);
+    println!("Starting Entropy (Profile: {})", profile);
 
     tauri::Builder::default()
         .manage(DbState {
