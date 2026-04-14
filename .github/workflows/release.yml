@@ -66,11 +66,17 @@ jobs:
       - name: install frontend dependencies
         run: npm install
 
+      - name: Sanitize signing key
+        shell: bash
+        run: |
+          CLEAN_KEY=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | tr -d '[:space:]')
+          echo "TAURI_SIGNING_PRIVATE_KEY=$CLEAN_KEY" >> $GITHUB_ENV
+
       - uses: tauri-apps/tauri-action@v0
         id: tauri_build
         env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-            TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+            TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
