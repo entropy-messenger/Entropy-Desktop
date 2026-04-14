@@ -35,12 +35,37 @@
   };
 
   const handleUpdateClick = async () => {
-      if (!currentUpdate) return;
+      if (!currentUpdate || isUpdating) return;
       if (await showConfirm(`Download and install Entropy v${currentUpdate.version} now?`, "System Update")) {
+          isUpdating = true;
           try {
-              addToast("Downloading update...", "info");
-              await currentUpdate.downloadAndInstall();
+              let downloaded = 0;
+              let total = 0;
+              let lastPercent = -1;
+
+              await currentUpdate.downloadAndInstall((event: any) => {
+                  switch (event.event) {
+                      case 'Started':
+                          total = event.data.contentLength || 0;
+                          addToast(`Starting download: v${currentUpdate.version}`, "info");
+                          break;
+                      case 'Progress':
+                          downloaded += event.data.chunkLength;
+                          if (total > 0) {
+                              const percent = Math.round((downloaded / total) * 100);
+                              if (percent % 5 === 0 && percent !== lastPercent) {
+                                  lastPercent = percent;
+                                  addToast(`Downloading: ${percent}%`, "info");
+                              }
+                          }
+                          break;
+                      case 'Finished':
+                          addToast("Update complete! Application will now restart.", "success");
+                          break;
+                  }
+              });
           } catch (e) {
+              isUpdating = false;
               addToast("Update failed: " + e, "error");
           }
       }
@@ -65,6 +90,7 @@
   let showPassword = $state(false);
   let isInitializing = $state(true);
   let hasExistingIdentity = $state(false);
+  let isUpdating = $state(false);
   let showStarredMessages = $state(false);
 
 
@@ -387,6 +413,7 @@
             <Sidebar 
                 bind:showStarredMessages 
                 {updateAvailable} 
+                {isUpdating}
                 onUpdateClick={handleUpdateClick} 
             />
             <div class="flex-1 relative flex flex-col min-w-0">

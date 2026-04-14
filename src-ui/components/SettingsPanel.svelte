@@ -5,7 +5,6 @@
   import { invoke } from '@tauri-apps/api/core';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import { network } from '../lib/network';
-  import QRCode from 'qrcode';
   import {
     LucidePlus, LucideCamera, LucideUser, LucideLock, LucideCheckCheck, 
     LucideBan, LucideEyeOff, LucideShieldAlert, LucideGlobe, LucideTrash2, 
@@ -17,18 +16,9 @@
 
   let settingsTab = $state<'profile' | 'privacy' | 'blocked'>('profile');
   let isRegisteringNickname = $state(false);
-  let qrCodeUrl = $state<string>("");
   let copied = $state(false);
 
-  $effect(() => {
-      if ($userStore.identityHash) {
-          QRCode.toDataURL($userStore.identityHash, {
-              width: 400,
-              margin: 2,
-              color: { dark: '#000000', light: '#ffffff' }
-          }).then(url => qrCodeUrl = url).catch(() => {});
-      }
-  });
+
 
   const copyHash = async () => {
       if ($userStore.identityHash) {
@@ -146,17 +136,6 @@
                 <div class="text-[10px] font-bold text-entropy-primary uppercase tracking-widest">Global Identity Hash</div>
                 <div class="break-all font-mono text-[10px] text-entropy-text-primary bg-entropy-bg/50 p-2 rounded select-all leading-tight">{$userStore.identityHash || 'Generating...'}</div>
                 <button onclick={copyHash} class="w-full py-3 bg-entropy-surface text-entropy-primary rounded-xl text-sm font-bold shadow-sm hover:bg-entropy-surface-light transition">{copied ? 'Copied!' : 'Copy Hash Address'}</button>
-                
-                <div class="flex justify-center mt-2">
-                    <div class="bg-white p-2 rounded-xl shadow-sm relative overflow-hidden group/qr">
-                        {#if qrCodeUrl}
-                            <img src={qrCodeUrl} alt="QR Identity" class="w-32 h-32 blur-[2px] group-hover/qr:blur-0 transition-all duration-300" />
-                        {:else}
-                            <div class="w-32 h-32 bg-gray-100 flex items-center justify-center"><div class="w-6 h-6 border-2 border-entropy-primary border-t-transparent rounded-full animate-spin"></div></div>
-                        {/if}
-                        <div class="absolute inset-0 bg-white/40 flex items-center justify-center opacity-100 group-hover/qr:opacity-0 transition-opacity"><LucideLock size={24} class="text-blue-600" /></div>
-                    </div>
-                </div>
             </div>
         {:else if settingsTab === 'privacy'}
                 <div class="space-y-6">

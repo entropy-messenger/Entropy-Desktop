@@ -22,7 +22,7 @@ export interface Message {
     };
     groupId?: string;
     isMine: boolean;
-    status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+    status: 'pending' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
     isStarred?: boolean;
     isGroup?: boolean;
     chatAlias?: string;

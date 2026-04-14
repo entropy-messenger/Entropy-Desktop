@@ -26,6 +26,7 @@ export const modal = writable<ModalOptions | null>(null);
 
 export const addToast = (message: string, type: ToastType = 'info', duration = 3000) => {
     const id = Math.random().toString(36).substring(2, 9);
+    console.log(`[TOAST][${type.toUpperCase()}] ${message}`);
     toasts.update(all => [{ id, message, type, duration }, ...all]);
     if (duration > 0) {
         setTimeout(() => removeToast(id), duration);

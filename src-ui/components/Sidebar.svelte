@@ -51,7 +51,8 @@
   let { 
       showStarredMessages = $bindable(false),
       updateAvailable = null,
-      onUpdateClick = () => {}
+      isUpdating = false,
+      onUpdateClick = (() => {}) as any
   } = $props();
   
   import { messageStore } from '../lib/stores/user';
@@ -317,13 +318,18 @@
     {#if updateAvailable}
         <button 
             onclick={onUpdateClick}
-            class="w-[calc(100%-1.5rem)] mx-3 my-2 bg-entropy-primary/20 text-entropy-primary rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/30 group"
+            disabled={isUpdating}
+            class="w-[calc(100%-1.5rem)] mx-3 my-2 bg-entropy-primary/20 text-entropy-primary rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/30 group disabled:opacity-50"
         >
             <div class="flex items-center space-x-2">
                 <div class="w-2 h-2 bg-entropy-primary rounded-full animate-pulse"></div>
-                <span class="text-[9px] font-black uppercase tracking-widest leading-none">Update v{updateAvailable}</span>
+                <span class="text-[9px] font-black uppercase tracking-widest leading-none">
+                    {isUpdating ? 'Downloading...' : `Update v${updateAvailable}`}
+                </span>
             </div>
-            <span class="text-[8px] font-black uppercase tracking-tighter opacity-70 group-hover:opacity-100 transition-opacity">Get it</span>
+            <span class="text-[8px] font-black uppercase tracking-tighter opacity-70 group-hover:opacity-100 transition-opacity">
+                {isUpdating ? '⌛' : 'Get it'}
+            </span>
         </button>
     {/if}
 
