@@ -23,6 +23,16 @@
 
     const isReplyToMine = $derived(msg.replyTo && msg.replyTo.senderHash === $userStore.identityHash);
 
+    const escapeHTML = (text: string) => {
+        if (!text) return '';
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    };
+
     const linkify = (text: string, mine: boolean) => {
         if (!text) return '';
         // Robust URL regex matching http(s), www. OR naked domains
@@ -31,13 +41,19 @@
         
         return text.split(urlRegex).map(part => {
             if (part && part.match(urlRegex)) {
-                const href = (part.startsWith('http')) ? part : `https://${part}`;
-                // We keep the internal part of the link as-is since it matched a URL regex, but we encode the href just in case
-                const safePart = part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                return `<a href="${href}" target="_blank" class="message-link ${linkClass} underline-offset-4 hover:opacity-80 transition-all cursor-pointer">${safePart}</a>`;
+                let rawHref = part;
+                if (!rawHref.startsWith('http')) {
+                    rawHref = `https://${rawHref}`;
+                }
+                
+                // Escape everything for the attributes AND the content
+                const safePart = escapeHTML(part);
+                const safeHref = escapeHTML(rawHref);
+
+                return `<a href="${safeHref}" target="_blank" class="message-link ${linkClass} underline-offset-4 hover:opacity-80 transition-all cursor-pointer">${safePart}</a>`;
             }
-            // 🛡️ SECURITY: Escape everything else to avoid XSS
-            return part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            // Escape everything else to avoid XSS
+            return escapeHTML(part);
         }).join('');
     };
 
@@ -63,7 +79,7 @@
         });
     };
 
-    // 🕵️ DEEP RESOLVE: If we encounter unknown hashes in a protocol message, resolve them
+    // resolve unknown hashes in protocol messages
     import { resolveIdentity } from '../lib/actions/contacts';
     $effect(() => {
         if (msg.type === 'group_management' || msg.type === 'system') {

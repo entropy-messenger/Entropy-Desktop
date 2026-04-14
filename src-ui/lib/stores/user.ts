@@ -2,9 +2,6 @@ import { writable } from 'svelte/store';
 import type { Chat, Message, PrivacySettings } from '../types';
 import { vaultSave } from '../persistence';
 
-/**
- * Primary state manifest for the Entropy desktop client.
- */
 export interface AppState {
     identityHash: string | null;
     globalNickname: string | null;
@@ -47,22 +44,10 @@ const initialState: AppState = {
     nicknames: {}
 };
 
-/**
- * Global reactive store for the application state.
- */
 export const userStore = writable<AppState>(initialState);
 
-/**
- * Transient store for message histories.
- * Holds messages only for loaded conversations to prevent OOM and store bloat.
- */
 export const messageStore = writable<Record<string, Message[]>>({});
 
-/**
- * Persistence synchronization:
- * Automatically serializes and saves metadata whenever the store changes.
- * Debounced to 1000ms to prevent excessive disk I/O.
- */
 let saveTimeout: any = null;
 
 async function performSave(state: AppState) {

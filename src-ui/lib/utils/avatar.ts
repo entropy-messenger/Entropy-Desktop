@@ -1,8 +1,5 @@
-
 /**
- * Deconstructed Impressionist Engine for Entropy.
- * Mapping identity hashes to a hybrid of Picasso-shards and VanGogh-flow.
- * Zero-media, High-Entropy, and 100% deterministic.
+ * Generate a deterministic avatar based on an identity hash.
  */
 
 export interface FlowShard {
@@ -37,7 +34,6 @@ export const getAvatarData = (hash: string): SigilData => {
   const theme = CYBER_THEMES[v(hash, 0, 1, CYBER_THEMES.length)];
   const shards: FlowShard[] = [];
   
-  // 1. PRIMARY PICASSO SHARDS (The Structure)
   const numShards = 12 + v(hash, 2, 1, 8);
   for (let i = 0; i < numShards; i++) {
     const seed = v(hash, i * 2, 3, 1000);
@@ -58,8 +54,6 @@ export const getAvatarData = (hash: string): SigilData => {
     });
   }
 
-  // 2. VAN GOGH FLOW ACCENTS (The Texture)
-  // We'll use curved arcs that "shatter" across the Picasso shards
   const numFlows = 15 + v(hash, 5, 1, 15);
   const cx = 30 + v(hash, 8, 2, 40);
   const cy = 30 + v(hash, 10, 2, 40);
@@ -69,7 +63,6 @@ export const getAvatarData = (hash: string): SigilData => {
     const px = v(hash, i + 35, 2, 100);
     const py = v(hash, i + 40, 2, 100);
     
-    // Swirl logic
     const dx = px - cx;
     const dy = py - cy;
     const angle = Math.atan2(dy, dx) + (Math.PI / 2);

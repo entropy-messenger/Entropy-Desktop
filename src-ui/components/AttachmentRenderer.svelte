@@ -16,6 +16,9 @@
     let error = $state(false);
     let isExporting = $state(false);
     let exportedPath = $state<string | null>(msg.attachment?.exportedPath || null);
+    $effect(() => {
+        if (msg.attachment?.exportedPath) exportedPath = msg.attachment.exportedPath;
+    });
     let wasCreatedInternally = $state(false);
 
     async function loadAttachment() {

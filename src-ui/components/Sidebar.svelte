@@ -21,11 +21,9 @@
   import CreateGroupOverlay from './CreateGroupOverlay.svelte';
   import Avatar from './Avatar.svelte';
 
-  let activeHash = $state<string | null>(null);
   let searchQuery = $state("");
   let showCreateGroup = $state(false);
 
-  // Identity resolution: Sequential queued resolution to prevent UI hangs and relay flood
   const pendingResolutions = new Set<string>();
   $effect(() => {
      const unknownHashes = Object.values($userStore.chats)
@@ -45,7 +43,7 @@
              } finally {
                 pendingResolutions.delete(hash);
              }
-         }, 500 + (Math.random() * 2000)); // 500ms - 2.5s jittered delay
+         }, 500 + (Math.random() * 2000));
      });
    });
   let filter = $state<'all' | 'archived'>('all');
@@ -65,15 +63,14 @@
     }))
   ).sort((a, b) => b.timestamp - a.timestamp));
   
-  userStore.subscribe(store => {
-    activeHash = store.activeChatHash;
-  });
+  let activeHash = $derived($userStore.activeChatHash);
 
   const selectChat = (hash: string) => {
     userStore.update(s => {
         if (s.chats[hash]) { s.chats[hash] = { ...s.chats[hash], unreadCount: 0 }; }
         return { ...s, activeChatHash: hash, chats: { ...s.chats } };
     });
+    invoke('db_reset_unread_count', { address: hash }).catch(() => {});
     showStarredMessages = false;
     jumpToPresent(hash);
   };
@@ -124,8 +121,6 @@
                     ...m,
                     peerNickname: $userStore.nicknames[m.chatAddress] || m.chatAddress.slice(0, 8)
                 }));
-            } catch (e) {
-                // Search failed
             } finally { isSearching = false; }
         }, 300);
         return () => clearTimeout(timer);
@@ -153,6 +148,14 @@
   const canSeeTyping = $derived($userStore.privacySettings.typingStatus !== 'nobody');
   const canSeeReceipts = $derived($userStore.privacySettings.readReceipts);
 
+    const resolveHashesInText = (text: string) => {
+        if (!text) return text;
+        const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
+        return text.replace(hashRegex, (match) => {
+            const nick = $userStore.nicknames[match.toLowerCase()];
+            return nick ? nick : match.slice(0, 8);
+        });
+    };
 </script>
 
 <div class="h-full w-80 bg-entropy-bg flex flex-col relative shrink-0">
@@ -162,7 +165,7 @@
             <button onclick={toggleTheme} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-entropy-primary transition" title="Toggle Theme">
                 {#if ($userStore.privacySettings.theme || 'dark') === 'dark'}<LucideSun size={18} />{:else}<LucideMoon size={18} />{/if}
             </button>
-            <button onclick={() => showStarredMessages = true} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-yellow-500 transition" title="Starred Messages"><LucideStar size={18} /></button>
+            <button onclick={() => showStarredMessages = true} class="p-2 hover:bg-entropy-surface-light rounded-full {showStarredMessages ? 'text-yellow-500 bg-yellow-500/10' : 'text-entropy-text-dim hover:text-yellow-500'} transition" title="Starred Messages"><LucideStar size={18} /></button>
             <button onclick={() => showCreateGroup = true} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-secondary transition" title="New Group"><LucideUsers size={18} /></button>
             <button onclick={createChatPrompt} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-primary transition" title="New Message"><LucidePlus size={20} /></button>
             <button onclick={toggleSettings} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim transition"><LucideSettings size={18} /></button>
@@ -217,7 +220,7 @@
     {/if}
 
     {#each filteredChats as chat (chat.peerHash)}
-        <div class="group/item p-4 hover:bg-entropy-surface/50 cursor-pointer transition relative {activeHash === chat.peerHash ? 'bg-entropy-primary/10 shadow-[inset_4px_0_0_0_#8b5cf6]' : ''}" onclick={() => selectChat(chat.peerHash)} onkeypress={(e) => e.key === 'Enter' && selectChat(chat.peerHash)} role="button" tabindex="0">
+        <div class="group/item mx-2 my-0.5 p-3 rounded-2xl hover:bg-entropy-surface/50 cursor-pointer transition relative {activeHash === chat.peerHash ? 'bg-entropy-primary/10 ring-1 ring-entropy-primary/20' : ''}" onclick={() => selectChat(chat.peerHash)} onkeypress={(e) => e.key === 'Enter' && selectChat(chat.peerHash)} role="button" tabindex="0">
                 <div class="flex items-center space-x-3">
                     <Avatar hash={chat.peerHash} alias={$userStore.nicknames[chat.peerHash]} />
                     
@@ -233,27 +236,26 @@
                                 {#if chat.isPinned}<LucidePin size={10} class="text-entropy-primary fill-entropy-primary" />{/if}
                             </div>
                             {#if chat.lastTimestamp}
-                                 <div class="text-[10px] font-medium text-entropy-text-secondary shrink-0">
+                                 <div class="text-[10px] font-medium text-entropy-text-secondary shrink-0 opacity-60">
                                     {new Date(chat.lastTimestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                  </div>
                             {/if}
                         </div>
-                        
                         <div class="flex items-center justify-between mt-0.5">
                             <div class="text-[12px] truncate pr-2 flex-1 {chat.isTyping && canSeeTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
                                 {#if chat.isTyping && canSeeTyping}
-                                    <span>typing...</span>
+                                    <span class="animate-pulse">typing...</span>
                                 {:else if chat.lastMsg}
                                     <div class="flex items-center space-x-1">
                                         {#if chat.lastIsMine}
-                                            {#if chat.lastStatus === 'sending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
-                                            {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-blue-600 dark:text-cyan-400" />
-                                            {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary" />
-                                            {:else}<LucideCheck size={13} class="text-entropy-text-secondary" />{/if}
+                                            {#if chat.lastStatus === 'sending' || chat.lastStatus === 'pending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
+                                            {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-cyan-300" />
+                                            {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary opacity-70" />
+                                            {:else}<LucideCheck size={13} class="text-entropy-text-secondary opacity-70" />{/if}
                                         {/if}
-                                        <span class="truncate">
+                                        <span class="truncate opacity-70">
                                             {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{$userStore.nicknames[chat.lastSenderHash || ''] || chat.lastSenderHash?.slice(0, 6) || ''}:</span>{/if}
-                                            {chat.lastMsg}
+                                            {resolveHashesInText(chat.lastMsg)}
                                         </span>
                                     </div>
                                 {/if}
@@ -304,7 +306,7 @@
                 <div class="w-1 h-2.5 bg-white/40 animate-pulse delay-150"></div>
                 <div class="w-1 h-2.5 bg-white/40 animate-pulse delay-300"></div>
             </div>
-            <span class="text-[9px] font-black uppercase tracking-widest">Listening to VN</span>
+            <span class="text-[9px] font-black uppercase tracking-widest">Playing Voice Note</span>
         </div>
         <button onclick={() => playingVoiceNoteId.set(null)} class="text-[8px] font-black uppercase tracking-tighter hover:underline bg-white/10 px-2 py-1 rounded-md">Stop</button>
     </div>
@@ -329,16 +331,16 @@
         <div class="p-3 px-4 flex items-center space-x-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {#if $userStore.connectionStatus === 'mining'}
                 <div class="w-3 h-3 border-2 border-entropy-primary/20 border-t-entropy-primary rounded-full animate-spin"></div>
-                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-entropy-primary tracking-tighter">Securing Link</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">SOLVING PROOF-OF-WORK...</span></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-entropy-primary tracking-tighter">Securing Identity</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">AUTHENTICATING...</span></div>
             {:else if $userStore.connectionStatus === 'connecting'}
                 <div class="w-3 h-3 border-2 border-entropy-text-dim/20 border-t-entropy-text-dim rounded-full animate-spin"></div>
-                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-entropy-text-secondary tracking-tighter">Connecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">ESTABLISHING RELAY...</span></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-entropy-text-secondary tracking-tighter">Connecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">ESTABLISHING CONNECTION...</span></div>
             {:else if $userStore.connectionStatus === 'reconnecting'}
                 <div class="w-3 h-3 border-2 border-yellow-500/20 border-t-yellow-500 rounded-full animate-spin"></div>
-                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-yellow-500 tracking-tighter">Reconnecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">RETRIEVING LINK IN {$userStore.reconnectTimer || 0}s...</span></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-yellow-500 tracking-tighter">Reconnecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">RETRYING IN {$userStore.reconnectTimer || 0}s...</span></div>
             {:else if $userStore.connectionStatus === 'jailed'}
                 <LucideWifiOff size={14} class="text-red-600 animate-pulse" />
-                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-600 tracking-tighter">Identity Jailed</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">SUSPENDED FOR REPEATED VIOLATIONS</span></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-600 tracking-tighter">Connection Jailed</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">TEMPORARILY SUSPENDED</span></div>
             {:else}
                 <LucideWifiOff size={14} class="text-red-500 animate-pulse" />
                 <div class="flex-1 flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-500 tracking-tighter">Offline</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">WAITING FOR NETWORK...</span></div>

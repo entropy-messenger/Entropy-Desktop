@@ -4,7 +4,6 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use base64::Engine;
-use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use tauri::{Manager, State};
 
@@ -123,9 +122,12 @@ pub async fn db_export_media(
     src_path: String,
     target_path: String,
 ) -> Result<(), String> {
-    let media_dir = get_media_dir(&app, &state)?;
+    let media_dir = std::fs::canonicalize(get_media_dir(&app, &state)?)
+        .map_err(|e| format!("Failed to resolve vault directory: {}", e))?;
+    let src_path_abs = std::fs::canonicalize(&src_path)
+        .map_err(|e| format!("Failed to resolve source path: {}", e))?;
 
-    if std::path::Path::new(&src_path).starts_with(&media_dir) {
+    if src_path_abs.starts_with(&media_dir) {
         let key_bytes = {
             let lock = state
                 .media_key
@@ -136,7 +138,7 @@ pub async fn db_export_media(
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
 
-        let mut file = std::fs::File::open(&src_path)
+        let mut file = std::fs::File::open(&src_path_abs)
             .map_err(|e| format!("Failed to open source file: {}", e))?;
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)
@@ -158,72 +160,16 @@ pub async fn db_export_media(
             .write_all(&plaintext)
             .map_err(|e| format!("Failed to write to target file: {}", e))?;
     } else {
-        // 🛡️ SECURITY: Refuse to copy files from outside the media vault
+        // Refuse to copy files from outside the media vault
         return Err("Export denied: Source path is outside the allowed media vault".into());
     }
 
     Ok(())
 }
 
-// --- CONSOLIDATED MEDIA ENCRYPTION (ON-DEMAND) ---
 
-#[tauri::command]
-pub fn crypto_sha256(data: Vec<u8>) -> Result<String, String> {
-    let mut hasher = Sha256::new();
-    hasher.update(&data);
-    Ok(hex::encode(hasher.finalize()))
-}
+// Logic for media encryption is handled in process_outgoing_media in outbox.rs
 
-#[tauri::command]
-pub fn crypto_encrypt_media(data: Vec<u8>) -> Result<serde_json::Value, String> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-    let ciphertext = cipher
-        .encrypt(&nonce, data.as_ref())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
-    combined.extend_from_slice(&nonce);
-    combined.extend_from_slice(&ciphertext);
-
-    let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
-
-    Ok(serde_json::json!({
-        "ciphertext": hex::encode(combined),
-        "key": key_b64
-    }))
-}
-
-#[tauri::command]
-pub async fn crypto_encrypt_file(path: String) -> Result<serde_json::Value, String> {
-    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).map_err(|e| e.to_string())?;
-
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-    let ciphertext = cipher
-        .encrypt(&nonce, data.as_ref())
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
-    combined.extend_from_slice(&nonce);
-    combined.extend_from_slice(&ciphertext);
-
-    let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
-
-    Ok(serde_json::json!({
-        "ciphertext": hex::encode(combined),
-        "key": key_b64,
-        "file_size": data.len()
-    }))
-}
-
-#[tauri::command]
 pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<Vec<u8>, String> {
     let combined = hex::decode(ciphertext_hex).map_err(|e| e.to_string())?;
     if combined.len() < 12 {
@@ -245,3 +191,4 @@ pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<V
 
     Ok(plaintext)
 }
+

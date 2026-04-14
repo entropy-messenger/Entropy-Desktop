@@ -12,6 +12,9 @@
   let isPlaying = $state(false);
   let currentTime = $state(0);
   let duration = $state(initialDuration);
+  $effect(() => {
+    if (initialDuration > 0) duration = initialDuration;
+  });
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
   let blobUrl = $state<string | null>(null);
@@ -24,17 +27,13 @@
       let arrayBuffer: ArrayBuffer;
       
       if (id === 'preview' && src) {
-        // 🧪 PREVIEW MODE: Load directly from the blob URL
-        blobUrl = src; // MUST set this so the <audio> element has a source!
+        blobUrl = src;
         const response = await fetch(src);
         arrayBuffer = await response.arrayBuffer();
       } else {
-        // 🛡️ SECURITY BYPASS: Use native bridge to load media bytes directly.
-        // fetch() blocks asset:// URLs due to CORS, but invoke() works anywhere.
         const bytes = await invoke<number[]>('vault_load_media', { id });
         arrayBuffer = new Uint8Array(bytes).buffer;
         
-        // Cleanup previous blob if exists
         if (blobUrl) URL.revokeObjectURL(blobUrl);
         blobUrl = URL.createObjectURL(new Blob([arrayBuffer]));
       }

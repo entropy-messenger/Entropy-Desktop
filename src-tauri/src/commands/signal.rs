@@ -37,10 +37,8 @@ pub(crate) async fn internal_signal_encrypt(
     let res: Result<CiphertextMessage, SignalProtocolError> = {
         let mut rng = StdRng::from_os_rng();
         
-        // 🦾 POST-QUANTUM ENFORCEMENT: Strictly require a PQXDH session
+        // Strictly require a PQXDH session
         if let Ok(Some(_)) = store.load_session(&address).await {
-            // Note: In this version of libsignal, we rely on the fact that internal_establish_session_logic
-            // only allows PQ bundles. If we need a deeper check, we would inspect SessionState.
             message_encrypt(
                 message.as_bytes(),
                 &address,

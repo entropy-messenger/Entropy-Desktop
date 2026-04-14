@@ -204,7 +204,7 @@
 
                     <div class="p-4 bg-entropy-primary/5 rounded-2xl flex items-start space-x-3">
                         <img src="/logo.png" alt="logo" class="w-8 h-8 object-contain shrink-0 opacity-40 ml-[-4px]" />
-                        <div><div class="text-[11px] font-bold text-entropy-text-primary uppercase tracking-widest mb-1">E2E Integrity</div><p class="text-[10px] text-entropy-text-secondary leading-snug">All privacy signals are encrypted.</p></div>
+                        <div><div class="text-[11px] font-bold text-entropy-text-primary uppercase tracking-widest mb-1">Vault Security</div><p class="text-[10px] text-entropy-text-secondary leading-snug">Privacy settings are local and encrypted.</p></div>
                     </div>
 
                     <div class="pt-4 space-y-3">
@@ -212,7 +212,7 @@
 
                         <div class="p-3 bg-entropy-surface-light rounded-2xl space-y-2">
                             <div class="text-[10px] font-bold text-red-500 uppercase tracking-wider">Panic Mode</div>
-                            <p class="text-[10px] text-entropy-text-secondary leading-snug">Set a fake password that, when entered at login, silently destroys all data.</p>
+                            <p class="text-[10px] text-entropy-text-secondary leading-snug">Set a secondary password that wiping all local data when entered at login.</p>
                             <button 
                                 onclick={async () => {
                                     const p1 = await showPrompt("Set a PANIC password (entering this at login WIPES account):", "", "Panic Password");
@@ -230,7 +230,7 @@
                          <button 
                             onclick={() => burnAccount()}
                             class="w-full py-3 bg-red-500/10 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition-all transform active:scale-[0.98] flex items-center justify-center space-x-2"
-                         ><LucideTrash2 size={14} /><span>Nuke Account (Forensic Burn)</span></button>
+                         ><LucideTrash2 size={14} /><span>Delete Account Permanently</span></button>
                     </div>
                 </div>
         {:else}

@@ -1,9 +1,9 @@
 [package]
 name = "entropy"
-version = "0.0.5"
+version = "0.0.6"
 description = "Sovereign, Decentralized Messaging Client"
-authors = ["Entropy Team <contact@entropy.network>"]
-edition = "2021"
+authors = ["Moyzy<moyzy@entropymessenger.com>"]
+edition = "2024"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

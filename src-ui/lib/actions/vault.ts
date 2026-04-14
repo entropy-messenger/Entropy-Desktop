@@ -2,11 +2,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { userStore } from '../stores/user';
 import { addToast } from '../stores/ui';
 
-/**
- * High-level orchestration for vault lifecycle events.
- * Bridges the UI to the native SQLCipher-backed database layer.
- */
-
 export const exportVault = async (targetPath: string) => {
     try {
         await invoke('export_database', { targetPath });
@@ -36,7 +31,6 @@ export const resetDatabase = async () => {
         await invoke('reset_database');
         localStorage.clear();
         addToast("Vault wiped. Entropy is restarting...", 'info');
-        // Native process will likely terminate/restart
         return true;
     } catch (e: any) {
         addToast("Reset failed: " + e.toString(), 'error');

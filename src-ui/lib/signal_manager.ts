@@ -4,17 +4,10 @@ import { toHex } from './crypto';
 import { vaultLoad, vaultSave } from './persistence';
 import { userStore } from './stores/user';
 
-/**
- * Orchestrates the Signal Protocol lifecycle, including key management,
- * E2EE session establishment, and media encryption.
- * Now manages integrity session tracking previously handled by SignalStore.
- */
+
 export class SignalManager {
     private userIdentity: string = "";
 
-    /**
-     * Initializes the native Signal state and retrieves the identity fingerprint.
-     */
     async init(): Promise<string | null> {
         try {
             await invoke<string>('signal_init');
@@ -31,7 +24,6 @@ export class SignalManager {
     }
 
     async ensureKeysUploaded() {
-        // Save current status to restore after sync
         const currentStatus = get(userStore).connectionStatus;
         try {
             userStore.update(s => ({ ...s, connectionStatus: 'mining' }));
@@ -94,10 +86,6 @@ export class SignalManager {
             throw e;
         }
     }
-
-    // --- SESSION CONTEXT HELPERS ---
-
-    // --- GROUP CONTEXT HELPERS ---
 }
 
 export const signalManager = new SignalManager();

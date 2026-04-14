@@ -32,7 +32,6 @@
   };
 </script>
 
-<!-- Thumbnail Trigger -->
 <div 
   class="{size} {rounded} flex items-center justify-center text-white font-bold {textSize} shadow-2xl overflow-hidden relative group/avatar transition-all duration-300 border border-white/5 ring-1 ring-white/10 {clickable ? 'cursor-zoom-in active:scale-95' : ''}"
   onclick={toggleLightbox}
@@ -40,13 +39,11 @@
   role="button"
   tabindex="0"
 >
-  <!-- Hybrid Tech-Art Background -->
   <div class="absolute inset-0 w-full h-full" style="background-color: {s.baseBg};"></div>
 
-  <!-- Deconstructed Sigil Layer -->
   <svg class="absolute inset-0 w-full h-full pointer-events-none transition-transform duration-1000 group-hover/avatar:scale-125" viewBox="-5 -5 110 110" preserveAspectRatio="none">
     <defs>
-        <filter id="artistic-spec">
+        <filter id="light-spec">
             <feSpecularLighting surfaceScale="2" specularConstant="1.2" specularExponent="20" lighting-color="white" result="spec">
                 <feDistantLight azimuth="45" elevation="60" />
             </feSpecularLighting>
@@ -84,11 +81,9 @@
     </g>
   </svg>
 
-  <!-- Final Aesthetic Overlay -->
   <div class="absolute inset-x-0 inset-y-0 bg-white/5 opacity-0 group-hover/avatar:opacity-100 transition-opacity backdrop-blur-[0.5px]"></div>
 </div>
 
-<!-- Full-Size Lightbox (Hybrid Art Screen) -->
 {#if showFullSize}
     <div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/95 backdrop-blur-3xl animate-in fade-in duration-500 px-6" onclick={toggleLightbox} onkeydown={(e) => e.key === 'Escape' && (showFullSize = false)} role="button" tabindex="0">
         <div class="absolute top-8 right-8 flex space-x-6 z-[10000]">
@@ -100,7 +95,7 @@
             <div class="w-[85vw] h-[85vw] sm:w-[540px] sm:h-[540px] rounded-[50px] overflow-hidden shadow-[0_0_150px_rgba(0,0,0,1)] border border-white/5 relative">
                  <div class="absolute inset-0" style="background-color: {s.baseBg};"></div>
                  <svg class="absolute inset-0 w-full h-full p-12" viewBox="-5 -5 110 110">
-                    <g filter="url(#artistic-spec)">
+                    <g filter="url(#light-spec)">
                         {#each s.shards as shard, i}
                             {#if shard.type === 'polygon'}
                                 <polygon 

@@ -23,16 +23,14 @@
     if (!(window as any).__TAURI_INTERNALS__) return;
     try {
       const currentVersion = await getVersion();
-      const response = await fetch('https://entropymessenger.com/update.json');
+      const response = await fetch('https://www.entropymessenger.com/update.json');
       if (!response.ok) return;
       const data = await response.json();
       
-      // Basic version comparison (check if different)
       if (data.version && data.version !== currentVersion) {
         updateAvailable = data.version;
       }
     } catch (e) {
-      // Silent fail
     }
   };
 
@@ -68,8 +66,6 @@
     }
   };
 
-
-
   onMount(async () => {
     if ((window as any).__TAURI_INTERNALS__) {
         await new Promise(r => setTimeout(r, 100));
@@ -84,7 +80,6 @@
       try {
         await checkNotificationPermission();
       } catch (e) {
-        // Notification permission failed
       }
     }
   });
@@ -129,7 +124,7 @@
       e.preventDefault();
   }
 
-    function handleKeydown(e: KeyboardEvent) {
+  function handleKeydown(e: KeyboardEvent) {
         
         if (
             e.key === 'F12' ||
@@ -144,17 +139,11 @@
         }
     }
 
-    /**
-     * Executes a destructive account wipe across both local storage and the native database.
-     */
     async function handleResetAccount() {
         if (!await showConfirm("This will PERMANENTLY delete your vault and all messages. Are you sure?", "Reset Identity")) return;
         await resetAccountAction();
     }
 
-    /**
-     * Serializes the current vault to a file on the host filesystem.
-     */
     async function handleExportVault() {
          try {
             if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -174,13 +163,9 @@
                 addToast("Export not supported in web mode.", 'warning');
             }
         } catch (e) {
-            // Export failed
         }
     }
 
-    /**
-     * Restores the application state from an external backup file.
-     */
     async function handleImportVault() {
         if (!await showConfirm("WARNING: Importing a backup will OVERWRITE any current data on this device. Continue?", "Restore Backup")) return;
 
@@ -202,7 +187,6 @@
                 addToast("Import not supported in web mode.", 'warning');
             }
         } catch (e) {
-            // Import failed
         }
     }
 </script>
@@ -388,7 +372,7 @@
         </div>
     {:else}
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
-            <Sidebar bind:showStarredMessages />
+            <Sidebar bind:showStarredMessages {updateAvailable} />
             <div class="flex-1 relative flex flex-col min-w-0">
                 <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
             

@@ -1,3 +1,14 @@
+//! Binary Reassembly and Inbound Message Processing
+//!
+//! This module handles the reassembly of fragmented binary payloads received from the network.
+//! Payloads are processed through an asynchronous media assembler that enforces:
+//! - Transfer ID (TID) isolation.
+//! - Strict index-to-total validation to prevent buffer overflows.
+//! - Resource limits (max 8000 fragments per transfer) to mitigate memory exhaustion.
+//!
+//! Once reassembled, payloads are passed to the Signal decryption pipeline where session 
+//! state is updated and messages are persisted to the encrypted local vault.
+
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::*;
 use crate::signal_store::SqliteSignalStore;
@@ -105,14 +116,14 @@ pub async fn process_incoming_binary(
         return Ok(());
     }
 
-    // 1. Extract Sender (Space-padded from server)
+    // extract sender hash
     let header_bytes = &trimmed[0..64];
     let header_str = String::from_utf8_lossy(header_bytes).to_string();
     let sender = override_sender
         .unwrap_or_else(|| header_str.trim().to_string())
         .to_lowercase();
 
-    // Discard binary if sender is blocked in contacts
+    // contact bridge filter
     if !sender.is_empty() {
         let lock = db_state
             .conn
@@ -143,7 +154,7 @@ pub async fn process_incoming_binary(
     let payload_data = &body_data[1..];
 
     if frame_type == 0x01 || frame_type == 0x02 || frame_type == 0x04 {
-        // Reassembly Flow: [4B TID] [4B Idx] [4B Total] [4B Length] [Data]
+        // binary reassembly: header format [TID: 4B][Idx: 4B][Total: 4B][Len: 4B]
         if payload_data.len() < 16 {
             return Err("Invalid binary fragment header (too short)".into());
         }
@@ -174,9 +185,9 @@ pub async fn process_incoming_binary(
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
         ) as usize;
 
-        // Security: Prevent Fragment Bombing (Limit to ~10MB reassembly)
+        // security: cap maximum fragments per transfer (approx 10MB)
         if total > 8000 {
-            return Err("Payload exceeds peer-to-peer reassembly limit".into());
+            return Err("Payload exceeds limit".into());
         }
 
         if raw_chunk_data.len() < chunk_len {
@@ -201,11 +212,9 @@ pub async fn process_incoming_binary(
                 }
             });
 
-            // Guard: reject fragments whose index is outside the committed total, and cap
-            // the HashMap at 7680 entries so a peer cannot bypass the limit by lying about
-            // total in the first fragment and sending additional out-of-range chunks.
+            // security: validate index range and cap hashmap entries per assembler
             if index >= entry.total || entry.chunks.len() >= 7680 {
-                return Err("Fragment index out of range".into());
+                return Err("Index out of range".into());
             }
 
             entry.chunks.insert(index, chunk_data.to_vec());
@@ -250,7 +259,7 @@ pub async fn process_incoming_binary(
                         let decrypted_json: serde_json::Value =
                             serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
 
-                        // Discard messages for groups the user has left
+                        // check group status
                         if let Some(p_type) = decrypted_json["type"].as_str() {
                             if p_type != "group_invite" {
                                 if let Some(gid) = decrypted_json["groupId"].as_str() {
@@ -320,7 +329,7 @@ pub async fn process_incoming_binary(
                                     "members": members.clone(),
                                 })).ok();
 
-                                // Process batch additions via 'newMembers' field
+                                // batch members
                                 let mut handled_me = false;
                                 if let Some(new_m_list) = decrypted_json["newMembers"].as_array() {
                                     for nm_val in new_m_list {
@@ -352,7 +361,7 @@ pub async fn process_incoming_binary(
                                     }
                                 }
 
-                                // Fallback: 'You were added'
+                                // fallback
                                 if !handled_me {
                                     let sys_id = uuid::Uuid::new_v4().to_string();
                                     let sys_ts = chrono::Utc::now().timestamp_millis();
@@ -846,7 +855,7 @@ pub async fn process_incoming_binary(
                                 app.emit("msg://added", final_json.clone())
                                     .map_err(|e| e.to_string())?;
 
-                                // ONLY for 1:1 chats. Groups stay 'single tick' (sent).
+                                // enforce 1:1 delivery receipts
                                 if !is_group {
                                     let receipt_payload = json!({ "type": "receipt", "msgIds": vec![msg_id], "status": "delivered" });
                                     if let Ok(encrypted) = internal_signal_encrypt(
@@ -873,12 +882,11 @@ pub async fn process_incoming_binary(
                         }
                     }
                     Err(e) => {
-                        // Decryption failed
                         return Err(e);
                     }
                 }
             } else if frame_type == 0x02 {
-                // Reassembled Media: Save to disk
+                // media reassembly
                 let db_state = app.state::<DbState>();
                 let link_key = format!("{}:{}", sender, transfer_id);
                 if let Ok(media_dir) = get_media_dir(&app, &db_state) {
@@ -891,7 +899,7 @@ pub async fn process_incoming_binary(
                     };
 
                     if let Some(m) = meta {
-                        // Decrypt using peer key and re-encrypt for local vault
+                        // vault encryption bridge
                         if let Ok(plaintext) =
                             crypto_decrypt_media(hex::encode(complete_data.clone()), m.key)
                         {
@@ -927,7 +935,7 @@ pub async fn process_incoming_binary(
             }
 
         } else {
-            // Fragment received, reassembly in progress
+            // active transfer progress
             app.emit(
                 "network-bin-progress",
                 json!({

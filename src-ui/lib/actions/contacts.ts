@@ -7,9 +7,6 @@ import type { PrivacySettings } from '../types';
 
 
 
-/**
- * Transmits current user profile (alias) to a specific peer.
- */
 export const broadcastProfile = async (peerHash: string) => {
     const state = get(userStore);
     if (!state.globalNickname) return;
@@ -28,7 +25,7 @@ export const sendTypingStatus = async (peerHash: string, isTyping: boolean) => {
     try {
         await invoke('send_typing_status', { peerHash, isTyping });
     } catch (e) {
-        // Failed to send typing status
+
     }
 };
 
@@ -60,7 +57,7 @@ export const setTrustLevel = async (peerHash: string, trustLevel: number) => {
             return { ...s, chats: { ...s.chats } };
         });
     } catch (e) {
-        // Failed to update trust level
+
     }
 };
 
@@ -86,7 +83,6 @@ export const setLocalNickname = (peerHash: string, nickname: string | null) => {
         if (nickname) {
             s.nicknames[peerHash] = nickname;
         } else {
-            // Revert to global if local is removed
             const global = s.chats[peerHash]?.globalNickname;
             if (global) s.nicknames[peerHash] = global;
             else delete s.nicknames[peerHash];
@@ -155,7 +151,6 @@ export const resolveIdentity = async (peerHash: string): Promise<string | null> 
 
             userStore.update(s => {
                 if (s.chats[peerHash]) s.chats[peerHash].globalNickname = name;
-                // Only update display cache if no local override
                 if (!s.chats[peerHash]?.localNickname) {
                     s.nicknames[peerHash] = name;
                 }
@@ -181,7 +176,6 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
             chat.localNickname = alias;
         }
 
-        // Update nicknames cache with priority
         const display = chat.localNickname || chat.globalNickname;
         if (display) s.nicknames[peerHash] = display;
 

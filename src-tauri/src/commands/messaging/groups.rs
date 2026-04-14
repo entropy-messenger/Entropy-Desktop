@@ -61,7 +61,7 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
             let db_state = app.state::<DbState>();
             internal_db_upsert_chat(&db_state, chat).await?;
 
-            // Seed for groups (legacy/decentralized compatible)
+            // group seed
             let dist_msg = hex::encode(rand::random::<[u8; 16]>());
             let invite = json!({
                 "type": "group_invite",
@@ -72,7 +72,7 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
                 "distribution": dist_msg
             });
 
-            // 📢 SYSTEM INDICATOR: 'You added...' for the adder
+            // adder status message
             for m in &all_members {
                 if m == &id_hash { continue; }
                 let sys_id = uuid::Uuid::new_v4().to_string();
@@ -94,7 +94,7 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
                 let _ = app.emit("msg://added", json!(sys_msg));
             }
 
-            // Multicast to all members (E2EE via Signal)
+            // multicast invite
             let invite_str = invite.to_string();
             for member in members {
                 if member == id_hash {
@@ -161,10 +161,10 @@ pub fn add_to_group(
                 return Err("Group reached its limit (max 16 members)".into());
             }
 
-            // Update DB
+            // commit members
             let _ = internal_db_save_members(&db_state, &group_id, all_members.clone()).await;
 
-            // Distribute bits
+            // member distribution
             let dist_msg = hex::encode(rand::random::<[u8; 16]>());
             let group_name = {
                 let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
@@ -174,7 +174,7 @@ pub fn add_to_group(
             let invite = json!({ "type": "group_invite", "groupId": group_id, "name": group_name, "members": &all_members, "newMembers": &new_members, "distribution": dist_msg });
             let update = json!({ "type": "group_update", "groupId": group_id, "members": &all_members, "newMembers": &new_members });
 
-            // 📢 SYSTEM INDICATOR: 'You added...' locally for the adder
+            // transition status message
             for m in &new_members {
                 if current_members.contains(m) {
                     continue;
@@ -202,13 +202,12 @@ pub fn add_to_group(
             let update_str = update.to_string();
 
             // Invite new ones
-            // Invite new ones
             for member in &new_members {
                 if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, member, invite_str.clone()).await {
                     let _ = internal_send_to_network(app.clone(), &state, Some(member.clone()), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
                 }
             }
-            // Update existing ones
+            // update existing members
             for member in &current_members {
                 if member == &id_hash || new_members.contains(member) { continue; }
                 if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, member, update_str.clone()).await {
@@ -216,7 +215,7 @@ pub fn add_to_group(
                 }
             }
 
-            // Trigger UI update
+            // trigger UI state sync
             let _ = app.emit("msg://group_update", json!({ "groupId": group_id, "members": all_members, "name": group_name }));
 
             Ok(())
@@ -257,7 +256,7 @@ pub fn update_group_name(app: AppHandle, group_id: String, new_name: String) -> 
                 }
             }
 
-            // Trigger UI update
+            // trigger UI state sync
             let _ = app.emit("msg://group_update", json!({ "groupId": group_id, "name": new_name, "members": members }));
 
             Ok(())
@@ -328,7 +327,7 @@ pub fn leave_group(app: AppHandle, group_id: String) -> Result<(), String> {
                 }
             }
 
-            // Remove locally
+            // local cleanup
             let lock = db_state
                 .conn
                 .lock()

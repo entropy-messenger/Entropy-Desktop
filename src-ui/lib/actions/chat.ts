@@ -22,10 +22,6 @@ export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
     }
 };
 
-/**
- * Outgoing message pipeline:
- * Orchestrates the flow from UI through native encryption and transmission.
- */
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
 
 export const sendMessage = async (destIdRaw: string, content: string) => {
@@ -103,13 +99,7 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
     }
 };
 
-/**
- * Persistence synchronization:
- * Automatically serializes and saves metadata whenever the store changes.
- * Debounced to 1000ms to prevent excessive disk I/O.
- */
 export const addMessage = async (peerHash: string, msg: Message) => {
-    // 1. Index attachments
     if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
         attachmentCache.set(msg.id, msg.attachment.data);
         await invoke('vault_save_media', { id: msg.id, data: msg.attachment.data }).catch(() => { });
@@ -117,7 +107,7 @@ export const addMessage = async (peerHash: string, msg: Message) => {
 
     let updatedChatMetadata: Chat | null = null;
 
-    // 2. Update Chat Metadata (Brain/Store)
+    // Update Chat Metadata
     let isNewChat = false;
     userStore.update(s => {
         if (!s.chats[peerHash]) {
@@ -160,7 +150,7 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         return { ...s, chats: { ...s.chats } };
     });
 
-    // 3. Update History (Transient Store) - Keep starred messages immune from slicing!
+    // Update History
     let needsSnapToPresent = false;
     messageStore.update(mStore => {
         const msgs = mStore[peerHash] || [];
@@ -195,7 +185,7 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         jumpToPresent(peerHash);
     }
 
-    // 4. Persistence & Notifications
+    // Persistence & Notifications
     if (updatedChatMetadata) {
         syncChatToDb(updatedChatMetadata);
         const s = get(userStore);
@@ -265,6 +255,7 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
                     if (chat) s.chats[peerHash] = { ...chat, unreadCount: 0 };
                     return { ...s, chats: { ...s.chats } };
                 });
+                invoke('db_reset_unread_count', { address: peerHash }).catch(() => { });
                 invoke('db_update_messages', { ids: finalIds, status: 'read' }).catch(() => { });
             }
         } catch (e) {

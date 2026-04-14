@@ -1,7 +1,6 @@
 
 /**
  * Represents an individual message in a conversation.
- * Handles both plain text and encrypted media attachments.
  */
 export interface Message {
     id: string;
@@ -38,9 +37,6 @@ export interface Message {
     };
 }
 
-/**
- * Security and visibility configurations for the local identity.
- */
 export interface PrivacySettings {
     readReceipts: boolean;
     typingStatus: 'everyone' | 'nobody';

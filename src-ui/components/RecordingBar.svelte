@@ -31,7 +31,6 @@
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         startTime = performance.now();
         
-        // 🧪 OPTIMIZATION: Use Web Audio for real-time visualization
         audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         analyser = audioContext.createAnalyser();
         const source = audioContext.createMediaStreamSource(stream);
@@ -43,14 +42,13 @@
              if (analyser) {
                  analyser.getByteFrequencyData(dataArray);
                  const avg = dataArray.reduce((p, c) => p + c, 0) / dataArray.length;
-                 currentVolume = avg / 255.0; // Normalize to 0-1 range for the visualizer
+                 currentVolume = avg / 255.0;
                  drawNativeWaveform();
                  animationFrame = requestAnimationFrame(updateVolume);
              }
         };
         updateVolume();
-
-        // 🎙️ OPUS ENCODING: Stick to Opus for optimal quality/size (WebM for Linux/Windows, Ogg for older Safari/macOS support)
+ 
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
             ? 'audio/webm;codecs=opus' 
             : 'audio/ogg;codecs=opus';

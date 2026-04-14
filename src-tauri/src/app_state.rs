@@ -1,3 +1,11 @@
+//! Synchronized Application State and Shared Resources
+//!
+//! This module defines the global state containers used across the Tauri command bridge.
+//! Current implementation utilizes thread-safe primitives (Mutex, Arc) to manage:
+//! - Persistent database connections (SQLCipher).
+//! - Active network handles and pacing channels.
+//! - Transient memory buffers for binary reassembly.
+
 use rusqlite::Connection;
 use std::sync::Mutex;
 use tokio::sync::mpsc;

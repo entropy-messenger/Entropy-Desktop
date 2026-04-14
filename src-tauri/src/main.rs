@@ -1,3 +1,13 @@
+//! Entropy Desktop Application Entry Point
+//!
+//! Orchestrates the initialization of global application state, command bridge 
+//! registration, and platform-specific window configurations.
+//!
+//! Features:
+//! - Multi-profile support via ENTROPY_PROFILE environment variable.
+//! - Hardened IPC bridge with 50+ registered commands.
+//! - Native tray integration and Linux-specific permission handling.
+
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
@@ -49,16 +59,9 @@ fn main() {
             commands::init_vault,
             commands::vault_save,
             commands::vault_load,
-            commands::crypto_sha256,
-            commands::crypto_encrypt_media,
-            commands::crypto_encrypt_file,
-            commands::crypto_decrypt_media,
             commands::connect_network,
             commands::disconnect_network,
-            commands::send_to_network,
-            commands::flush_outbox,
             commands::reset_database,
-            commands::crypto_mine_pow,
             commands::vault_exists,
             commands::export_database,
             commands::import_database,
@@ -71,20 +74,18 @@ fn main() {
             commands::vault_load_media,
             commands::vault_delete_media,
             commands::signal_sign_message,
-            commands::signal_get_peer_identity,
             commands::signal_set_peer_trust,
-            commands::signal_get_own_identity,
             commands::signal_get_identity_hash,
             commands::signal_get_fingerprint,
             commands::send_typing_status,
             commands::send_receipt,
             commands::send_profile_update,
             commands::open_file,
-            commands::db_save_message,
             commands::db_get_messages,
             commands::db_search_messages,
             commands::db_update_messages,
             commands::db_upsert_chat,
+            commands::db_reset_unread_count,
             commands::db_get_chats,
             commands::db_delete_chat,
             commands::db_get_contacts,
@@ -127,7 +128,7 @@ fn main() {
                     });
                 }
             }
-            // Setup tray and menu as before
+            // Tray and menu configuration
             let quit_i = MenuItem::with_id(app, "quit", "Quit Entropy", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;

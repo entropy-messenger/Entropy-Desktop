@@ -26,7 +26,23 @@ pub async fn export_database(
     let app_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let src_path = app_dir.join(&filename);
 
-    let file = std::fs::File::create(&target_path).map_err(|e| e.to_string())?;
+    let target_path_buf = std::path::PathBuf::from(&target_path);
+    
+    // Prevent overwriting critical system files/dotfiles
+    if let Some(target_dir) = target_path_buf.parent() {
+        if let Ok(abs_target) = std::fs::canonicalize(target_dir) {
+            let app_dir_canonical = std::fs::canonicalize(&app_dir).unwrap_or(app_dir.clone());
+            if abs_target == app_dir_canonical {
+                return Err("Cannot export directly into the application data directory".into());
+            }
+        }
+    }
+    
+    if target_path_buf.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+        return Err("Cannot export to a hidden file".into());
+    }
+
+    let file = std::fs::File::create(&target_path_buf).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(file);
     let options = FileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -38,7 +54,7 @@ pub async fn export_database(
         .map_err(|e| e.to_string())?;
     std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to stream DB to zip: {}", e))?;
 
-    // 🛡️ Include the unique salt in the backup
+    // Include the unique salt in the backup
     let salt_path = app_dir.join("vault.salt");
     if salt_path.exists() {
         let mut sf = std::fs::File::open(&salt_path).map_err(|e| e.to_string())?;
@@ -125,7 +141,22 @@ pub async fn import_database(
         std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
     }
 
-    let file = std::fs::File::open(&src_path).map_err(|e| e.to_string())?;
+    let src_path_buf = std::path::PathBuf::from(&src_path);
+    let canonical_src = std::fs::canonicalize(&src_path_buf)
+        .map_err(|e| format!("Invalid or blocked backup path: {}", e))?;
+
+    // Prevent importing from hidden files or internal app data
+    if canonical_src.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+        return Err("Cannot import from a hidden file".into());
+    }
+
+    if let Ok(abs_app_dir) = std::fs::canonicalize(&app_dir) {
+        if canonical_src.starts_with(&abs_app_dir) {
+             return Err("Cannot import from within the application data directory".into());
+        }
+    }
+
+    let file = std::fs::File::open(&canonical_src).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
     for i in 0..zip.len() {
@@ -133,12 +164,12 @@ pub async fn import_database(
         
         let mut name = file.name().to_string();
         
-        // 🛡️ SECURITY: Prevent Zip Slip (Path Traversal)
+        // Prevent Zip Slip (Path Traversal)
         if name.contains("..") || name.starts_with('/') || name.contains(':') {
             continue; // Skip dangerous entries
         }
 
-        // 🔄 NORMALIZE: Ensure backups from other profiles map to the ACTIVE profile
+        // Ensure backups from other profiles map to the ACTIVE profile
         if name.starts_with("entropy") && name.ends_with(".db") {
             name = filename.clone();
         } else if name.starts_with("media") {

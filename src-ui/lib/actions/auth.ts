@@ -9,14 +9,8 @@ import { initVault, vaultLoad } from '../persistence';
 import { loadStarredMessages } from './chat';
 import type { Chat } from '../types';
 
-/**
- * Handles application-level authentication, identity lifecycle, and vault persistence.
- */
 let isAuthInProgress = false;
 
-/**
- * Initializes the application by unlocking the encrypted vault and starting key managers.
- */
 export const initApp = async (password: string) => {
     userStore.update(s => ({ ...s, authError: null }));
     try {
@@ -44,7 +38,7 @@ export const initApp = async (password: string) => {
             proxyUrl: ''
         };
 
-        // 1. Load Global Metadata (Settings) from KV Store
+        // Load Global Metadata
         const savedMeta = await vaultLoad(`entropy_meta_${idHash}`);
         if (savedMeta) {
             try {
@@ -52,27 +46,25 @@ export const initApp = async (password: string) => {
                 globalNickname = meta.globalNickname || meta.myAlias || null;
                 privacySettings = meta.privacySettings || privacySettings;
             } catch (e) {
-                // Failed to parse vault metadata
+                // Parse failed
             }
         }
 
-        // 2. Load relational Chat/Contact objects
+        // Load relational data
         let nicknames: Record<string, string> = {};
         try {
             const dbContacts = await invoke<any[]>('db_get_contacts');
             blockedHashes = dbContacts.filter(c => c.isBlocked).map(c => c.hash);
             dbContacts.forEach(c => {
-                // Priority: Local Alias > Global Nickname
                 const name = c.alias || c.globalNickname;
                 if (name) nicknames[c.hash] = name;
             });
 
             const dbChats = await invoke<any[]>('db_get_chats');
             for (const c of dbChats) {
-                // Also pull nicknames from chat objects if not already in contacts
                 const name = c.alias || c.globalNickname;
                 if (name && !nicknames[c.address]) nicknames[c.address] = name;
-                
+
                 chats[c.address] = {
                     peerHash: c.address,
                     isGroup: c.is_group || c.isGroup || false,
@@ -95,7 +87,7 @@ export const initApp = async (password: string) => {
                 };
             }
         } catch (e) {
-            // Failed to load chats/contacts from DB
+            // DB load failed
         }
 
         userStore.update(s => ({
@@ -108,19 +100,14 @@ export const initApp = async (password: string) => {
             nicknames,
             authError: null
         }));
-        
-        // 3. Prime the Starred Messages Cache
-        loadStarredMessages().catch(() => {});
-        
+
+        loadStarredMessages().catch(() => { });
         network.connect();
     } else {
         userStore.update(s => ({ ...s, authError: "Identity not found. please create one." }));
     }
 };
 
-/**
- * Generates a new cryptographic identity and initializes a fresh encrypted vault.
- */
 export const createIdentity = async (password: string) => {
     try {
         await initVault(password);
@@ -137,54 +124,30 @@ export const createIdentity = async (password: string) => {
 
     if (idHash) {
         userStore.update(s => ({ ...s, identityHash: idHash }));
-
-        // Status and handshake are now managed by native layer
         network.connect();
     } else {
         throw new Error("Identity generation returned null.");
     }
 };
 
-/**
- * Authenticates the local identity with the relay server.
- * Uses persistent session tokens if available, falling back to SHA-256 Proof-of-Work mining.
- */
-// Manual 'authenticate' function removed. 
-// Authentication is now handled autonomously by Rust within 'connect_network'.
-
-
-/**
- * Permanently purges the local vault and sends a signed burn request to the relay.
- * Requires solving a high-difficulty PoW to authorize the network-wide erasure.
- */
 export const burnAccount = async () => {
     if (!await showConfirm("TOTAL SCORCHED EARTH: This will permanently purge your local database and attempt to wipe your network presence. This CANNOT be undone. Are you sure?", "Nuclear Burn")) return;
 
     const state = get(userStore);
-    
-    // 1. Silent Background server burn
+
     if (state.identityHash) {
-        invoke('burn_account').catch(() => {});
+        invoke('burn_account').catch(() => { });
     }
 
-    // 2. Immediate Local Wipe
     try {
         localStorage.clear();
-        
-        // 1s buffer for the network packet
         await new Promise(r => setTimeout(r, 1000));
-        
         await invoke('reset_database');
     } catch (err) {
-        // Burn failed
+        // Reset failed
     }
 }
 
-
-
-/**
- * Exports the encrypted database file to the host system.
- */
 export const exportVault = async () => {
     try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
@@ -209,9 +172,6 @@ export const exportVault = async () => {
     }
 };
 
-/**
- * Imports an encrypted backup, overwriting the current local state.
- */
 export const importVault = async () => {
     if (!await showConfirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?", "Restore Backup")) return;
 

@@ -1,3 +1,14 @@
+//! Outbound Message Pipeline and Metadata Processing
+//!
+//! This module orchestrates the processing of outbound communications, including:
+//! - Local shadow persistence (optimistic UI updates).
+//! - Media asset pre-processing (encryption and vaulting).
+//! - Signal session resolution and ciphertext generation (E2EE).
+//! - Handover to the Transit Layer for fragmentation and network dispatch.
+//!
+//! All outgoing payloads are subjected to path canonicalization and vault boundary
+//! checks to prevent unauthorized file system access.
+
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
     get_media_dir, internal_db_save_message, internal_send_to_network, internal_signal_encrypt,
@@ -85,7 +96,6 @@ pub fn process_outgoing_text(
                 id_lock.clone().ok_or("Not authenticated")?
             };
 
-            // Save message locally with 'sending' status
             let db_msg = DbMessage {
                 id: msg_id.clone(),
                 chat_address: payload.recipient.clone(),
@@ -128,7 +138,7 @@ pub fn process_outgoing_text(
                 "isGroup": false,
             });
 
-            // Encrypt for the single recipient
+            // session encryption
             let ciphertext_obj = internal_signal_encrypt(
                 app.clone(),
                 &net_state,
@@ -158,7 +168,7 @@ pub fn process_outgoing_text(
             )
             .await;
 
-            // Mark as 'sent' locally
+            // transition state
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {
@@ -198,13 +208,24 @@ pub fn process_outgoing_media(
                 .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
 
-            // Retrieve raw data ensuring adherence to the 10MB size limit
+            // fetch data and validate
             let data = if let Some(p) = &payload.file_path {
-                let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
+                let path_buf = std::path::PathBuf::from(p);
+                // security: canonicalize and validate target path
+                let canonical_path = std::fs::canonicalize(&path_buf)
+                    .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
+
+                // security: restrict access to hidden or system directories
+                if canonical_path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) ||
+                   canonical_path.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != ".") {
+                    return Err("Access denied: Cannot send hidden files or system configuration".into());
+                }
+
+                let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
                 if metadata.len() > 10 * 1024 * 1024 {
                     return Err("File too large. Maximum size is 10MB.".to_string());
                 }
-                let mut file = std::fs::File::open(p).map_err(|e| e.to_string())?;
+                let mut file = std::fs::File::open(&canonical_path).map_err(|e| e.to_string())?;
                 let mut d = Vec::new();
                 file.read_to_end(&mut d).map_err(|e| e.to_string())?;
                 d
@@ -217,7 +238,7 @@ pub fn process_outgoing_media(
                 return Err("No data provided".into());
             };
 
-            // Encrypt payload for peer using AES-GCM-256
+            // aes encryption
             let key = Aes256Gcm::generate_key(&mut OsRng);
             let cipher = Aes256Gcm::new(&key);
             let (nonce, ciphertext) = {
@@ -233,7 +254,7 @@ pub fn process_outgoing_media(
             combined.extend_from_slice(&ciphertext);
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
 
-            // Persist to local vault using internal media key
+            // persist to vault
             let local_file_path = {
                 let local_key_bytes = {
                     let lock = db_state.media_key.lock().map_err(|_| "State poisoned")?;
@@ -256,7 +277,7 @@ pub fn process_outgoing_media(
             };
             let saved_vault_path = local_file_path;
 
-            // Construct Signal protocol layer payload
+            // protocol envelope
             let transfer_id: u32 = rand::random();
             let bundle = json!({
                 "type": "signal_media",
@@ -279,7 +300,7 @@ pub fn process_outgoing_media(
                 "replyTo": payload.reply_to,
             });
 
-            // Save message metadata to local database
+            // commit metadata
             let own_id = net_state
                 .identity_hash
                 .lock()
@@ -328,7 +349,7 @@ pub fn process_outgoing_media(
             app.emit("msg://added", final_json.clone())
                 .map_err(|e| e.to_string())?;
 
-            // Encrypt metadata via Signal protocol and dispatch
+            // session bridge
             let encrypted = internal_signal_encrypt(
                 app.clone(),
                 &net_state,
@@ -372,7 +393,7 @@ pub fn process_outgoing_media(
             )
             .await;
 
-            // Mark as 'sent' locally
+            // transition state
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {
@@ -400,7 +421,7 @@ pub fn send_typing_status(
     peer_hash: String,
     is_typing: bool,
 ) -> Result<(), String> {
-    // Typing indicators are only for 1:1 chats
+    // restrict to 1:1
     {
         let lock = db_state
             .conn
@@ -459,8 +480,7 @@ pub fn send_receipt(
     msg_ids: Vec<String>,
     status: String,
 ) -> Result<(), String> {
-    // Receipts are currently only supported for 1:1 chats. 
-    // Groups stay at sent status.
+    // enforce 1:1 delivery receipts
     {
         let lock = db_state
             .conn
@@ -524,8 +544,7 @@ pub fn send_profile_update(
         if let Ok(encrypted) =
             internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
         {
-            // Dispatch persistent profile update using frame type 0x01
-            // This ensures the nickname is stored on the relay if the contact is offline.
+            // dispatch persistent update
             let payload_bytes = encrypted.to_string().into_bytes();
             let _ = internal_send_to_network(
                 app.clone(),
@@ -639,8 +658,6 @@ pub fn process_outgoing_group_text(
                 }
             }
 
-            // Persist 'sent' to DB BEFORE emitting to UI to prevent the frontend's
-            // syncChatToDb from racing and overwriting chats.last_status with 'sending'.
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {

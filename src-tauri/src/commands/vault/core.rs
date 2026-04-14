@@ -152,7 +152,7 @@ const MIGRATIONS: &[&str] = &[
 
     CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE OF status ON messages BEGIN
         UPDATE chats SET last_status = new.status
-        WHERE address = new.chat_address
+        WHERE LOWER(address) = LOWER(new.chat_address)
         AND last_timestamp = new.timestamp;
     END;
 

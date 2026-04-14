@@ -4,10 +4,6 @@ import { get } from 'svelte/store';
 import { userStore } from './stores/user';
 import { addMessage, updateMessageStatusUI, updateSingleMessageStatusUI, handleTypingSignal } from './actions/chat';
 
-/**
- * Handles communication with the underlying Rust network node via Tauri's bridge.
- * Manage WebSocket lifecycle, message multiplexing, and binary/JSON serialization.
- */
 export class NetworkLayer {
     private url: string = "";
     private isAuthenticated = false;
@@ -15,10 +11,8 @@ export class NetworkLayer {
     private isManualDisconnect = false;
     private lastWarningTime: Map<string, number> = new Map();
 
-
-
     constructor() {
-
+        // bridge native tauri events to svelte state
         listen('network-status', (event) => {
             const payload = event.payload as any;
             const status = typeof payload === 'string' ? payload : payload.status;
@@ -43,7 +37,6 @@ export class NetworkLayer {
         listen('network-warning', async (event) => {
             const { type } = event.payload as any;
 
-            // 10-second debounce per warning type
             const now = Date.now();
             const last = this.lastWarningTime.get(type) || 0;
             if (now - last < 10000) return;
@@ -61,22 +54,25 @@ export class NetworkLayer {
             }
         });
 
-        // Listen for authoritative message creation from RustW
         listen('msg://added', (event) => {
             const m = event.payload as any;
             const state = get(userStore);
 
+            const safeParse = (str: string) => {
+                try { return str ? JSON.parse(str) : undefined; } 
+                catch (e) { return undefined; }
+            };
+
             const uiMsg: any = {
                 ...m,
                 isMine: m.senderHash === state.identityHash,
-                attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
-                replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
+                attachment: safeParse(m.attachmentJson),
+                replyTo: safeParse(m.replyToJson)
             };
 
             addMessage(m.chatAddress, uiMsg);
         });
 
-        // Listen for message status updates (Confirmed Delivery & Read Receipts)
         listen('msg://status', (event) => {
             const payload = event.payload as any;
             const chatAddress = payload.chatAddress || payload.chat_address;
@@ -92,9 +88,6 @@ export class NetworkLayer {
             handleTypingSignal(sender, payload);
         });
 
-
-
-        // Group Handlers
         listen('msg://invite', (event) => {
             const { groupId, name, members, lastMsg, lastTimestamp } = event.payload as any;
             const uniqueMembers = Array.from(new Set(((members || []) as string[]).map(m => m.toLowerCase())));
@@ -154,31 +147,23 @@ export class NetworkLayer {
                 if (s.chats[hash]) {
                     s.chats[hash] = { ...s.chats[hash], globalNickname: alias };
                 }
-
-                // Update the nickname cache for group-wide resolution
                 if (!s.chats[hash]?.localNickname || s.chats[hash]?.isGroup) {
                     s.nicknames[hash] = alias;
                 }
-
                 return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
             });
         });
-
     }
 
     private connectingPromise: Promise<void> | null = null;
 
-    /**
-     * Establishes a connection to the relay server.
-     * Integrates routing mode preferences (Tor/Proxy) into the bridge command.
-     */
     async connect() {
         if (this.isConnected) return;
         if (this.connectingPromise) return this.connectingPromise;
 
         this.connectingPromise = (async () => {
+            // resolve proxy configuration based on privacy settings
             try {
-
                 let proxyUrl = undefined;
                 const state = get(userStore) as any;
 
@@ -191,19 +176,14 @@ export class NetworkLayer {
                     }
                 }
 
-                await invoke('connect_network', {
-                    proxyUrl
-                });
-                // Note: isConnected will be set by the 'network-status' event listener
+                await invoke('connect_network', { proxyUrl });
                 this.onConnect();
             } catch (e: any) {
                 const errorStr = e.toString();
-
                 if (errorStr.includes("Proxy connection failed")) {
                     const { addToast } = await import('./stores/ui');
                     addToast("Privacy routing failed. Is Tor/Proxy running?", 'error');
                 }
-
             } finally {
                 this.connectingPromise = null;
             }
@@ -212,9 +192,6 @@ export class NetworkLayer {
         return this.connectingPromise;
     }
 
-    /**
-     * Forcefully terminates the active connection and clears background tasks.
-     */
     async disconnect() {
         this.isManualDisconnect = true;
         try {
@@ -233,34 +210,23 @@ export class NetworkLayer {
         }));
     }
 
-    /**
-     * Cycles the connection to apply new routing/proxy settings.
-     */
     async reconnect() {
         await this.disconnect();
-        // Shift context to allow native cleanup
         await new Promise(r => setTimeout(r, 600));
         return this.connect();
     }
 
-
     private onConnect() {
-
-
         userStore.update((s: any) => ({ ...s, isConnected: true }));
-
     }
 
     private async onAuthenticated() {
         this.isAuthenticated = true;
-
-        // 1. Sync connection status
         userStore.update((s: any) => ({
             ...s,
             connectionStatus: 'connected',
             isSynced: true
         }));
-
     }
 
     private onAuthFailed() {
@@ -281,7 +247,6 @@ export class NetworkLayer {
     }
 
     private onDisconnect() {
-
         if (this.isManualDisconnect) {
             this.isManualDisconnect = false;
             this.isConnected = false;
@@ -290,25 +255,16 @@ export class NetworkLayer {
             return;
         }
 
-
-        const wasAuthenticated = this.isAuthenticated;
         this.isConnected = false;
         this.isAuthenticated = false;
 
         userStore.update((s: any) => {
-            const newState = {
+            return {
                 ...s,
                 isConnected: false,
                 connectionStatus: 'disconnected'
             };
-            if (!wasAuthenticated) {
-                // Re-auth required on next connect
-            }
-            return newState;
         });
-
     }
-
 }
-
 export const network = new NetworkLayer();

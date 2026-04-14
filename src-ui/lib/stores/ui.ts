@@ -1,6 +1,3 @@
-/**
- * Manages global UI notifications and asynchronous modal dialogs.
- */
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 
 export interface Toast {
@@ -23,19 +20,10 @@ export interface ModalOptions {
 
 import { writable } from 'svelte/store';
 
-/** 
- * Collection of active notifications. 
- */
 export const toasts = writable<Toast[]>([]);
 
-/** 
- * Current active modal configuration. 
- */
 export const modal = writable<ModalOptions | null>(null);
 
-/**
- * Dispatches a new toast notification.
- */
 export const addToast = (message: string, type: ToastType = 'info', duration = 3000) => {
     const id = Math.random().toString(36).substring(2, 9);
     toasts.update(all => [{ id, message, type, duration }, ...all]);
@@ -49,9 +37,6 @@ export const removeToast = (id: string) => {
     toasts.update(all => all.filter(t => t.id !== id));
 };
 
-/**
- * Triggers a confirmation dialog and returns a promise resolving to the user's choice.
- */
 export const showConfirm = (message: string, title = 'Confirm'): Promise<boolean> => {
     return new Promise((resolve) => {
         modal.set({
@@ -70,9 +55,6 @@ export const showConfirm = (message: string, title = 'Confirm'): Promise<boolean
     });
 };
 
-/**
- * Triggers an input prompt and returns a promise resolving to the user's input or null if cancelled.
- */
 export const showPrompt = (message: string, defaultValue = '', title = 'Input'): Promise<string | null> => {
     return new Promise((resolve) => {
         modal.set({

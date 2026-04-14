@@ -4,10 +4,6 @@ use rusqlite::params;
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
-#[tauri::command]
-pub async fn db_save_message(state: State<'_, DbState>, msg: DbMessage) -> Result<(), String> {
-    internal_db_save_message(&state, msg).await
-}
 
 #[tauri::command]
 pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
@@ -416,6 +412,25 @@ pub async fn db_set_chat_pinned(
 }
 
 #[tauri::command]
+pub async fn db_reset_unread_count(
+    state: State<'_, DbState>,
+    address: String,
+) -> Result<(), String> {
+    let lock = state
+        .conn
+        .lock()
+        .map_err(|_| "Database connection lock poisoned")?;
+    let conn = lock.as_ref().ok_or("Database not initialized")?;
+
+    conn.execute(
+        "UPDATE chats SET unread_count = 0 WHERE address = ?1",
+        params![address],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn db_delete_chat(
     app: AppHandle,
     state: State<'_, DbState>,
@@ -570,7 +585,11 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
             last_msg = excluded.last_msg,
             last_timestamp = excluded.last_timestamp,
             last_sender_hash = excluded.last_sender_hash,
-            last_status = excluded.last_status,
+            last_status = CASE 
+                WHEN excluded.last_status = 'sending' OR excluded.last_status = 'pending' THEN
+                    CASE WHEN chats.last_status IN ('sent', 'delivered', 'read') THEN chats.last_status ELSE excluded.last_status END
+                ELSE excluded.last_status
+            END,
             unread_count = excluded.unread_count,
             is_archived = excluded.is_archived,
             is_pinned = excluded.is_pinned,

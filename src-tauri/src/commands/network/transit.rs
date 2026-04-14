@@ -1,3 +1,13 @@
+//! Transit Layer: Fragmentation and Network Dispatch
+//!
+//! The Transit Layer is responsible for the reliable delivery of binary payloads 
+//! across the peer-to-peer network. Core responsibilities:
+//! - Fragmentation: Dividing large E2EE payloads into 1319-byte data chunks.
+//! - Network Framing: Encapsulating fragments with 64-byte padded recipient headers.
+//! - Padding: Enforcing a uniform 1400-byte packet size to neutralize side-channel analysis.
+//! - Offline Queuing: Persisting fragments in the local DB for delivery during network events.
+//! - Dummy Pacing: Intermittent injection of dummy traffic to mask usage patterns.
+
 use super::pacing::{send_paced_json, PACKET_SIZE};
 use crate::app_state::{DbState, NetworkState, PacedMessage};
 use serde_json::json;
@@ -5,31 +15,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 
-#[tauri::command]
-pub async fn send_to_network(
-    app: AppHandle,
-    state: State<'_, NetworkState>,
-    routing_hash: Option<String>,
-    msg_id: Option<String>,
-    msg: Option<String>,
-    data: Option<Vec<u8>>,
-    is_binary: bool,
-    is_media: bool,
-) -> Result<(), String> {
-    internal_send_to_network(
-        app,
-        &state,
-        routing_hash,
-        msg_id,
-        msg,
-        data,
-        is_binary,
-        is_media,
-        None,
-        false,
-    )
-    .await
-}
 
 pub async fn internal_send_to_network(
     app: AppHandle,
@@ -70,6 +55,7 @@ pub async fn internal_send_to_network(
             };
 
             let total_len = data_bytes.len();
+            // fragmentation: split binary payload into manageable chunks for pacing
             let chunk_capacity = 1319;
             let transfer_id: u32 = transfer_id_override.unwrap_or_else(rand::random);
             let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
@@ -140,6 +126,7 @@ pub async fn internal_send_to_network(
         }
         Ok(())
     } else {
+        // offline handling: queue fragments in database for delayed delivery
         if is_binary {
             let db_lock = app.state::<DbState>();
             let conn_lock = db_lock
@@ -201,7 +188,6 @@ pub async fn internal_send_to_network(
     }
 }
 
-#[tauri::command]
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
     let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
     if let Some(tx) = &*sender_lock {
