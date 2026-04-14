@@ -62,9 +62,9 @@ opt-level = 3 # Fast crypto even in debug mode
 [profile.release]
 opt-level = 3 # Maximize execution speed
  incremental = false # Full optimization for release
-panic = "abort" # Reduce binary size and remove stack trace info
-codegen-units = 1 # Better optimizations
-lto = true # Link Time Optimization across all crates
+panic = "unwind" # Use unwind instead of abort to help preserve metadata
+codegen-units = 16 # Faster builds and less aggressive symbol merging
+lto = false # Disable LTO to prevent the compiler from stripping Tauri metadata
 strip = false # Keep symbols for better stack traces and open-source auditability
 
 
