@@ -77,8 +77,8 @@ jobs:
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
           releaseBody: "See the assets below for the latest Entropy binaries. Verified & Signed."
-          releaseDraft: false
-          prerelease: false
+          releaseDraft: true
+          prerelease: true
           args: ${{ matrix.args }}
 
   finalize-release:
