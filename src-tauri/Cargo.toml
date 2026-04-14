@@ -64,7 +64,7 @@ opt-level = 3
 incremental = false 
 panic = "abort" 
 codegen-units = 1 
-lto = "fat" 
+lto = true 
 strip = false 
 
 
