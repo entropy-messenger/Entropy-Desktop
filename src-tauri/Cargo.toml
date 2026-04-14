@@ -61,10 +61,10 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3 
- incremental = false 
-panic = "unwind" 
-codegen-units = 16 
-lto = false 
-strip = false 
+incremental = false 
+panic = "abort" 
+codegen-units = 1 
+lto = "fat" 
+strip = true 
 
 
