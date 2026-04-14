@@ -27,7 +27,17 @@
       if (!response.ok) return;
       const data = await response.json();
       
-      if (data.version && data.version !== currentVersion) {
+      const isNewer = (latest: string, current: string) => {
+          const l = latest.replace(/^v/, '').split('.').map(num => parseInt(num) || 0);
+          const c = current.replace(/^v/, '').split('.').map(num => parseInt(num) || 0);
+          for (let i = 0; i < Math.max(l.length, c.length); i++) {
+              if ((l[i] || 0) > (c[i] || 0)) return true;
+              if ((l[i] || 0) < (c[i] || 0)) return false;
+          }
+          return false;
+      };
+
+      if (data.version && isNewer(data.version, currentVersion)) {
         updateAvailable = data.version;
       }
     } catch (e) {
