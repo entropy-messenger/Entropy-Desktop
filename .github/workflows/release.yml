@@ -69,16 +69,14 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         id: tauri_build
         env:
-            GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
             TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          owner: entropy-messenger
-          repo: entropydesktop-releases
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
           releaseBody: "See the assets below for the latest Entropy binaries. Verified & Signed."
-          releaseDraft: true
-          prerelease: true
+          releaseDraft: false
+          prerelease: false
           args: ${{ matrix.args }}
 
   finalize-release:
@@ -89,18 +87,13 @@ jobs:
     steps:
       - name: Generate checksums.txt from release assets
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Get the latest release from the releases repo
+          # 1. Get the latest release from THIS repo
           RELEASE_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            https://api.github.com/repos/entropy-messenger/entropydesktop-releases/releases/latest)
+            https://api.github.com/repos/${{ github.repository }}/releases/latest)
           
-          # 2. Extract asset names and sizes (optional info)
-          echo "📦 Processing assets for unified checksums.txt..."
-          
-          # 3. Use the GitHub API to get the list of assets and their download URLs
-          # Note: We don't need to download the whole binary if we just want to verify.
-          # However, to be 100% accurate as requested, we'll pull the assets.
+          # ... rest of script ...
           mkdir assets
           cd assets
           
@@ -110,15 +103,13 @@ jobs:
             curl -L -O -s "$url"
           done
           
-          # 4. Generate the checksums file
           sha256sum * > ../checksums.txt
           cd ..
           
-          # 5. Upload the checksums.txt to the release
           RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
           echo "📤 Uploading checksums.txt to Release ID: $RELEASE_ID"
           
           curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
                -H "Content-Type: text/plain" \
                --data-binary @checksums.txt \
-               "https://uploads.github.com/repos/entropy-messenger/entropydesktop-releases/releases/$RELEASE_ID/assets?name=checksums.txt"
+               "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=checksums.txt"
