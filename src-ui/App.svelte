@@ -19,29 +19,31 @@
 
   let updateAvailable = $state<string | null>(null);
 
-  const checkManualUpdate = async () => {
+  let currentUpdate = $state<any>(null);
+  const checkNativeUpdate = async () => {
     if (!(window as any).__TAURI_INTERNALS__) return;
     try {
-      const currentVersion = await getVersion();
-      const response = await fetch('https://www.entropymessenger.com/update.json');
-      if (!response.ok) return;
-      const data = await response.json();
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
       
-      const isNewer = (latest: string, current: string) => {
-          const l = latest.replace(/^v/, '').split('.').map(num => parseInt(num) || 0);
-          const c = current.replace(/^v/, '').split('.').map(num => parseInt(num) || 0);
-          for (let i = 0; i < Math.max(l.length, c.length); i++) {
-              if ((l[i] || 0) > (c[i] || 0)) return true;
-              if ((l[i] || 0) < (c[i] || 0)) return false;
-          }
-          return false;
-      };
-
-      if (data.version && isNewer(data.version, currentVersion)) {
-        updateAvailable = data.version;
+      if (update && update.available) {
+        updateAvailable = update.version;
+        currentUpdate = update;
       }
     } catch (e) {
     }
+  };
+
+  const handleUpdateClick = async () => {
+      if (!currentUpdate) return;
+      if (await showConfirm(`Download and install Entropy v${currentUpdate.version} now?`, "System Update")) {
+          try {
+              addToast("Downloading update...", "info");
+              await currentUpdate.downloadAndInstall();
+          } catch (e) {
+              addToast("Update failed: " + e, "error");
+          }
+      }
   };
 
   
@@ -80,7 +82,7 @@
     if ((window as any).__TAURI_INTERNALS__) {
         await new Promise(r => setTimeout(r, 100));
         
-        checkManualUpdate();
+        checkNativeUpdate();
     }
     
     isInitializing = false;
@@ -382,7 +384,11 @@
         </div>
     {:else}
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
-            <Sidebar bind:showStarredMessages {updateAvailable} />
+            <Sidebar 
+                bind:showStarredMessages 
+                {updateAvailable} 
+                onUpdateClick={handleUpdateClick} 
+            />
             <div class="flex-1 relative flex flex-col min-w-0">
                 <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
             

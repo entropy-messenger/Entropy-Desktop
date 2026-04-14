@@ -36,6 +36,8 @@
         "dialog:allow-open",
         "core:path:default",
         "default",
+        "updater:allow-check",
+        "updater:allow-install",
         "allow-commands"
     ]
 }

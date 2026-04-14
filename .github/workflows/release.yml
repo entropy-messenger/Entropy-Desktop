@@ -2,6 +2,8 @@ name: "Publish Release"
 
 on:
   push:
+    branches:
+      - updatetest
     tags:
       - 'v*'
 
@@ -70,14 +72,15 @@ jobs:
         id: tauri_build
         env:
             GITHUB_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+            TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           owner: entropy-messenger
           repo: entropydesktop-releases
           tagName: v__VERSION__
           releaseName: "Entropy v__VERSION__"
           releaseBody: "See the assets below for the latest Entropy binaries. Verified & Signed."
-          releaseDraft: false
-          prerelease: false
+          releaseDraft: true
+          prerelease: true
           args: ${{ matrix.args }}
 
   finalize-release:

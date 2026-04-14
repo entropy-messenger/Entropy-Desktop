@@ -50,7 +50,8 @@
   
   let { 
       showStarredMessages = $bindable(false),
-      updateAvailable = null
+      updateAvailable = null,
+      onUpdateClick = () => {}
   } = $props();
   
   import { messageStore } from '../lib/stores/user';
@@ -314,17 +315,16 @@
 
   <div class="mt-auto bg-entropy-surface/50">
     {#if updateAvailable}
-        <a 
-            href="https://entropymessenger.com" 
-            target="_blank"
-            class="mx-3 my-2 bg-entropy-primary/20 text-entropy-primary rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/30 group"
+        <button 
+            onclick={onUpdateClick}
+            class="w-[calc(100%-1.5rem)] mx-3 my-2 bg-entropy-primary/20 text-entropy-primary rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/30 group"
         >
             <div class="flex items-center space-x-2">
                 <div class="w-2 h-2 bg-entropy-primary rounded-full animate-pulse"></div>
                 <span class="text-[9px] font-black uppercase tracking-widest leading-none">Update v{updateAvailable}</span>
             </div>
             <span class="text-[8px] font-black uppercase tracking-tighter opacity-70 group-hover:opacity-100 transition-opacity">Get it</span>
-        </a>
+        </button>
     {/if}
 
     {#if $userStore.connectionStatus !== 'connected'}

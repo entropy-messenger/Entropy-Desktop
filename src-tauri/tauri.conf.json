@@ -39,5 +39,12 @@
             "icons/icon.icns"
         ]
     },
-    "plugins": {}
+    "plugins": {
+        "updater": {
+            "endpoints": [
+                "https://www.entropymessenger.com/update.json"
+            ],
+            "pubkey": "RWTD2N7+BYufHGOKf19/dtvK36LbDl+OGkx6+0oKgKzzIHqlkDQK eN3t"
+        }
+    }
 }
