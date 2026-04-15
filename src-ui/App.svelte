@@ -7,7 +7,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
-  import { LucideShieldCheck, LucideLock, LucideFingerprint, LucideEye, LucideEyeOff } from 'lucide-svelte';
+  import { LucideShieldCheck, LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
   import { signalManager } from './lib/signal_manager';
@@ -241,7 +241,6 @@
             <div class="absolute inset-0 pointer-events-none">
                 <div class="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-entropy-primary/10 blur-[150px] rounded-full animate-pulse"></div>
                 <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-entropy-accent/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
-                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[30%] h-[30%] bg-entropy-primary/5 blur-[100px] rounded-full"></div>
             </div>
 
             <div class="bg-entropy-surface/80 backdrop-blur-xl rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.5)] w-[440px] text-center overflow-hidden animate-in zoom-in-95 duration-700 relative z-10">
@@ -249,9 +248,6 @@
                     <div class="relative inline-block">
                         <div class="w-20 h-20 bg-entropy-surface rounded-2xl shadow-xl flex items-center justify-center mx-auto transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group">
                             <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain transition-transform duration-500 group-hover:scale-110" />
-                        </div>
-                        <div class="absolute -top-1.5 -right-1.5 bg-entropy-primary text-white p-1.5 rounded-xl shadow-lg">
-                            <LucideShieldCheck size={14} />
                         </div>
                     </div>
                     
@@ -356,7 +352,7 @@
                                     <div class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                                     <span>Unlocking...</span>
                                 {:else}
-                                    <LucideFingerprint size={20} class="group-hover:scale-110 transition-transform" />
+                                    <LucideUnlock size={20} class="group-hover:scale-110 transition-transform" />
                                     <span>Enter</span>
                                 {/if}
                             </button>

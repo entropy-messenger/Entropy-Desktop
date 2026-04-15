@@ -105,7 +105,7 @@ jobs:
           
           ASSET_URLS=$(echo "$RELEASE_JSON" | jq -r '.assets[].browser_download_url')
           for url in $ASSET_URLS; do
-            echo "📥 Downloading $url..."
+            echo "Downloading $url..."
             curl -L -O -s "$url"
           done
           
@@ -113,7 +113,7 @@ jobs:
           cd ..
           
           RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
-          echo "📤 Uploading checksums.txt to Release ID: $RELEASE_ID"
+          echo "Uploading checksums.txt to Release ID: $RELEASE_ID"
           
           curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
                -H "Content-Type: text/plain" \
