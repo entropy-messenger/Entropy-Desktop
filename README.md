@@ -1,7 +1,5 @@
 # Entropy · Desktop
 
-**Secure. Sovereign. Silent.**
-
 Entropy is a post-quantum resistant, metadata-private messaging platform designed for maximum security without compromise. Built with Tauri and Rust, it provides a high-performance desktop experience powered by the Signal protocol and advanced transit-layer masking.
 
 ---
