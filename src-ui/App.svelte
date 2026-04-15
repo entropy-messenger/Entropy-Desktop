@@ -403,11 +403,11 @@
     {:else}
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
             <Sidebar 
+                bind:showStarredMessages
                 onUpdateClick={handleUpdateClick} 
                 {updateAvailable}
                 {isUpdating}
                 {updatePercent}
-                onShowStarredMessages={() => showStarredMessages = true}
             />
             <div class="flex-1 relative flex flex-col min-w-0">
                 <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
