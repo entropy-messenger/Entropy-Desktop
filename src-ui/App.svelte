@@ -20,6 +20,7 @@
   let updateAvailable = $state<string | null>(null);
 
   let currentUpdate = $state<any>(null);
+  let updatePercent = $state(0);
   const checkNativeUpdate = async () => {
     if (!(window as any).__TAURI_INTERNALS__) return;
     try {
@@ -47,16 +48,11 @@
                   switch (event.event) {
                       case 'Started':
                           total = event.data.contentLength || 0;
-                          addToast(`Starting download: v${currentUpdate.version}`, "info");
                           break;
                       case 'Progress':
                           downloaded += event.data.chunkLength;
                           if (total > 0) {
-                              const percent = Math.round((downloaded / total) * 100);
-                              if (percent % 5 === 0 && percent !== lastPercent) {
-                                  lastPercent = percent;
-                                  addToast(`Downloading: ${percent}%`, "info");
-                              }
+                              updatePercent = Math.round((downloaded / total) * 100);
                           }
                           break;
                       case 'Finished':
@@ -407,10 +403,11 @@
     {:else}
         <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
             <Sidebar 
-                bind:showStarredMessages 
-                {updateAvailable} 
-                {isUpdating}
                 onUpdateClick={handleUpdateClick} 
+                {updateAvailable}
+                {isUpdating}
+                {updatePercent}
+                onShowStarredMessages={() => showStarredMessages = true}
             />
             <div class="flex-1 relative flex flex-col min-w-0">
                 <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />

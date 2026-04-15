@@ -52,6 +52,7 @@
       showStarredMessages = $bindable(false),
       updateAvailable = null,
       isUpdating = false,
+      updatePercent = 0,
       onUpdateClick = (() => {}) as any
   } = $props();
   
@@ -319,17 +320,24 @@
         <button 
             onclick={onUpdateClick}
             disabled={isUpdating}
-            class="w-[calc(100%-1.5rem)] mx-3 my-2 bg-entropy-primary/20 text-entropy-primary rounded-xl p-2 px-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/30 group disabled:opacity-50"
+            class="w-[calc(100%-1.5rem)] mx-3 my-2 bg-entropy-primary/10 text-entropy-primary rounded-xl p-3 px-4 flex flex-col space-y-2 animate-in slide-in-from-bottom-2 duration-300 border border-entropy-primary/20 group disabled:opacity-80"
         >
-            <div class="flex items-center space-x-2">
-                <div class="w-2 h-2 bg-entropy-primary rounded-full animate-pulse"></div>
-                <span class="text-[9px] font-black uppercase tracking-widest leading-none">
-                    {isUpdating ? 'Downloading...' : `Update v${updateAvailable}`}
+            <div class="flex items-center justify-between w-full">
+                <div class="flex items-center space-x-2">
+                    <div class="w-1.5 h-1.5 bg-entropy-primary rounded-full {isUpdating ? 'animate-pulse' : ''}"></div>
+                    <span class="text-[9px] font-black uppercase tracking-widest leading-none">
+                        {isUpdating ? `Downloading v${updateAvailable}` : `Update v${updateAvailable}`}
+                    </span>
+                </div>
+                <span class="text-[8px] font-black uppercase tracking-tighter opacity-70 group-hover:opacity-100 transition-opacity">
+                    {isUpdating ? `${updatePercent}%` : 'View'}
                 </span>
             </div>
-            <span class="text-[8px] font-black uppercase tracking-tighter opacity-70 group-hover:opacity-100 transition-opacity">
-                {isUpdating ? '⌛' : 'Get it'}
-            </span>
+            {#if isUpdating}
+                <div class="w-full h-1 bg-entropy-primary/10 rounded-full overflow-hidden">
+                    <div class="h-full bg-entropy-primary transition-all duration-300" style="width: {updatePercent}%"></div>
+                </div>
+            {/if}
         </button>
     {/if}
 
