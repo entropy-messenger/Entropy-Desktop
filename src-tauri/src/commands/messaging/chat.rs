@@ -2,6 +2,7 @@ use crate::app_state::DbState;
 use crate::commands::{vault_delete_media, DbChat, DbContact, DbMessage};
 use rusqlite::params;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use tauri::{AppHandle, State};
 
 
@@ -363,11 +364,46 @@ pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> 
         .map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
+    let mut affected_chats = std::collections::HashSet::new();
+    for id in &ids {
+        if let Ok(addr) = conn.query_row(
+            "SELECT chat_address FROM messages WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0)
+        ) {
+            affected_chats.insert(addr);
+        }
+    }
+
     for id in ids {
         let _ = conn.execute("DELETE FROM pending_outbox WHERE msg_id = ?1", params![id]);
         conn.execute("DELETE FROM messages WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete message {}: {}", id, e))?;
     }
+
+    for addr in affected_chats {
+        let last_msg: Option<(String, i64, String, String)> = conn.query_row(
+            "SELECT content, timestamp, sender_hash, status FROM messages 
+             WHERE chat_address = ?1 ORDER BY timestamp DESC LIMIT 1",
+            params![addr],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        ).ok();
+
+        if let Some((content, timestamp, sender_hash, status)) = last_msg {
+            let _ = conn.execute(
+                "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4 
+                 WHERE address = ?5",
+                params![content.chars().take(100).collect::<String>(), timestamp, sender_hash, status, addr],
+            );
+        } else {
+            let _ = conn.execute(
+                "UPDATE chats SET last_msg = NULL, last_timestamp = NULL, last_sender_hash = NULL, last_status = NULL 
+                 WHERE address = ?1",
+                params![addr],
+            );
+        }
+    }
+
     Ok(())
 }
 

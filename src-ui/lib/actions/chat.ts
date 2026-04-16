@@ -454,10 +454,52 @@ export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
         attachmentCache.delete(id);
         invoke('vault_delete_media', { id }).catch(() => { });
     });
+
+    let newLastMsg: Message | undefined;
+    let deletedUnreadCount = 0;
+
     messageStore.update(mStore => {
-        if (mStore[peerHash]) mStore[peerHash] = mStore[peerHash].filter(m => !msgIds.includes(m.id));
+        if (mStore[peerHash]) {
+            const toDelete = mStore[peerHash].filter(m => msgIds.includes(m.id));
+            deletedUnreadCount = toDelete.filter(m => !m.isMine && m.status !== 'read').length;
+
+            mStore[peerHash] = mStore[peerHash].filter(m => !msgIds.includes(m.id));
+            newLastMsg = mStore[peerHash][mStore[peerHash].length - 1];
+        }
         return { ...mStore };
     });
+
+    userStore.update(s => {
+        const chat = s.chats[peerHash];
+        if (chat) {
+            const updatedChat = {
+                ...chat,
+                unreadCount: Math.max(0, (chat.unreadCount || 0) - deletedUnreadCount)
+            };
+
+            if (newLastMsg) {
+                s.chats[peerHash] = {
+                    ...updatedChat,
+                    lastMsg: newLastMsg.content,
+                    lastTimestamp: newLastMsg.timestamp,
+                    lastStatus: newLastMsg.status,
+                    lastIsMine: newLastMsg.isMine,
+                    lastSenderHash: newLastMsg.senderHash
+                };
+            } else {
+                s.chats[peerHash] = {
+                    ...updatedChat,
+                    lastMsg: undefined,
+                    lastTimestamp: undefined,
+                    lastStatus: undefined,
+                    lastIsMine: undefined,
+                    lastSenderHash: undefined
+                };
+            }
+        }
+        return { ...s, chats: { ...s.chats } };
+    });
+
     await invoke('db_delete_messages', { ids: msgIds });
 };
 

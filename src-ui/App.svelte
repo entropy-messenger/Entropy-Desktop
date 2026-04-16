@@ -7,6 +7,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
+  import Onboarding from './components/Onboarding.svelte';
   import { LucideShieldCheck, LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
@@ -88,6 +89,7 @@
   let hasExistingIdentity = $state(false);
   let isUpdating = $state(false);
   let showStarredMessages = $state(false);
+  let showOnboarding = $state(false);
 
 
   /**
@@ -146,6 +148,7 @@
     try {
         await createIdentity(password);
         network.connect();
+        showOnboarding = true;
     } catch (e: any) {
         addToast("Creation failed: " + (e.message || e), 'error');
     } finally {
@@ -418,6 +421,9 @@
 
     <Toast />
     <Modal />
+    {#if showOnboarding}
+        <Onboarding onComplete={() => showOnboarding = false} />
+    {/if}
 </main>
 
 <style>

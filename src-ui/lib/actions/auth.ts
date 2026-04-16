@@ -130,8 +130,8 @@ export const createIdentity = async (password: string) => {
     }
 };
 
-export const burnAccount = async () => {
-    if (!await showConfirm("TOTAL SCORCHED EARTH: This will permanently purge your local database and attempt to wipe your network presence. This CANNOT be undone. Are you sure?", "Nuclear Burn")) return;
+export const purgeIdentity = async () => {
+    if (!await showConfirm("PERMANENT RESET: This will permanently purge your local database and attempt to wipe your network presence. This CANNOT be undone. Are you sure?", "Reset Identity")) return;
 
     const state = get(userStore);
 

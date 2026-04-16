@@ -1,7 +1,7 @@
 <script lang="ts">
   import { userStore } from '../lib/stores/user';
   import { toggleBlock, updatePrivacy, registerGlobalNickname } from '../lib/actions/contacts';
-  import { burnAccount } from '../lib/actions/auth';
+  import { purgeIdentity } from '../lib/actions/auth';
   import { invoke } from '@tauri-apps/api/core';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
   import { network } from '../lib/network';
@@ -207,7 +207,7 @@
                         </div>
 
                          <button 
-                            onclick={() => burnAccount()}
+                            onclick={() => purgeIdentity()}
                             class="w-full py-3 bg-red-500/10 text-red-500 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition-all transform active:scale-[0.98] flex items-center justify-center space-x-2"
                          ><LucideTrash2 size={14} /><span>Delete Account Permanently</span></button>
                     </div>
