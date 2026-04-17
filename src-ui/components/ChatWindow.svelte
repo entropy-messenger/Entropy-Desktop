@@ -168,7 +168,7 @@
             <img src="/logo.png" alt="logo" class="w-16 h-16 object-contain" />
         </div>
         <h2 class="text-2xl font-bold text-entropy-text-primary mb-2 tracking-tight">Entropy</h2>
-        <p class="text-entropy-text-dim max-w-sm font-medium text-xs leading-relaxed opacity-60">Select a conversation to start messaging.<br>Encrypted P2P Secure Session</p>
+        <p class="text-entropy-text-dim max-w-sm font-medium text-xs leading-relaxed opacity-60">Select a conversation to start messaging.</p>
     </div>
 {:else}
     <div class="h-full w-full flex bg-entropy-bg relative overflow-hidden">

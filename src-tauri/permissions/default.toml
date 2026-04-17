@@ -8,6 +8,7 @@ commands.allow = [
     "signal_decrypt_media",
     "connect_network",
     "disconnect_network",
+    "revoke_session_token",
     "reset_database",
     "vault_exists",
     "export_database",

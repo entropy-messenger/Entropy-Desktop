@@ -130,21 +130,6 @@
                         <button onclick={importVault} class="flex-1 py-3 bg-entropy-surface-light text-entropy-text-secondary rounded-xl text-xs font-bold hover:bg-entropy-surface transition">Import Backup</button>
                     </div>
 
-                    <button 
-                        onclick={async () => {
-                            if (await showConfirm("This will invalidate your current session on the relay and locally. You will need to re-authenticate. Continue?", "Revoke Session")) {
-                                try {
-                                    await invoke('revoke_session_token');
-                                    addToast("Session revoked.", 'success')
-                                } catch (e) {
-                                    addToast("Revocation failed: " + e, 'error');
-                                }
-                            }
-                        }}
-                        class="w-full py-3 border border-red-500/20 text-red-500/80 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition"
-                    >
-                        Revoke Active Session
-                    </button>
                 </div>
             </div>
 
@@ -221,6 +206,22 @@
                                 class="w-full py-2 bg-red-500/10 text-red-500 rounded-lg text-xs font-bold hover:bg-red-500 hover:text-white transition-all transform active:scale-[0.98]"
                             >Set Panic Password</button>
                         </div>
+
+                         <button 
+                            onclick={async () => {
+                                if (await showConfirm("This will invalidate your current session on the relay and locally. You will need to re-authenticate. Continue?", "Revoke Session")) {
+                                    try {
+                                        await invoke('revoke_session_token');
+                                        addToast("Session revoked.", 'success')
+                                    } catch (e) {
+                                        addToast("Revocation failed: " + e, 'error');
+                                    }
+                                }
+                            }}
+                            class="w-full py-3 bg-red-500/5 border border-red-500/20 text-red-500/80 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition transform active:scale-[0.98]"
+                        >
+                            Revoke Active Session
+                        </button>
 
                          <button 
                             onclick={() => purgeIdentity()}

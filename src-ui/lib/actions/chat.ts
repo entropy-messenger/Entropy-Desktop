@@ -111,8 +111,7 @@ export const addMessage = async (peerHash: string, msg: Message) => {
     let isNewChat = false;
     userStore.update(s => {
         if (!s.chats[peerHash]) {
-            isNewChat = true;
-            s.chats[peerHash] = {
+            const chatData = {
                 peerHash,
                 peerNickname: msg.chatAlias || peerHash.slice(0, 8),
                 unreadCount: 0,
@@ -120,6 +119,11 @@ export const addMessage = async (peerHash: string, msg: Message) => {
                 trustLevel: 1,
                 members: msg.chatMembers || []
             };
+            s.chats[peerHash] = chatData;
+            if (!msg.isMine && !msg.isGroup && !msg.chatAlias) {
+                import('./contacts').then(m => m.resolveIdentity(peerHash));
+            }
+            isNewChat = true;
         }
         const chat = { ...s.chats[peerHash] };
 

@@ -178,6 +178,9 @@ export const startChat = (peerHashRaw: string, alias?: string) => {
 
         const display = chat.localNickname || chat.globalNickname;
         if (display) s.nicknames[peerHash] = display;
+        else if (!chat.isGroup) {
+            resolveIdentity(peerHash);
+        }
 
         chat.unreadCount = 0;
         syncChatToDb(chat);
