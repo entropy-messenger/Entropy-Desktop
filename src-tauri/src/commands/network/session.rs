@@ -24,6 +24,30 @@ use super::transit::flush_outbox;
 const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]
+pub async fn revoke_session_token(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
+    let id_hash = state.identity_hash.lock().map_err(|_| "State poisoned")?.clone();
+    
+    if let (Some(_id), Some(tx)) = (id_hash, state.sender.lock().map_err(|_| "State poisoned")?.as_ref()) {
+        let revoke_req = json!({"type": "session_revoke", "req_id": "revoke_op"});
+        let _ = tx.send(PacedMessage {
+            msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
+        });
+    }
+
+    // Always clear local even if server message fails to send
+    if let Ok(mut l) = state.session_token.lock() { *l = None; }
+    if let Ok(mut l) = state.is_authenticated.lock() { *l = false; }
+    
+    let app_inner = app.clone();
+    tokio::task::spawn_local(async move {
+        let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
+    });
+    
+    let _ = app.emit("network-status", "auth_failed");
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
     if let Ok(mut l) = state.is_enabled.lock() {
         *l = false;

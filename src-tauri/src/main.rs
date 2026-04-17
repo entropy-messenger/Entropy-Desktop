@@ -62,6 +62,7 @@ fn main() {
             commands::vault_load,
             commands::connect_network,
             commands::disconnect_network,
+            commands::revoke_session_token,
             commands::reset_database,
             commands::vault_exists,
             commands::export_database,

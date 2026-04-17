@@ -129,6 +129,22 @@
                         <button onclick={exportVault} class="flex-1 py-3 bg-entropy-surface-light text-entropy-text-secondary rounded-xl text-xs font-bold hover:bg-entropy-surface transition">Export Backup</button>
                         <button onclick={importVault} class="flex-1 py-3 bg-entropy-surface-light text-entropy-text-secondary rounded-xl text-xs font-bold hover:bg-entropy-surface transition">Import Backup</button>
                     </div>
+
+                    <button 
+                        onclick={async () => {
+                            if (await showConfirm("This will invalidate your current session on the relay and locally. You will need to re-authenticate. Continue?", "Revoke Session")) {
+                                try {
+                                    await invoke('revoke_session_token');
+                                    addToast("Session revoked.", 'success')
+                                } catch (e) {
+                                    addToast("Revocation failed: " + e, 'error');
+                                }
+                            }
+                        }}
+                        class="w-full py-3 border border-red-500/20 text-red-500/80 rounded-xl text-xs font-bold hover:bg-red-500 hover:text-white transition"
+                    >
+                        Revoke Active Session
+                    </button>
                 </div>
             </div>
 
