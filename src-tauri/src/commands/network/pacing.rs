@@ -1,7 +1,7 @@
 use crate::app_state::{NetworkState, PacedMessage};
 use tauri::Manager;
-use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 pub const PACKET_SIZE: usize = 1400;
 

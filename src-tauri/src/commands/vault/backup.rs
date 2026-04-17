@@ -27,18 +27,22 @@ pub async fn export_database(
     let src_path = app_dir.join(&filename);
 
     let target_path_buf = std::path::PathBuf::from(&target_path);
-    
+
     // Prevent overwriting critical system files/dotfiles
-    if let Some(target_dir) = target_path_buf.parent() {
-        if let Ok(abs_target) = std::fs::canonicalize(target_dir) {
-            let app_dir_canonical = std::fs::canonicalize(&app_dir).unwrap_or(app_dir.clone());
-            if abs_target == app_dir_canonical {
-                return Err("Cannot export directly into the application data directory".into());
-            }
+    if let Some(target_dir) = target_path_buf.parent()
+        && let Ok(abs_target) = std::fs::canonicalize(target_dir)
+    {
+        let app_dir_canonical = std::fs::canonicalize(&app_dir).unwrap_or(app_dir.clone());
+        if abs_target == app_dir_canonical {
+            return Err("Cannot export directly into the application data directory".into());
         }
     }
-    
-    if target_path_buf.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+
+    if target_path_buf
+        .file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
+    {
         return Err("Cannot export to a hidden file".into());
     }
 
@@ -58,7 +62,8 @@ pub async fn export_database(
     let salt_path = app_dir.join("vault.salt");
     if salt_path.exists() {
         let mut sf = std::fs::File::open(&salt_path).map_err(|e| e.to_string())?;
-        zip.start_file("vault.salt", options).map_err(|e| e.to_string())?;
+        zip.start_file("vault.salt", options)
+            .map_err(|e| e.to_string())?;
         std::io::copy(&mut sf, &mut zip).map_err(|e| e.to_string())?;
     }
 
@@ -146,14 +151,18 @@ pub async fn import_database(
         .map_err(|e| format!("Invalid or blocked backup path: {}", e))?;
 
     // Prevent importing from hidden files or internal app data
-    if canonical_src.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+    if canonical_src
+        .file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
+    {
         return Err("Cannot import from a hidden file".into());
     }
 
-    if let Ok(abs_app_dir) = std::fs::canonicalize(&app_dir) {
-        if canonical_src.starts_with(&abs_app_dir) {
-             return Err("Cannot import from within the application data directory".into());
-        }
+    if let Ok(abs_app_dir) = std::fs::canonicalize(&app_dir)
+        && canonical_src.starts_with(&abs_app_dir)
+    {
+        return Err("Cannot import from within the application data directory".into());
     }
 
     let file = std::fs::File::open(&canonical_src).map_err(|e| e.to_string())?;
@@ -161,12 +170,12 @@ pub async fn import_database(
 
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
-        
+
         let mut name = file.name().to_string();
-        
-        // Prevent Zip Slip (Path Traversal)
+
+        // Prevent Path Traversal
         if name.contains("..") || name.starts_with('/') || name.contains(':') {
-            continue; // Skip dangerous entries
+            continue; 
         }
 
         // Ensure backups from other profiles map to the ACTIVE profile
@@ -185,10 +194,10 @@ pub async fn import_database(
         if file.name().ends_with('/') {
             std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
         } else {
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-                }
+            if let Some(p) = outpath.parent()
+                && !p.exists()
+            {
+                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
             }
             let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
             std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
@@ -196,7 +205,7 @@ pub async fn import_database(
     }
 
     app.restart();
-    
+
     #[allow(unreachable_code)]
     Ok(())
 }

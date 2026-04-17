@@ -11,12 +11,12 @@
 
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
-    get_media_dir, internal_db_save_message, internal_send_to_network, internal_signal_encrypt,
-    DbMessage,
+    DbMessage, get_media_dir, internal_db_save_message, internal_send_to_network,
+    internal_signal_encrypt,
 };
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use base64::Engine;
 use rusqlite::params;
@@ -172,11 +172,21 @@ pub fn process_outgoing_text(
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", params![msg_id]);
-                    let _ = conn.execute("UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)", params![payload.recipient]);
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
+                        params![msg_id],
+                    );
+                    let _ = conn.execute(
+                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+                        params![payload.recipient],
+                    );
                 }
             }
-            app.emit("msg://status", json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient })).map_err(|e| e.to_string())?;
+            app.emit(
+                "msg://status",
+                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+            )
+            .map_err(|e| e.to_string())?;
 
             if let Some(obj) = final_json.as_object_mut() {
                 obj.insert("status".to_string(), json!("sent"));
@@ -216,22 +226,30 @@ pub fn process_outgoing_media(
                     .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
 
                 // security: restrict access to hidden or system directories
-                if canonical_path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) ||
-                   canonical_path.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != ".") {
-                    return Err("Access denied: Cannot send hidden files or system configuration".into());
+                if canonical_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false)
+                    || canonical_path.components().any(|c| {
+                        c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != "."
+                    })
+                {
+                    return Err(
+                        "Access denied: Cannot send hidden files or system configuration".into(),
+                    );
                 }
 
                 let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
-                if metadata.len() > 10 * 1024 * 1024 {
-                    return Err("File too large. Maximum size is 10MB.".to_string());
+                if metadata.len() > 100 * 1024 * 1024 {
+                    return Err("File too large. Maximum size is 100MB.".to_string());
                 }
                 let mut file = std::fs::File::open(&canonical_path).map_err(|e| e.to_string())?;
                 let mut d = Vec::new();
                 file.read_to_end(&mut d).map_err(|e| e.to_string())?;
                 d
             } else if let Some(d) = payload.file_data {
-                if d.len() > 10 * 1024 * 1024 {
-                    return Err("File too large. Maximum size is 10MB.".to_string());
+                if d.len() > 100 * 1024 * 1024 {
+                    return Err("File too large. Maximum size is 100MB.".to_string());
                 }
                 d
             } else {
@@ -321,13 +339,14 @@ pub fn process_outgoing_media(
                     .msg_type
                     .clone()
                     .unwrap_or_else(|| "file".to_string()),
-                status: "sent".to_string(), 
+                status: "sent".to_string(),
                 attachment_json: Some(
                     serde_json::json!({
                         "fileName": payload.file_name,
                         "fileType": payload.file_type,
                         "size": data.len(),
                         "duration": payload.duration,
+                        "transferId": transfer_id,
                         "bundle": bundle,
                         "vaultPath": saved_vault_path
                     })
@@ -397,11 +416,21 @@ pub fn process_outgoing_media(
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", params![msg_id]);
-                    let _ = conn.execute("UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)", params![payload.recipient]);
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
+                        params![msg_id],
+                    );
+                    let _ = conn.execute(
+                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+                        params![payload.recipient],
+                    );
                 }
             }
-            app.emit("msg://status", json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient })).map_err(|e| e.to_string())?;
+            app.emit(
+                "msg://status",
+                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+            )
+            .map_err(|e| e.to_string())?;
 
             if let Some(obj) = final_json.as_object_mut() {
                 obj.insert("status".to_string(), json!("sent"));
@@ -449,23 +478,22 @@ pub fn send_typing_status(
             .unwrap_or(0);
         let message =
             json!({ "type": "typing", "isTyping": is_typing, "timestamp": timestamp }).to_string();
-        match internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
-            Ok(encrypted) => {
-                let _ = internal_send_to_network(
-                    app.clone(),
-                    &net_state,
-                    Some(peer_hash.clone()),
-                    None,
-                    None,
-                    Some(encrypted.to_string().into_bytes()),
-                    true,
-                    false,
-                    None,
-                    true,
-                )
-                .await;
-            }
-            Err(_) => (),
+        if let Ok(encrypted) =
+            internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
+        {
+            let _ = internal_send_to_network(
+                app.clone(),
+                &net_state,
+                Some(peer_hash.clone()),
+                None,
+                None,
+                Some(encrypted.to_string().into_bytes()),
+                true,
+                false,
+                None,
+                true,
+            )
+            .await;
         }
         Ok(())
     })
@@ -503,24 +531,23 @@ pub fn send_receipt(
 
     tauri::async_runtime::block_on(async move {
         let message = json!({ "type": "receipt", "msgIds": msg_ids, "status": status }).to_string();
-        match internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await {
-            Ok(encrypted) => {
-                // Flag as is_binary=true, is_media=false
-                let _ = internal_send_to_network(
-                    app.clone(),
-                    &net_state,
-                    Some(peer_hash.clone()),
-                    None,
-                    None,
-                    Some(encrypted.to_string().into_bytes()),
-                    true,
-                    false,
-                    None,
-                    true,
-                )
-                .await;
-            }
-            Err(_) => (),
+        if let Ok(encrypted) =
+            internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
+        {
+            // Flag as is_binary=true, is_media=false
+            let _ = internal_send_to_network(
+                app.clone(),
+                &net_state,
+                Some(peer_hash.clone()),
+                None,
+                None,
+                Some(encrypted.to_string().into_bytes()),
+                true,
+                false,
+                None,
+                true,
+            )
+            .await;
         }
         Ok(())
     })
@@ -584,7 +611,12 @@ pub fn process_outgoing_group_text(
 
             let msg_id = uuid::Uuid::new_v4().to_string();
             let timestamp = chrono::Utc::now().timestamp_millis();
-            let own_id = net_state.identity_hash.lock().map_err(|_| "State poisoned")?.clone().ok_or("Not authenticated")?;
+            let own_id = net_state
+                .identity_hash
+                .lock()
+                .map_err(|_| "State poisoned")?
+                .clone()
+                .ok_or("Not authenticated")?;
 
             let db_msg = DbMessage {
                 id: msg_id.clone(),
@@ -661,20 +693,37 @@ pub fn process_outgoing_group_text(
             {
                 let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
                 if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", params![msg_id]);
-                    let _ = conn.execute("UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)", params![payload.recipient]);
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
+                        params![msg_id],
+                    );
+                    let _ = conn.execute(
+                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+                        params![payload.recipient],
+                    );
                 }
             }
 
             let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
             if let Some(obj) = final_json.as_object_mut() {
-                obj.insert("chatAlias".to_string(), serde_json::json!(payload.group_name));
-                obj.insert("chatMembers".to_string(), serde_json::json!(payload.group_members.clone()));
+                obj.insert(
+                    "chatAlias".to_string(),
+                    serde_json::json!(payload.group_name),
+                );
+                obj.insert(
+                    "chatMembers".to_string(),
+                    serde_json::json!(payload.group_members.clone()),
+                );
                 // Emit with the final resolved status so the frontend never receives 'sending'
                 obj.insert("status".to_string(), json!("sent"));
             }
-            app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
-            app.emit("msg://status", json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient })).map_err(|e| e.to_string())?;
+            app.emit("msg://added", final_json.clone())
+                .map_err(|e| e.to_string())?;
+            app.emit(
+                "msg://status",
+                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+            )
+            .map_err(|e| e.to_string())?;
 
             Ok(final_json)
         })
@@ -699,15 +748,15 @@ pub fn process_outgoing_group_media(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
-            
+
             let data = if let Some(p) = &payload.file_path {
                 let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
-                if metadata.len() > 10 * 1024 * 1024 { return Err("File too large.".to_string()); }
+                if metadata.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
                 let mut d = Vec::new();
                 std::fs::File::open(p).map_err(|e| e.to_string())?.read_to_end(&mut d).map_err(|e| e.to_string())?;
                 d
             } else if let Some(d) = payload.file_data {
-                if d.len() > 10 * 1024 * 1024 { return Err("File too large.".to_string()); }
+                if d.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
                 d
             } else { return Err("No data".into()); };
 
@@ -771,6 +820,7 @@ pub fn process_outgoing_group_media(
                     "fileType": payload.file_type,
                     "size": data.len(),
                     "duration": payload.duration,
+                    "transferId": transfer_id,
                     "bundle": bundle,
                     "vaultPath": get_media_dir(&app, &db_state).map(|d| d.join(&msg_id).to_string_lossy().to_string()).unwrap_or_default()
                 }).to_string()),
@@ -786,7 +836,7 @@ pub fn process_outgoing_group_media(
             for member_id in members {
                 if member_id == &own_id { continue; }
                 let routing_hash = member_id.split('.').next().unwrap_or(member_id).to_string();
-                
+
                 match internal_signal_encrypt(app.clone(), &net_state, member_id, content_obj_raw.clone()).await {
                     Ok(encrypted_metadata) => {
                          let _ = internal_send_to_network(app.clone(), &net_state, Some(routing_hash.clone()), Some(msg_id.clone()), None, Some(encrypted_metadata.to_string().into_bytes()), true, false, Some(transfer_id), true).await;

@@ -1,13 +1,13 @@
 use base64::Engine;
 use libsignal_protocol::{
-    kem, message_encrypt, process_prekey_bundle, CiphertextMessage, CiphertextMessageType,
-    DeviceId, GenericSignedPreKey, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
-    KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyBundle, PreKeyId, PreKeyRecord,
-    PreKeyStore, ProtocolAddress, SessionStore, SignalProtocolError, SignedPreKeyId,
-    SignedPreKeyRecord, SignedPreKeyStore, Timestamp,
+    CiphertextMessage, CiphertextMessageType, DeviceId, GenericSignedPreKey, IdentityKey,
+    IdentityKeyPair, IdentityKeyStore, KeyPair, KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore,
+    PreKeyBundle, PreKeyId, PreKeyRecord, PreKeyStore, ProtocolAddress, SessionStore,
+    SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore, Timestamp, kem,
+    message_encrypt, process_prekey_bundle,
 };
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
@@ -28,7 +28,12 @@ pub(crate) async fn internal_signal_encrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
-    let own_hash = net_state.identity_hash.lock().map_err(|_| "Net lock poisoned")?.clone().ok_or("Identity not established")?;
+    let own_hash = net_state
+        .identity_hash
+        .lock()
+        .map_err(|_| "Net lock poisoned")?
+        .clone()
+        .ok_or("Identity not established")?;
     let own_address = ProtocolAddress::new(
         own_hash.clone(),
         DeviceId::try_from(1u32).expect("valid ID"),
@@ -36,7 +41,7 @@ pub(crate) async fn internal_signal_encrypt(
 
     let res: Result<CiphertextMessage, SignalProtocolError> = {
         let mut rng = StdRng::from_os_rng();
-        
+
         // Strictly require a PQXDH session
         if let Ok(Some(_)) = store.load_session(&address).await {
             message_encrypt(
@@ -50,7 +55,10 @@ pub(crate) async fn internal_signal_encrypt(
             )
             .await
         } else {
-            Err(SignalProtocolError::InvalidState("SessionStore", "Session not found".into()))
+            Err(SignalProtocolError::InvalidState(
+                "SessionStore",
+                "Session not found".into(),
+            ))
         }
     };
 
@@ -71,12 +79,14 @@ pub(crate) async fn internal_signal_encrypt(
                 "is_signal": true
             }))
         }
-        Err(e) if e.to_string().to_lowercase().contains("session") || e.to_string().to_lowercase().contains("not found") => {
-
+        Err(e)
+            if e.to_string().to_lowercase().contains("session")
+                || e.to_string().to_lowercase().contains("not found") =>
+        {
             let response = internal_request(
                 net_state,
                 "fetch_key",
-                json!({ 
+                json!({
                     "target_hash": remote_hash,
                     "initiator_hash": own_hash
                 }),
@@ -149,7 +159,7 @@ pub fn signal_get_bundle(
         rt.block_on(async move {
             let mut store = SqliteSignalStore::new(handle.clone());
             let mut rng = StdRng::from_os_rng();
-            
+
             let identity_key_pair = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
             let registration_id: u32 = store.get_local_registration_id().await.map_err(|e: SignalProtocolError| e.to_string())?;
 
@@ -215,10 +225,11 @@ pub fn signal_get_bundle(
 }
 
 fn internal_decode_key(s: &str) -> Result<Vec<u8>, String> {
-    if (s.len() == 64 || s.len() == 66) && s.chars().all(|c| c.is_ascii_hexdigit()) {
-        if let Ok(b) = hex::decode(s) {
-            return Ok(b);
-        }
+    if (s.len() == 64 || s.len() == 66)
+        && s.chars().all(|c| c.is_ascii_hexdigit())
+        && let Ok(b) = hex::decode(s)
+    {
+        return Ok(b);
     }
     if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(s) {
         return Ok(b);

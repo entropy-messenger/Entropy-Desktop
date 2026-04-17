@@ -242,162 +242,154 @@
                 <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-entropy-accent/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
             </div>
 
-            <div class="bg-entropy-surface/80 backdrop-blur-xl rounded-[3rem] shadow-[0_40px_100px_-20px_rgba(0,0,0,0.5)] w-[440px] text-center overflow-hidden animate-in zoom-in-95 duration-700 relative z-10">
-                <div class="p-12 space-y-10">
-                    <div class="relative inline-block">
-                        <div class="w-20 h-20 bg-entropy-surface rounded-2xl shadow-xl flex items-center justify-center mx-auto transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group">
-                            <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain transition-transform duration-500 group-hover:scale-110" />
+            <div class="max-w-6xl w-full mx-auto px-12 py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-[600px]">
+                <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
+                    <!-- Right/Branding Section -->
+                    <div class="space-y-12 text-center lg:text-left order-2 lg:order-1">
+                        <div class="flex flex-col items-center lg:items-start space-y-8">
+                            <div class="w-24 h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
+                                <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain" />
+                            </div>
+                            <div class="space-y-4">
+                                <h1 class="text-7xl font-black text-white tracking-tighter leading-none">Entropy</h1>
+                                <p class="text-entropy-text-secondary text-xl font-medium max-w-md leading-relaxed opacity-80">
+                                    {hasExistingIdentity ? 'Your secure gateway to sovereign communication.' : 'Ultimate privacy. No accounts. No metadata. Total sovereignty.'}
+                                </p>
+                            </div>
+                        </div>
+
+                        {#if !hasExistingIdentity}
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-8">
+                                <div class="p-6 bg-white/[0.05] border border-white/10 rounded-2xl space-y-3">
+                                     <div class="flex items-center space-x-3 text-entropy-accent">
+                                         <LucideLock size={16} strokeWidth={3} />
+                                         <span class="text-[10px] font-black uppercase tracking-[0.2em]">Zero Recovery</span>
+                                     </div>
+                                     <p class="text-[11px] text-white/60 leading-relaxed font-medium">
+                                         This password <span class="text-entropy-accent font-black">cannot be reset</span>. If lost, your messages and identity are gone forever.
+                                     </p>
+                                 </div>
+                                <div class="p-6 bg-white/[0.05] border border-white/10 rounded-2xl space-y-3">
+                                    <div class="flex items-center space-x-3 text-entropy-primary">
+                                        <LucideLock size={16} strokeWidth={3} />
+                                        <span class="text-[10px] font-black uppercase tracking-[0.2em]">Local Vault</span>
+                                    </div>
+                                    <p class="text-[11px] text-white/60 leading-relaxed font-medium">
+                                        All keys and messages are stored only in your <span class="text-entropy-primary font-black">Encrypted Database</span>.
+                                    </p>
+                                </div>
+                            </div>
+                        {/if}
+
+                        <div class="hidden lg:block pt-12">
+                            <div class="flex items-center space-x-12">
+                                <button onclick={handleImportVault} class="text-[10px] font-black text-white/40 uppercase tracking-[0.3em] hover:text-white transition-colors">Restore Backup</button>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div class="space-y-3">
-                        <h1 class="text-4xl font-black text-entropy-text-primary tracking-tight">Entropy</h1>
-                        <p class="text-entropy-text-secondary text-sm leading-relaxed max-w-[280px] mx-auto font-medium opacity-80">
-                            {hasExistingIdentity ? 'Welcome back.' : 'Secure messaging. No sign-up required.'}
-                        </p>
-                    </div>
-                    
-                    <div class="space-y-6 text-left">
-                        <div class="space-y-2.5">
-                            <div class="flex justify-between items-center px-1">
-                                <label for="vault-password" class="text-[11px] font-bold text-entropy-text-dim uppercase tracking-wider pl-1">Login</label>
-                                {#if hasExistingIdentity}
-                                    <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">Identity Found</span>
-                                {/if}
+
+                    <!-- Left/Form Section -->
+                    <div class="w-full space-y-8 order-1 lg:order-2">
+                        <div class="space-y-6">
+                            <div class="flex justify-between items-center px-4">
+                                <label for="vault-password" class="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">
+                                    {hasExistingIdentity ? 'Authenticate' : 'Encrypt Identity Database'}
+                                </label>
                             </div>
-                            
+
                             {#if $userStore.authError}
-                                <div class="p-4 bg-red-500/10 rounded-2xl text-[11px] font-bold text-red-500 animate-in fade-in slide-in-from-top-2 flex items-center space-x-2">
-                                    <div class="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></div>
+                                <div class="p-6 bg-red-500/20 rounded-2xl text-[12px] font-bold text-red-500 animate-in slide-in-from-top-4 duration-500 border border-red-500/30 flex items-center space-x-4">
+                                    <div class="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></div>
                                     <span>{$userStore.authError}</span>
                                 </div>
                             {/if}
 
-                            <div class="relative group">
-                                <div class="absolute left-5 top-1/2 -translate-y-1/2 text-entropy-text-dim group-focus-within:text-entropy-primary transition-colors">
-                                    <LucideLock size={18} />
-                                </div>
-                                <input 
-                                    id="vault-password"
-                                    type={showPassword ? 'text' : 'password'}
-                                    bind:value={password}
-                                    placeholder="Enter password..." 
-                                    class="w-full pl-14 pr-14 py-5 bg-entropy-surface-light/50 rounded-[1.5rem] focus:bg-entropy-surface focus:ring-4 focus:ring-entropy-primary/5 transition-all text-lg font-mono tracking-wider outline-none text-entropy-text-primary"
-                                    onkeydown={(e) => e.key === 'Enter' && (hasExistingIdentity ? handleLogin() : null)}
-                                />
-                                <button 
-                                    type="button"
-                                    onclick={() => showPassword = !showPassword}
-                                    class="absolute right-5 top-1/2 -translate-y-1/2 text-entropy-text-dim hover:text-entropy-primary transition-colors"
-                                    aria-label="Toggle password visibility"
-                                >
-                                    {#if showPassword}
-                                        <LucideEyeOff size={18} />
-                                    {:else}
-                                        <LucideEye size={18} />
-                                    {/if}
-                                </button>
-                            </div>
-                            
-                            {#if !hasExistingIdentity}
+                            <div class="space-y-4">
                                 <div class="relative group">
-                                    <div class="absolute left-5 top-1/2 -translate-y-1/2 text-entropy-text-dim group-focus-within:text-entropy-primary transition-colors">
-                                        <LucideLock size={18} />
+                                    <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                        <LucideLock size={20} />
                                     </div>
                                     <input 
-                                        id="confirm-password"
+                                        id="vault-password"
                                         type={showPassword ? 'text' : 'password'}
-                                        bind:value={confirmPassword}
-                                        placeholder="Confirm password..." 
-                                        class="w-full pl-14 pr-14 py-5 bg-entropy-surface-light/50 rounded-[1.5rem] focus:bg-entropy-surface focus:ring-4 focus:ring-entropy-primary/5 transition-all text-lg font-mono tracking-wider outline-none text-entropy-text-primary"
-                                        onkeydown={(e) => e.key === 'Enter' && handleCreate()}
+                                        bind:value={password}
+                                        placeholder={hasExistingIdentity ? "Enter database password" : "Define database password"} 
+                                        class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm"
+                                        onkeydown={(e) => e.key === 'Enter' && (hasExistingIdentity ? handleLogin() : null)}
                                     />
                                     <button 
                                         type="button"
                                         onclick={() => showPassword = !showPassword}
-                                        class="absolute right-5 top-1/2 -translate-y-1/2 text-entropy-text-dim hover:text-entropy-primary transition-colors"
-                                        aria-label="Toggle password visibility"
+                                        class="absolute right-8 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition-colors"
                                     >
                                         {#if showPassword}
-                                            <LucideEyeOff size={18} />
+                                            <LucideEyeOff size={22} />
                                         {:else}
-                                            <LucideEye size={18} />
+                                            <LucideEye size={22} />
                                         {/if}
                                     </button>
                                 </div>
-                                
-                                {#if password && confirmPassword && password !== confirmPassword}
-                                    <div class="p-3 bg-yellow-500/10 rounded-xl text-[10px] font-bold text-yellow-600 animate-in fade-in slide-in-from-top-2">
-                                        Passwords don't match
+
+                                {#if !hasExistingIdentity}
+                                    <div class="relative group animate-in slide-in-from-top-6 duration-700">
+                                        <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                            <LucideLock size={20} />
+                                        </div>
+                                        <input 
+                                            id="confirm-password"
+                                            type={showPassword ? 'text' : 'password'}
+                                            bind:value={confirmPassword}
+                                            placeholder="Confirm database password" 
+                                            class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm border-white/5"
+                                            onkeydown={(e) => e.key === 'Enter' && handleCreate()}
+                                        />
                                     </div>
+
+                                    {#if password && confirmPassword && password !== confirmPassword}
+                                        <div class="px-8 py-3 bg-red-500/20 rounded-xl text-[10px] font-black text-red-500 uppercase tracking-widest flex items-center space-x-3 border border-red-500/30">
+                                            <div class="w-1.5 h-1.5 bg-red-500 rounded-full"></div>
+                                            <span>Mismatch</span>
+                                        </div>
+                                    {/if}
                                 {/if}
-                            {/if}
+                            </div>
                         </div>
 
-                        {#if hasExistingIdentity}
-                            {#if password && password.length < 4}
-                                <div class="px-2 text-[10px] font-bold text-yellow-600 animate-in fade-in slide-in-from-top-1">
-                                    Password must be at least 4 digits
-                                </div>
-                            {/if}
-
-                            <button 
-                                class="w-full py-5 bg-entropy-primary text-white rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-entropy-primary-dim transition-all shadow-xl shadow-entropy-primary/10 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
-                                onclick={handleLogin}
-                                disabled={isInitializing || !password || password.length < 4}
-                                aria-label="Unlock Identity"
-                            >
-                                {#if isInitializing}
-                                    <div class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                    <span>Unlocking...</span>
-                                {:else}
-                                    <LucideUnlock size={20} class="group-hover:scale-110 transition-transform" />
-                                    <span>Enter</span>
-                                {/if}
-                            </button>
-                        {:else}
-                             <button 
-                                class="w-full py-5 bg-white text-entropy-bg rounded-[1.5rem] font-bold text-sm uppercase tracking-wider hover:bg-white/90 transition-all shadow-2xl active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-3 overflow-hidden group"
-                                onclick={handleCreate}
-                                disabled={isInitializing || !password || !confirmPassword || password !== confirmPassword || password.length < 4}
-                                aria-label="Create Identity"
-                            >
-                                {#if isInitializing}
-                                    <div class="w-5 h-5 border-2 border-entropy-bg/30 border-t-entropy-bg rounded-full animate-spin"></div>
-                                    <span>Creating...</span>
-                                {:else}
-                                    <LucideShieldCheck size={20} class="group-hover:scale-110 transition-transform" />
-                                    <span>Create Identity</span>
-                                {/if}
-                            </button>
-                        {/if}
-                    </div>
-
-                    <div class="pt-2">
-                        
-                        <div class="flex items-center justify-center space-x-6">
+                        <div class="pt-4 flex flex-col space-y-6">
                             {#if hasExistingIdentity}
                                 <button 
-                                    onclick={handleExportVault}
-                                    class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider hover:text-entropy-primary-dim transition-colors"
+                                    class="w-full py-6 bg-white text-entropy-bg rounded-2xl font-black text-xs uppercase tracking-[0.4em] hover:bg-gray-100 transition-all shadow-xl active:scale-[0.98] disabled:opacity-40 flex items-center justify-center space-x-4 group"
+                                    onclick={handleLogin}
+                                    disabled={isInitializing || !password || password.length < 4}
                                 >
-                                    Backup
+                                    {#if isInitializing}
+                                        <div class="w-5 h-5 border-[3px] border-entropy-bg/30 border-t-entropy-bg rounded-full animate-spin"></div>
+                                        <span>Authenticated...</span>
+                                    {:else}
+                                        <LucideUnlock size={20} class="group-hover:scale-110 transition-transform" />
+                                        <span>Unlock Database</span>
+                                    {/if}
                                 </button>
-                            {/if}
-                            <button 
-                                onclick={handleImportVault}
-                                    class="text-[10px] font-bold text-entropy-accent uppercase tracking-wider hover:text-entropy-accent/80 transition-colors"
-                            >
-                                Restore
-                            </button>
-                            {#if import.meta.env.DEV || $userStore.authError}
+                            {:else}
                                 <button 
-                                    onclick={handleResetAccount}
-                                    class="text-[10px] font-bold text-red-500 uppercase tracking-wider hover:text-red-600 transition-colors"
+                                    class="w-full py-6 bg-white text-entropy-bg rounded-2xl font-black text-xs uppercase tracking-[0.4em] hover:bg-gray-100 transition-all shadow-xl active:scale-[0.98] disabled:opacity-40 flex items-center justify-center space-x-4 group"
+                                    onclick={handleCreate}
+                                    disabled={isInitializing || !password || !confirmPassword || password !== confirmPassword || password.length < 4}
                                 >
-                                    Reset
+                                    {#if isInitializing}
+                                        <div class="w-5 h-5 border-[3px] border-entropy-bg/30 border-t-entropy-bg rounded-full animate-spin"></div>
+                                        <span>Mining Genesis...</span>
+                                    {:else}
+                                        <LucideLock size={20} class="group-hover:scale-110 transition-transform" />
+                                        <span>Encrypt Local Database</span>
+                                    {/if}
                                 </button>
                             {/if}
+
+                            <div class="flex items-center justify-center lg:hidden space-x-8 pt-4">
+                                <button onclick={handleImportVault} class="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] hover:text-white transition-colors">Restore</button>
+                                <button onclick={handleResetAccount} class="text-[10px] font-black text-red-500/50 uppercase tracking-[0.2em] hover:text-red-500 transition-colors">Reset</button>
+                            </div>
                         </div>
                     </div>
                 </div>

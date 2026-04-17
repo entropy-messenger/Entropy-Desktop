@@ -2,7 +2,11 @@ use crate::app_state::DbState;
 use tauri::State;
 
 #[tauri::command]
-pub fn open_file(app: tauri::AppHandle, state: State<'_, DbState>, path: String) -> Result<(), String> {
+pub fn open_file(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    path: String,
+) -> Result<(), String> {
     // resolve absolute path and prevent traversal
     let path_buf = std::path::PathBuf::from(&path);
     let canonical_path = std::fs::canonicalize(&path_buf)
@@ -10,15 +14,19 @@ pub fn open_file(app: tauri::AppHandle, state: State<'_, DbState>, path: String)
 
     // bound enforcement: restrict access to application media vault
     let media_dir = crate::commands::vault::media::get_media_dir(&app, &state)?;
-    let canonical_media = std::fs::canonicalize(&media_dir)
-        .map_err(|_| "Media vault not initialized".to_string())?;
+    let canonical_media =
+        std::fs::canonicalize(&media_dir).map_err(|_| "Media vault not initialized".to_string())?;
 
     if !canonical_path.starts_with(&canonical_media) {
         return Err("Access denied: You can only open files stored in your media vault".into());
     }
 
     // reject hidden files
-    if canonical_path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false) {
+    if canonical_path
+        .file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
+    {
         return Err("Access to hidden files is denied".into());
     }
 

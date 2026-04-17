@@ -304,7 +304,6 @@ impl SessionStore for SqliteSignalStore {
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let data = record.serialize()?;
 
-
         conn.execute(
             "INSERT OR REPLACE INTO signal_sessions (address, session_data) VALUES (?1, ?2)",
             params![address_str, data],
@@ -366,7 +365,6 @@ impl PreKeyStore for SqliteSignalStore {
 
         let id_u32 = u32::from(pre_key_id);
         let data = record.serialize()?;
-
 
         conn.execute(
             "INSERT OR REPLACE INTO signal_pre_keys (key_id, key_data) VALUES (?1, ?2)",
@@ -513,7 +511,6 @@ impl KyberPreKeyStore for SqliteSignalStore {
 
         let id_u32: u32 = kyber_prekey_id.into();
         let data = record.serialize()?;
-
 
         conn.execute(
             "INSERT OR REPLACE INTO signal_kyber_pre_keys (key_id, key_data) VALUES (?1, ?2)",

@@ -1,6 +1,6 @@
 //! Entropy Desktop Application Entry Point
 //!
-//! Orchestrates the initialization of global application state, command bridge 
+//! Orchestrates the initialization of global application state, command bridge
 //! registration, and platform-specific window configurations.
 //!
 //! Features:
@@ -18,9 +18,9 @@ mod signal_store;
 use app_state::{DbState, NetworkState};
 use std::sync::Mutex;
 use tauri::{
+    Manager,
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
-    Manager,
 };
 
 fn main() {

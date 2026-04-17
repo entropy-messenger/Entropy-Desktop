@@ -1,8 +1,8 @@
 use super::pacing::PACKET_SIZE;
 use crate::app_state::{NetworkState, PacedMessage};
 use std::time::Duration;
-use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 pub(crate) async fn internal_request(
     state: &NetworkState,

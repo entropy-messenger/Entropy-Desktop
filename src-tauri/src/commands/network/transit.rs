@@ -1,6 +1,6 @@
 //! Transit Layer: Fragmentation and Network Dispatch
 //!
-//! The Transit Layer is responsible for the reliable delivery of binary payloads 
+//! The Transit Layer is responsible for the reliable delivery of binary payloads
 //! across the peer-to-peer network. Core responsibilities:
 //! - Fragmentation: Dividing large E2EE payloads into 1319-byte data chunks.
 //! - Network Framing: Encapsulating fragments with 64-byte padded recipient headers.
@@ -8,14 +8,14 @@
 //! - Offline Queuing: Persisting fragments in the local DB for delivery during network events.
 //! - Dummy Pacing: Intermittent injection of dummy traffic to mask usage patterns.
 
-use super::pacing::{send_paced_json, PACKET_SIZE};
+use super::pacing::{PACKET_SIZE, send_paced_json};
 use crate::app_state::{DbState, NetworkState, PacedMessage};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tokio_tungstenite::tungstenite::protocol::Message;
 
-
+#[allow(clippy::too_many_arguments)]
 pub async fn internal_send_to_network(
     app: AppHandle,
     state: &NetworkState,
@@ -100,6 +100,18 @@ pub async fn internal_send_to_network(
                 paced_messages.push(PacedMessage {
                     msg: Message::Binary(envelope.into()),
                 });
+
+                // Throttled progress emission for the fragmentation loop (every 5% or completion)
+                let progress_step = (chunks / 20).max(1);
+                if i % progress_step == 0 || i == chunks - 1 {
+                    let _ = app.emit("transfer://progress", json!({
+                        "transferId": transfer_id,
+                        "current": i + 1,
+                        "total": chunks,
+                        "direction": "upload",
+                        "msgId": msg_id
+                    }));
+                }
             }
         }
     }
@@ -193,23 +205,28 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
     if let Some(tx) = &*sender_lock {
         let mut msg_batch = Vec::new();
 
-        { // Scope to minimize DB lock duration
+        {
+            // Scope to minimize DB lock duration
             let db_state = app.state::<DbState>();
-            let db_lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
-            if let Some(conn) = db_lock.as_ref() {
-                if let Ok(mut stmt) = conn.prepare("SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC") {
-                    if let Ok(rows) = stmt.query_map([], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Vec<u8>>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                        ))
-                    }) {
-                        for row in rows.flatten() {
-                            msg_batch.push(row);
-                        }
-                    }
+            let db_lock = db_state
+                .conn
+                .lock()
+                .map_err(|_| "Database connection lock poisoned")?;
+            if let Some(conn) = db_lock.as_ref()
+                && let Ok(mut stmt) = conn.prepare(
+                    "SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC",
+                )
+                && let Ok(rows) = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })
+            {
+                for row in rows.flatten() {
+                    msg_batch.push(row);
                 }
             }
         }
@@ -217,27 +234,30 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
         let mut ids_to_delete = Vec::new();
         for (id, msg_type, content, _msg_id) in msg_batch {
             let msg = if msg_type == "text" {
-                Message::Text(Utf8Bytes::from(String::from_utf8_lossy(&content).to_string()))
+                Message::Text(Utf8Bytes::from(
+                    String::from_utf8_lossy(&content).to_string(),
+                ))
             } else {
                 Message::Binary(content.into())
             };
             let _ = tx.send(PacedMessage { msg });
             ids_to_delete.push(id);
         }
-
         if !ids_to_delete.is_empty() {
             let db_state = app.state::<DbState>();
-            if let Ok(db_lock) = db_state.conn.lock() {
-                if let Some(conn) = db_lock.as_ref() {
-                    let _ = conn.execute("BEGIN TRANSACTION", []);
-                    if let Ok(mut stmt) = conn.prepare("DELETE FROM pending_outbox WHERE id = ?") {
-                        for id in ids_to_delete {
-                            let _ = stmt.execute([id]);
-                        }
-                    }
-                    let _ = conn.execute("COMMIT", []);
-                }
-            };
+            if let Ok(lock) = db_state.conn.lock()
+                && let Some(conn) = lock.as_ref()
+            {
+                let query = format!(
+                    "DELETE FROM outbox WHERE id IN ({})",
+                    ids_to_delete
+                        .iter()
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                let _ = conn.execute(&query, rusqlite::params_from_iter(ids_to_delete));
+            }
         }
     }
     Ok(())

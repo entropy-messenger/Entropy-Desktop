@@ -1,11 +1,11 @@
 use crate::app_state::{DbState, NetworkState};
 use aes_gcm::{
-    aead::{KeyInit, OsRng},
     Aes256Gcm,
+    aead::{KeyInit, OsRng},
 };
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
     Argon2, Params,
+    password_hash::{PasswordHasher, SaltString},
 };
 use hex;
 use rusqlite::Connection;
@@ -164,19 +164,19 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 pub fn get_db_filename() -> String {
-    if let Ok(profile) = std::env::var("ENTROPY_PROFILE") {
-        if !profile.is_empty() {
-            return format!("entropy_{}.db", profile);
-        }
+    if let Ok(profile) = std::env::var("ENTROPY_PROFILE")
+        && !profile.is_empty()
+    {
+        return format!("entropy_{}.db", profile);
     }
     "entropy.db".to_string()
 }
 
 pub fn get_media_dirname() -> String {
-    if let Ok(profile) = std::env::var("ENTROPY_PROFILE") {
-        if !profile.is_empty() {
-            return format!("media_{}", profile);
-        }
+    if let Ok(profile) = std::env::var("ENTROPY_PROFILE")
+        && !profile.is_empty()
+    {
+        return format!("media_{}", profile);
     }
     "media".to_string()
 }
@@ -208,38 +208,38 @@ pub async fn init_vault(
 
     let attempts_file = app_data_dir.join("login_attempts.dat");
     let mut attempts = 0;
-    if attempts_file.exists() {
-        if let Ok(s) = std::fs::read_to_string(&attempts_file) {
-            attempts = s.trim().parse().unwrap_or(0);
-        }
+    if attempts_file.exists()
+        && let Ok(s) = std::fs::read_to_string(&attempts_file)
+    {
+        attempts = s.trim().parse().unwrap_or(0);
     }
 
     // PANIC MODE CHECK
     let panic_file = app_data_dir.join("panic.dat");
-    if panic_file.exists() {
-        if let Ok(stored_hash) = std::fs::read_to_string(&panic_file) {
-            let argon2 = Argon2::new(
-                argon2::Algorithm::Argon2id,
-                argon2::Version::V0x13,
-                Params::new(65536, 3, 4, Some(32)).unwrap(),
-            );
-            
-            let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
-            
-            let password_hash = argon2
-                .hash_password(passphrase.as_bytes(), &salt)
-                .map_err(|e| format!("Argon2 hash failed: {}", e))?;
-            let input_hash = hex::encode(password_hash.hash.unwrap().as_ref());
+    if panic_file.exists()
+        && let Ok(stored_hash) = std::fs::read_to_string(&panic_file)
+    {
+        let argon2 = Argon2::new(
+            argon2::Algorithm::Argon2id,
+            argon2::Version::V0x13,
+            Params::new(65536, 3, 4, Some(32)).unwrap(),
+        );
 
-            if input_hash == stored_hash.trim() {
-                let filename = get_db_filename();
-                let _ = std::fs::remove_file(app_data_dir.join(&filename));
-                let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
-                let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-                let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
-                let _ = std::fs::remove_file(&attempts_file);
-                app.restart();
-            }
+        let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
+
+        let password_hash = argon2
+            .hash_password(passphrase.as_bytes(), &salt)
+            .map_err(|e| format!("Argon2 hash failed: {}", e))?;
+        let input_hash = hex::encode(password_hash.hash.unwrap().as_ref());
+
+        if input_hash == stored_hash.trim() {
+            let filename = get_db_filename();
+            let _ = std::fs::remove_file(app_data_dir.join(&filename));
+            let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
+            let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
+            let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
+            let _ = std::fs::remove_file(&attempts_file);
+            app.restart();
         }
     }
 
@@ -266,7 +266,8 @@ pub async fn init_vault(
         // Load or Generate a unique random salt
         let salt_path = app_data_dir.join("vault.salt");
         let salt_string = if salt_path.exists() {
-            std::fs::read_to_string(&salt_path).map_err(|e| format!("Failed to read salt: {}", e))?
+            std::fs::read_to_string(&salt_path)
+                .map_err(|e| format!("Failed to read salt: {}", e))?
         } else {
             let new_salt = SaltString::generate(&mut OsRng);
             let s = new_salt.as_str().to_string();
@@ -275,8 +276,8 @@ pub async fn init_vault(
         };
 
         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
-            let salt = SaltString::from_b64(&salt_string)
-                .map_err(|e| format!("Salt error: {}", e))?;
+            let salt =
+                SaltString::from_b64(&salt_string).map_err(|e| format!("Salt error: {}", e))?;
             let argon2 = Argon2::new(
                 argon2::Algorithm::Argon2id,
                 argon2::Version::V0x13,
@@ -299,7 +300,10 @@ pub async fn init_vault(
     }
 
     // Test if key is correct by reading user_version
-    if conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(())).is_err() {
+    if conn
+        .query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
+        .is_err()
+    {
         attempts += 1;
         let _ = std::fs::write(&attempts_file, attempts.to_string());
         return Err(format!("Incorrect password. Attempt {}/10", attempts));
@@ -323,7 +327,6 @@ pub async fn init_vault(
         for (idx, migration_sql) in MIGRATIONS.iter().enumerate() {
             let migration_ver = (idx + 1) as i32;
             if migration_ver > current_version {
-
                 conn.execute_batch(migration_sql)
                     .map_err(|e| format!("Migration to v{} failed: {}", migration_ver, e))?;
 
@@ -334,7 +337,6 @@ pub async fn init_vault(
             }
         }
     }
-
 
     // Media Encryption Key Initialization
     let media_key = {
@@ -416,10 +418,10 @@ pub async fn init_vault(
             *l = Some(id_hash);
         }
 
-        if let Some(t) = token_opt {
-            if let Ok(mut l) = app.state::<NetworkState>().session_token.lock() {
-                *l = Some(t);
-            }
+        if let Some(t) = token_opt
+            && let Ok(mut l) = app.state::<NetworkState>().session_token.lock()
+        {
+            *l = Some(t);
         }
     }
 
@@ -429,14 +431,14 @@ pub async fn init_vault(
 #[tauri::command]
 pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(), String> {
     let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    
+
     let argon2 = Argon2::new(
         argon2::Algorithm::Argon2id,
         argon2::Version::V0x13,
         Params::new(65536, 3, 4, Some(32)).expect("valid params"),
     );
     let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
-    
+
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| format!("Argon2 hash failed: {}", e))?;

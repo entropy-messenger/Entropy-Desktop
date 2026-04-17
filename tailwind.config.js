@@ -18,6 +18,10 @@ export default {
                     border: 'rgb(var(--entropy-border) / <alpha-value>)',
                     'border-bright': 'rgb(var(--entropy-border-bright) / <alpha-value>)',
                 }
+            },
+            fontFamily: {
+                sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+                mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
             }
         },
     },

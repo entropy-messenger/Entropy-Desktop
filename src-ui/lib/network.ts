@@ -153,6 +153,26 @@ export class NetworkLayer {
                 return { ...s, chats: { ...s.chats }, nicknames: { ...s.nicknames } };
             });
         });
+
+        listen('transfer://progress', (event) => {
+            const { transferId, current, total, direction, msgId } = event.payload as any;
+            import('./stores/transfers').then(m => {
+                m.updateTransferProgress(transferId, current, total, direction, undefined, msgId);
+                if (current >= total) {
+                    setTimeout(() => m.removeTransfer(transferId), 3000);
+                }
+            });
+        });
+
+        listen('network-bin-progress', (event) => {
+            const { transfer_id, current, total, sender } = event.payload as any;
+            import('./stores/transfers').then(m => {
+                m.updateTransferProgress(transfer_id, current, total, 'download', sender);
+                if (current >= total) {
+                    setTimeout(() => m.removeTransfer(transfer_id), 3000);
+                }
+            });
+        });
     }
 
     private connectingPromise: Promise<void> | null = null;

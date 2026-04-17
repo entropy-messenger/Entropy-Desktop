@@ -1,7 +1,7 @@
 use crate::app_state::DbState;
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use base64::Engine;
 use std::io::{Read, Write};
@@ -30,8 +30,13 @@ pub async fn vault_save_media(
     id: String,
     data: Vec<u8>,
 ) -> Result<String, String> {
-    let id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
-    if id.is_empty() { return Err("Invalid ID".into()); }
+    let id = id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>();
+    if id.is_empty() {
+        return Err("Invalid ID".into());
+    }
     let key_bytes = {
         let lock = state
             .media_key
@@ -64,8 +69,13 @@ pub async fn vault_load_media(
     state: State<'_, DbState>,
     id: String,
 ) -> Result<Vec<u8>, String> {
-    let id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
-    if id.is_empty() { return Err("Invalid ID".into()); }
+    let id = id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>();
+    if id.is_empty() {
+        return Err("Invalid ID".into());
+    }
     let key_bytes = {
         let lock = state
             .media_key
@@ -105,8 +115,13 @@ pub async fn vault_load_media(
 pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<DbState>();
     let media_dir = get_media_dir(&app, &state)?;
-    let safe_id = id.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
-    if safe_id.is_empty() { return Ok(()); }
+    let safe_id = id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect::<String>();
+    if safe_id.is_empty() {
+        return Ok(());
+    }
     let file_path = media_dir.join(&safe_id);
 
     if file_path.exists() {
@@ -167,7 +182,6 @@ pub async fn db_export_media(
     Ok(())
 }
 
-
 // Logic for media encryption is handled in process_outgoing_media in outbox.rs
 
 pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<Vec<u8>, String> {
@@ -191,4 +205,3 @@ pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<V
 
     Ok(plaintext)
 }
-

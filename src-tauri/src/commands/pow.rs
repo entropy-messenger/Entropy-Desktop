@@ -6,13 +6,12 @@
 //! Specification:
 //! - Primitive: Sequential Squaring mod N.
 //! - Algorithm: y = x^(2^T) mod N, where T is the difficulty and N is the modulus.
-//! - Properties: Computation is non-parallelizable, ensuring a reliable time delay 
+//! - Properties: Computation is non-parallelizable, ensuring a reliable time delay
 //!   proportional to hardware clock speeds. Verification is $O(1)$ given the solution.
 
 use hex;
 use num_bigint::BigUint;
 use serde_json::json;
-
 
 pub async fn internal_mine_pow(
     seed: String,

@@ -4,9 +4,9 @@
 //! Payloads are processed through an asynchronous media assembler that enforces:
 //! - Transfer ID (TID) isolation.
 //! - Strict index-to-total validation to prevent buffer overflows.
-//! - Resource limits (max 8000 fragments per transfer) to mitigate memory exhaustion.
+//! - Resource limits (max 80000 fragments per transfer) to mitigate memory exhaustion.
 //!
-//! Once reassembled, payloads are passed to the Signal decryption pipeline where session 
+//! Once reassembled, payloads are passed to the Signal decryption pipeline where session
 //! state is updated and messages are persisted to the encrypted local vault.
 
 use crate::app_state::{DbState, NetworkState};
@@ -14,11 +14,11 @@ use crate::commands::*;
 use crate::signal_store::SqliteSignalStore;
 use base64::Engine;
 use libsignal_protocol::{
-    message_decrypt, CiphertextMessage, CiphertextMessageType, DeviceId, ProtocolAddress,
-    SignalProtocolError,
+    CiphertextMessage, CiphertextMessageType, DeviceId, ProtocolAddress, SignalProtocolError,
+    message_decrypt,
 };
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rusqlite::params;
 use serde_json::json;
 use std::io::Write;
@@ -46,8 +46,6 @@ async fn internal_signal_decrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
-
-
     let mut rng = StdRng::from_os_rng();
 
     let ciphertext_type =
@@ -70,10 +68,7 @@ async fn internal_signal_decrypt(
         let lock = ns.identity_hash.lock().map_err(|_| "Net lock poisoned")?;
         lock.clone().ok_or("Local identity not found")?
     };
-    let own_address = ProtocolAddress::new(
-        own_hash,
-        DeviceId::try_from(1u32).expect("valid ID"),
-    );
+    let own_address = ProtocolAddress::new(own_hash, DeviceId::try_from(1u32).expect("valid ID"));
 
     let ptext = message_decrypt(
         &ciphertext,
@@ -97,11 +92,13 @@ pub async fn process_incoming_binary(
     payload: Vec<u8>,
     override_sender: Option<String>,
 ) -> Result<(), String> {
-
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
     let own_hash = {
-        let lock = net_state.identity_hash.lock().map_err(|_| "Net state poisoned")?;
+        let lock = net_state
+            .identity_hash
+            .lock()
+            .map_err(|_| "Net state poisoned")?;
         lock.clone().ok_or("No identity found")?
     };
 
@@ -185,8 +182,8 @@ pub async fn process_incoming_binary(
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
         ) as usize;
 
-        // security: cap maximum fragments per transfer (approx 10MB)
-        if total > 8000 {
+        // security: cap maximum fragments per transfer (approx 100MB)
+        if total > 80000 {
             return Err("Payload exceeds limit".into());
         }
 
@@ -196,8 +193,6 @@ pub async fn process_incoming_binary(
         let chunk_data = &raw_chunk_data[..chunk_len];
         let _link_key = format!("{}:{}", sender, transfer_id);
         let assembler_key = format!("{}:{}:{:02x}", sender, transfer_id, frame_type);
-
-
 
         let (is_complete, entry_data, total_actual, current_count) = {
             let mut assembler = net_state
@@ -213,7 +208,7 @@ pub async fn process_incoming_binary(
             });
 
             // security: validate index range and cap hashmap entries per assembler
-            if index >= entry.total || entry.chunks.len() >= 7680 {
+            if index >= entry.total || entry.chunks.len() >= 76800 {
                 return Err("Index out of range".into());
             }
 
@@ -231,8 +226,21 @@ pub async fn process_incoming_binary(
                         data.extend_from_slice(chunk);
                     }
                 }
-                assembler.remove(&assembler_key); 
+                assembler.remove(&assembler_key);
             }
+
+            // Throttled progress emission (every 2% or completion)
+            let progress_step = (tot / 50).max(1);
+            if cur % progress_step == 0 || cur == tot {
+                let _ = app.emit("transfer://progress", json!({
+                    "transferId": transfer_id,
+                    "sender": sender,
+                    "current": cur,
+                    "total": tot,
+                    "direction": "download"
+                }));
+            }
+
             (complete, data, tot, cur)
         };
 
@@ -240,12 +248,8 @@ pub async fn process_incoming_binary(
             let complete_data = entry_data;
 
             if frame_type == 0x01 || frame_type == 0x04 {
-
-
-                let envelope: serde_json::Value =
-                    serde_json::from_slice(&complete_data).map_err(|e| {
-                        format!("Failed to parse reassembled message envelope: {}", e)
-                    })?;
+                let envelope: serde_json::Value = serde_json::from_slice(&complete_data)
+                    .map_err(|e| format!("Failed to parse reassembled message envelope: {}", e))?;
 
                 let msg_type = envelope["type"].as_u64().unwrap_or(1) as u8;
                 let body_b64 = envelope["body"].as_str().ok_or("Missing envelope body")?;
@@ -255,28 +259,26 @@ pub async fn process_incoming_binary(
 
                 match internal_signal_decrypt(app.clone(), &sender, msg_type, &body_bytes).await {
                     Ok(decrypted_str) => {
-
                         let decrypted_json: serde_json::Value =
                             serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
 
                         // check group status
-                        if let Some(p_type) = decrypted_json["type"].as_str() {
-                            if p_type != "group_invite" {
-                                if let Some(gid) = decrypted_json["groupId"].as_str() {
-                                    let lock = db_state.conn.lock().map_err(|_| "DB Lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
-                                        let is_active: i32 = conn
-                                            .query_row(
-                                                "SELECT is_active FROM chats WHERE address = ?1",
-                                                params![gid],
-                                                |r| r.get(0),
-                                            )
-                                            .unwrap_or(1); // Default to 1 (active) if group not found yet
+                        if let Some(p_type) = decrypted_json["type"].as_str()
+                            && p_type != "group_invite"
+                            && let Some(gid) = decrypted_json["groupId"].as_str()
+                        {
+                            let lock = db_state.conn.lock().map_err(|_| "DB Lock poisoned")?;
+                            if let Some(conn) = lock.as_ref() {
+                                let is_active: i32 = conn
+                                    .query_row(
+                                        "SELECT is_active FROM chats WHERE address = ?1",
+                                        params![gid],
+                                        |r| r.get(0),
+                                    )
+                                    .unwrap_or(1); // Default to 1 (active) if group not found yet
 
-                                        if is_active == 0 {
-                                            return Ok(());
-                                        }
-                                    }
+                                if is_active == 0 {
+                                    return Ok(());
                                 }
                             }
                         }
@@ -323,11 +325,15 @@ pub async fn process_incoming_binary(
                                 let db_state = app.state::<DbState>();
                                 internal_db_upsert_chat(&db_state, chat.clone()).await?;
 
-                                app.emit("msg://group_update", json!({
-                                    "groupId": gid.clone(),
-                                    "name": name.clone(),
-                                    "members": members.clone(),
-                                })).ok();
+                                app.emit(
+                                    "msg://group_update",
+                                    json!({
+                                        "groupId": gid.clone(),
+                                        "name": name.clone(),
+                                        "members": members.clone(),
+                                    }),
+                                )
+                                .ok();
 
                                 // batch members
                                 let mut handled_me = false;
@@ -338,9 +344,16 @@ pub async fn process_incoming_binary(
                                             let sys_ts = chrono::Utc::now().timestamp_millis();
                                             let content = if nm == own_hash {
                                                 handled_me = true;
-                                                format!("You were added to the group by {}", &sender[0..8.min(sender.len())])
+                                                format!(
+                                                    "You were added to the group by {}",
+                                                    &sender[0..8.min(sender.len())]
+                                                )
                                             } else {
-                                                format!("{} added {}", &sender[0..8.min(sender.len())], &nm[0..8.min(nm.len())])
+                                                format!(
+                                                    "{} added {}",
+                                                    &sender[0..8.min(sender.len())],
+                                                    &nm[0..8.min(nm.len())]
+                                                )
                                             };
                                             let sys_msg = DbMessage {
                                                 id: sys_id,
@@ -355,7 +368,11 @@ pub async fn process_incoming_binary(
                                                 is_group: true,
                                                 reply_to_json: None,
                                             };
-                                            let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
+                                            let _ = internal_db_save_message(
+                                                &db_state,
+                                                sys_msg.clone(),
+                                            )
+                                            .await;
                                             let _ = app.emit("msg://added", json!(sys_msg));
                                         }
                                     }
@@ -369,7 +386,10 @@ pub async fn process_incoming_binary(
                                         id: sys_id,
                                         chat_address: gid.clone(),
                                         sender_hash: sender.clone(),
-                                        content: format!("You were added to the group by {}", &sender[0..8.min(sender.len())]),
+                                        content: format!(
+                                            "You were added to the group by {}",
+                                            &sender[0..8.min(sender.len())]
+                                        ),
                                         timestamp: sys_ts,
                                         r#type: "system".to_string(),
                                         status: "delivered".to_string(),
@@ -379,14 +399,15 @@ pub async fn process_incoming_binary(
                                         reply_to_json: None,
                                     };
                                     internal_db_save_message(&db_state, sys_msg.clone()).await?;
-                                    app.emit("msg://added", json!(sys_msg)).map_err(|e: tauri::Error| e.to_string())?;
+                                    app.emit("msg://added", json!(sys_msg))
+                                        .map_err(|e: tauri::Error| e.to_string())?;
                                 }
 
                                 app.emit(
                                     "msg://invite",
-                                    json!({ 
-                                        "groupId": gid, 
-                                        "name": name, 
+                                    json!({
+                                        "groupId": gid,
+                                        "name": name,
                                         "members": members,
                                         "lastMsg": format!("Added to {}", name),
                                         "lastTimestamp": chrono::Utc::now().timestamp_millis()
@@ -444,7 +465,11 @@ pub async fn process_incoming_binary(
                                         id: sys_id,
                                         chat_address: gid.clone(),
                                         sender_hash: sender.clone(),
-                                        content: format!("{} changed the group name to \"{}\"", &sender[0..8], new_name),
+                                        content: format!(
+                                            "{} changed the group name to \"{}\"",
+                                            &sender[0..8],
+                                            new_name
+                                        ),
                                         timestamp: sys_ts,
                                         r#type: "system".to_string(),
                                         status: "delivered".to_string(),
@@ -453,28 +478,50 @@ pub async fn process_incoming_binary(
                                         is_group: true,
                                         reply_to_json: None,
                                     };
-                                    let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
+                                    let _ =
+                                        internal_db_save_message(&db_state, sys_msg.clone()).await;
                                     let _ = app.emit("msg://added", json!(sys_msg));
                                 }
 
                                 {
                                     let mut system_messages = Vec::new();
-                                    let m_strings: Vec<String> = if let Some(members_val) = decrypted_json["members"].as_array() {
-                                        members_val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                                    } else { Vec::new() };
+                                    let m_strings: Vec<String> = if let Some(members_val) =
+                                        decrypted_json["members"].as_array()
+                                    {
+                                        members_val
+                                            .iter()
+                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                            .collect()
+                                    } else {
+                                        Vec::new()
+                                    };
 
                                     {
-                                        let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
+                                        let lock = db_state
+                                            .conn
+                                            .lock()
+                                            .map_err(|_| "Database connection lock poisoned")?;
                                         if let Some(conn) = lock.as_ref() {
                                             // Detection of changes in group membership
-                                            if let Some(new_members) = decrypted_json["newMembers"].as_array() {
+                                            if let Some(new_members) =
+                                                decrypted_json["newMembers"].as_array()
+                                            {
                                                 for nm_val in new_members {
                                                     if let Some(m) = nm_val.as_str() {
-                                                        if m == own_hash { continue; }
+                                                        if m == own_hash {
+                                                            continue;
+                                                        }
                                                         let content = if m == sender {
-                                                            format!("{} joined the group", &m[0..8.min(m.len())])
+                                                            format!(
+                                                                "{} joined the group",
+                                                                &m[0..8.min(m.len())]
+                                                            )
                                                         } else {
-                                                            format!("{} added {}", &sender[0..8.min(sender.len())], &m[0..8.min(m.len())])
+                                                            format!(
+                                                                "{} added {}",
+                                                                &sender[0..8.min(sender.len())],
+                                                                &m[0..8.min(m.len())]
+                                                            )
                                                         };
                                                         system_messages.push(content);
                                                     }
@@ -482,17 +529,26 @@ pub async fn process_incoming_binary(
                                             } else if !m_strings.is_empty() {
                                                 // Fallback
                                                 let mut current_m = Vec::new();
-                                                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1") {
-                                                    if let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0)) {
-                                                        for m in rows.flatten() { current_m.push(m); }
+                                                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                                                    && let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0))
+                                                {
+                                                    for m in rows.flatten() {
+                                                        current_m.push(m);
                                                     }
                                                 }
                                                 for m in &m_strings {
                                                     if !current_m.contains(m) && m != &own_hash {
                                                         let content = if m == &sender {
-                                                            format!("{} joined the group", &m[0..8.min(m.len())])
+                                                            format!(
+                                                                "{} joined the group",
+                                                                &m[0..8.min(m.len())]
+                                                            )
                                                         } else {
-                                                            format!("{} added {}", &sender[0..8.min(sender.len())], &m[0..8.min(m.len())])
+                                                            format!(
+                                                                "{} added {}",
+                                                                &sender[0..8.min(sender.len())],
+                                                                &m[0..8.min(m.len())]
+                                                            )
                                                         };
                                                         system_messages.push(content);
                                                     }
@@ -528,10 +584,13 @@ pub async fn process_incoming_binary(
                                             is_group: true,
                                             reply_to_json: None,
                                         };
-                                        if let Err(_) = internal_db_save_message(&db_state, sys_msg.clone()).await {
+                                        if internal_db_save_message(&db_state, sys_msg.clone())
+                                            .await
+                                            .is_err()
+                                        {
                                             // Handle error
                                         }
-                                        if let Err(_) = app.emit("msg://added", json!(sys_msg)) {
+                                        if app.emit("msg://added", json!(sys_msg)).is_err() {
                                             // Handle error
                                         }
                                     }
@@ -610,14 +669,11 @@ pub async fn process_incoming_binary(
                                 internal_db_save_message(&db_state, db_msg.clone()).await?;
                                 let mut final_json =
                                     serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
-                                if is_group {
-                                    if let Some(obj) = final_json.as_object_mut() {
-                                        obj.insert("chatAlias".to_string(), json!(group_name));
-                                        if let Some(members) =
-                                            decrypted_json["groupMembers"].as_array()
-                                        {
-                                            obj.insert("chatMembers".to_string(), json!(members));
-                                        }
+                                if is_group && let Some(obj) = final_json.as_object_mut() {
+                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    if let Some(members) = decrypted_json["groupMembers"].as_array()
+                                    {
+                                        obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
@@ -692,12 +748,16 @@ pub async fn process_incoming_binary(
                                 .map_err(|e: tauri::Error| e.to_string())?;
                             }
                             "file" | "media" => {
-                                let raw_msg_id = decrypted_json["id"].as_str().ok_or("Missing msg id")?;
+                                let raw_msg_id =
+                                    decrypted_json["id"].as_str().ok_or("Missing msg id")?;
                                 // Sanitize msg_id to mitigate path traversal risks
-                                let msg_id = raw_msg_id.chars()
+                                let msg_id = raw_msg_id
+                                    .chars()
                                     .filter(|c| c.is_alphanumeric() || *c == '-')
                                     .collect::<String>();
-                                if msg_id.is_empty() { return Err("Invalid message ID".into()); }
+                                if msg_id.is_empty() {
+                                    return Err("Invalid message ID".into());
+                                }
 
                                 let bundle = decrypted_json["bundle"].clone();
                                 let inner_transfer_id = decrypted_json["transfer_id"]
@@ -706,7 +766,7 @@ pub async fn process_incoming_binary(
                                     as u32;
 
                                 let size = decrypted_json["size"].as_u64().ok_or("Missing size")?;
-                                if size > 10 * 1024 * 1024 {
+                                if size > 100 * 1024 * 1024 {
                                     // Rejected oversized file metadata
                                     return Err("File metadata exceeds size limit".into());
                                 }
@@ -842,14 +902,11 @@ pub async fn process_incoming_binary(
 
                                 let mut final_json =
                                     serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
-                                if is_group {
-                                    if let Some(obj) = final_json.as_object_mut() {
-                                        obj.insert("chatAlias".to_string(), json!(group_name));
-                                        if let Some(members) =
-                                            decrypted_json["groupMembers"].as_array()
-                                        {
-                                            obj.insert("chatMembers".to_string(), json!(members));
-                                        }
+                                if is_group && let Some(obj) = final_json.as_object_mut() {
+                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    if let Some(members) = decrypted_json["groupMembers"].as_array()
+                                    {
+                                        obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
@@ -933,7 +990,6 @@ pub async fn process_incoming_binary(
                     }
                 }
             }
-
         } else {
             // active transfer progress
             app.emit(

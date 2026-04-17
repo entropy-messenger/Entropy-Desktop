@@ -45,7 +45,9 @@ pub struct DbChat {
     pub global_nickname: Option<String>,
 }
 
-fn default_active() -> bool { true }
+fn default_active() -> bool {
+    true
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

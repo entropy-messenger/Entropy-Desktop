@@ -1,15 +1,15 @@
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use libsignal_protocol::{IdentityKeyPair, IdentityKeyStore};
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
 use tokio_socks::tcp::Socks5Stream;
-use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
+use tokio_tungstenite::tungstenite::protocol::Message;
 use url::Url;
 
 use crate::app_state::{DbState, NetworkState, PacedMessage};
@@ -19,9 +19,9 @@ use crate::commands::signal::signal_sync_keys;
 use crate::noise::TrafficNormalizer;
 use crate::signal_store::SqliteSignalStore;
 
-use super::pacing::{send_paced_json, PACKET_SIZE};
+use super::pacing::{PACKET_SIZE, send_paced_json};
 use super::transit::flush_outbox;
-const RELAY_URL: &str = "wss://entropyserverfork.onrender.com/ws";
+const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]
 pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), String> {
@@ -31,10 +31,10 @@ pub async fn disconnect_network(state: State<'_, NetworkState>) -> Result<(), St
     if let Ok(mut l) = state.sender.lock() {
         *l = None;
     }
-    if let Ok(mut l) = state.cancel.lock() {
-        if let Some(token) = l.take() {
-            token.cancel();
-        }
+    if let Ok(mut l) = state.cancel.lock()
+        && let Some(token) = l.take()
+    {
+        token.cancel();
     }
     if let Ok(mut l) = state.queue.lock() {
         l.clear();
@@ -55,8 +55,8 @@ pub(crate) async fn internal_establish_network(
     let _ = app.emit("network-status", "connecting");
 
     let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
-    config.max_frame_size = Some(64 * 1024 * 1024);
-    config.max_message_size = Some(64 * 1024 * 1024);
+    config.max_frame_size = Some(256 * 1024);
+    config.max_message_size = Some(256 * 1024);
     config.accept_unmasked_frames = false;
 
     let (mut write, mut read) = if let Some(p_url) = proxy_url {
@@ -163,56 +163,52 @@ pub(crate) async fn internal_establish_network(
         .lock()
         .map_err(|_| "Network state poisoned")?
         .clone();
-    let session_token = app
+    let session_token_lock = app
         .state::<NetworkState>()
         .session_token
         .lock()
         .map_err(|_| "Network state poisoned")?
         .clone();
 
-    if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token) {
-        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
-            if let Some(tx) = &*sender_lock {
-                let payload = json!({ "identity_hash": id, "session_token": token_val });
-                let auth_req = json!({"type": "auth", "payload": payload});
-                let _ = tx.send(PacedMessage {
-                    msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
-                });
-            }
+    if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token_lock) {
+        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
+            && let Some(tx) = &*sender_lock
+        {
+            let payload = json!({ "identity_hash": id, "session_token": token_val });
+            let auth_req = json!({"type": "auth", "payload": payload});
+            let _ = tx.send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
+            });
         }
-    } else if let Some(id) = id_hash {
-        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
-            if let Some(tx) = &*sender_lock {
-                let challenge_req =
-                    json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
-                let _ = tx.send(PacedMessage {
-                    msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
-                });
-            }
-        }
+    } else if let Some(id) = id_hash
+        && let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
+        && let Some(tx) = &*sender_lock
+    {
+        let challenge_req =
+            json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
+        let _ = tx.send(PacedMessage {
+            msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
+        });
     }
 
     loop {
         tokio::select! {
             _ = token.cancelled() => break,
-            res = read.next() => {
+            res = tokio::time::timeout(Duration::from_secs(60), read.next()) => {
                 match res {
-                    Some(Ok(msg)) => {
+                    Ok(Some(Ok(msg))) => {
                         match msg {
                             Message::Text(text) => {
                                 let text_str = text.to_string();
                                 let mut handled = false;
                                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text_str) {
                                     if let Some(req_id) = val.get("req_id").and_then(|r| r.as_str()) {
+                                        let net_state = app.state::<NetworkState>();
+                                        if let Ok(mut channels) = net_state.response_channels.lock()
+                                            && let Some(tx) = channels.remove(req_id)
                                         {
-                                            let net_state = app.state::<NetworkState>();
-                                            let lock = net_state.response_channels.lock();
-                                            if let Ok(mut channels) = lock {
-                                                if let Some(tx) = channels.remove(req_id) {
-                                                    let _ = tx.send(val.clone());
-                                                    handled = true;
-                                                }
-                                            }
+                                            let _ = tx.send(val.clone());
+                                            handled = true;
                                         }
                                     }
                                     if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
@@ -229,20 +225,16 @@ pub(crate) async fn internal_establish_network(
                                                     });
                                                 }
                                                 let count = val.get("otk_count").and_then(|c| c.as_u64()).unwrap_or(0);
-                                                if count < 50 {
-                                                    if let Ok(mut refill_lock) = net_state.is_refilling.lock() {
-                                                        if !*refill_lock {
-                                                            *refill_lock = true;
-                                                            let delta = 100_u32.saturating_sub(count as u32);
-                                                            if delta > 0 {
-                                                                let app_sync = app.clone();
-                                                                tokio::task::spawn_local(async move {
-                                                                    let _ = signal_sync_keys(app_sync.clone(), Some(delta));
-                                                                    if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
-                                                                });
-                                                            } else { *refill_lock = false; }
-                                                        }
-                                                    }
+                                                if count < 50 && let Ok(mut refill_lock) = net_state.is_refilling.lock() && !*refill_lock {
+                                                    *refill_lock = true;
+                                                    let delta = 100_u32.saturating_sub(count as u32);
+                                                    if delta > 0 {
+                                                        let app_sync = app.clone();
+                                                        tokio::task::spawn_local(async move {
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
+                                                        });
+                                                    } else { *refill_lock = false; }
                                                 }
                                                 let app_flush = app.clone();
                                                 tokio::task::spawn_local(async move {
@@ -254,18 +246,16 @@ pub(crate) async fn internal_establish_network(
                                             "keys_low" | "otk_low" => {
                                                 let count = val.get("count").or_else(|| val.get("otk_count")).and_then(|c| c.as_u64()).unwrap_or(0);
                                                 let net_state = app.state::<NetworkState>();
-                                                if let Ok(mut refill_lock) = net_state.is_refilling.lock() {
-                                                    if !*refill_lock {
-                                                        *refill_lock = true;
-                                                        let delta = 100_u32.saturating_sub(count as u32);
-                                                        if delta > 0 {
-                                                            let app_sync = app.clone();
-                                                            tokio::task::spawn_local(async move {
-                                                                let _ = signal_sync_keys(app_sync.clone(), Some(delta));
-                                                                if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
-                                                            });
-                                                        } else { *refill_lock = false; }
-                                                    }
+                                                if let Ok(mut refill_lock) = net_state.is_refilling.lock() && !*refill_lock {
+                                                    *refill_lock = true;
+                                                    let delta = 100_u32.saturating_sub(count as u32);
+                                                    if delta > 0 {
+                                                        let app_sync = app.clone();
+                                                        tokio::task::spawn_local(async move {
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
+                                                        });
+                                                    } else { *refill_lock = false; }
                                                 }
                                                 handled = true;
                                             },
@@ -280,29 +270,23 @@ pub(crate) async fn internal_establish_network(
                                                             if reason == "media_offline" { "offline" } else { "failed" }
                                                         } else { "sent" };
                                                         let db_state = app.state::<DbState>();
-                                                        let db_conn_lock = db_state.conn.lock();
-                                                        if let Ok(db_lock) = db_conn_lock {
-                                                            if let Some(conn) = db_lock.as_ref() {
-                                                                let chat_info: Option<(String, String)> = conn.query_row(
-                                                                    "SELECT chat_address, status FROM messages WHERE LOWER(id) = LOWER(?1)",
-                                                                    [&id],
-                                                                    |r| Ok((r.get(0)?, r.get(1)?))
-                                                                ).ok();
-                                                                if let Some((addr, current_status)) = chat_info {
-                                                                    if current_status == "pending" || current_status == "sending" {
-                                                                        let _ = conn.execute("UPDATE messages SET status = ?1 WHERE LOWER(id) = LOWER(?2)", [status, &id]);
-                                                                        let _ = conn.execute("UPDATE chats SET last_status = ?1 WHERE LOWER(address) = LOWER(?2)", [status, &addr]);
-                                                                        let _ = app.emit("msg://status", serde_json::json!({ "id": id, "status": status, "chat_address": addr }));
-                                                                    }
-                                                                }
+                                                        if let Ok(db_lock) = db_state.conn.lock() && let Some(conn) = db_lock.as_ref() {
+                                                            let chat_info: Option<(String, String)> = conn.query_row(
+                                                                "SELECT chat_address, status FROM messages WHERE LOWER(id) = LOWER(?1)",
+                                                                [&id],
+                                                                |r| Ok((r.get(0)?, r.get(1)?))
+                                                            ).ok();
+                                                            if let Some((addr, current_status)) = chat_info
+                                                                && (current_status == "pending" || current_status == "sending") {
+                                                                    let _ = conn.execute("UPDATE messages SET status = ?1 WHERE LOWER(id) = LOWER(?2)", [status, &id]);
+                                                                    let _ = conn.execute("UPDATE chats SET last_status = ?1 WHERE LOWER(address) = LOWER(?2)", [status, &addr]);
+                                                                    let _ = app.emit("msg://status", serde_json::json!({ "id": id, "status": status, "chat_address": addr }));
                                                             }
                                                         }
                                                     }
                                                 }
                                                 if msg_type == "delivery_error" {
-                                                     if !target_peer.is_empty() && reason != "media_offline" {
-                                                         if let Ok(mut l) = app.state::<NetworkState>().halted_targets.lock() { l.insert(target_peer.to_string()); }
-                                                     }
+                                                     if !target_peer.is_empty() && reason != "media_offline" && let Ok(mut l) = app.state::<NetworkState>().halted_targets.lock() { l.insert(target_peer.to_string()); }
                                                      let _ = app.emit("network-warning", json!({ "type": reason, "target": target_peer }));
                                                 }
                                                 handled = true;
@@ -377,7 +361,7 @@ pub(crate) async fn internal_establish_network(
                                                         let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
                                                     });
                                                     let _ = app.emit("network-status", "auth_failed");
-                                                    handled = true;
+                                                    return Err("Handshake/Auth failed - forcing reconnect".into());
                                                 }
                                             },
                                             _ => {}
@@ -392,14 +376,22 @@ pub(crate) async fn internal_establish_network(
                             _ => {}
                         }
                     },
-                    Some(Err(_)) => break,
-                    None => break
+                    Ok(Some(Err(_))) => break,
+                    Ok(None) => break,
+                    Err(_) => {
+                        // Timeout reached - potential stale connection
+                        return Err("Network read timeout - potential stale connection".into());
+                    }
                 }
             }
         }
     }
-    if let Ok(mut l) = app.state::<NetworkState>().sender.lock() { *l = None; }
-    if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() { *l = false; }
+    if let Ok(mut l) = app.state::<NetworkState>().sender.lock() {
+        *l = None;
+    }
+    if let Ok(mut l) = app.state::<NetworkState>().is_authenticated.lock() {
+        *l = false;
+    }
     let _ = app.emit("network-status", "disconnected");
     Ok(())
 }
@@ -428,9 +420,9 @@ async fn run_connection_loop(app: AppHandle) {
         }
         if let Some(target_url) = url {
             let _ = app.emit("network-status", "connecting");
-            if let Err(_) =
-                internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone())
-                    .await
+            if internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone())
+                .await
+                .is_err()
             {
                 // Connection error handled by loop
             } else {
@@ -448,7 +440,10 @@ async fn run_connection_loop(app: AppHandle) {
         }
         let delay_sec = backoff[retry_count.min(backoff.len() - 1)];
         for s in (1..=delay_sec).rev() {
-            let _ = app.emit("network-status", json!({ "status": "reconnecting", "seconds": s }));
+            let _ = app.emit(
+                "network-status",
+                json!({ "status": "reconnecting", "seconds": s }),
+            );
             tokio::select! {
                 _ = token_val.cancelled() => break 'outer_loop,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {}

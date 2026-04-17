@@ -1,7 +1,7 @@
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
-    internal_db_save_message, internal_db_upsert_chat, internal_send_to_network,
-    internal_signal_encrypt, DbChat, DbMessage,
+    DbChat, DbMessage, internal_db_save_message, internal_db_upsert_chat, internal_send_to_network,
+    internal_signal_encrypt,
 };
 use hex;
 use rand;
@@ -74,7 +74,9 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
 
             // adder status message
             for m in &all_members {
-                if m == &id_hash { continue; }
+                if m == &id_hash {
+                    continue;
+                }
                 let sys_id = uuid::Uuid::new_v4().to_string();
                 let sys_ts = chrono::Utc::now().timestamp_millis();
                 let sys_msg = DbMessage {
@@ -251,7 +253,9 @@ pub fn update_group_name(app: AppHandle, group_id: String, new_name: String) -> 
 
             for member in &members {
                 if member == &id_hash { continue; }
-                if let Ok(ciphertext) = internal_signal_encrypt(app.clone(), &state, &member, update_str.clone()).await {
+                if let Ok(ciphertext) =
+                    internal_signal_encrypt(app.clone(), &state, member, update_str.clone()).await
+                {
                     let _ = internal_send_to_network(app.clone(), &state, Some(member.clone()), None, None, Some(ciphertext.to_string().into_bytes()), true, false, None, false).await;
                 }
             }
@@ -333,7 +337,10 @@ pub fn leave_group(app: AppHandle, group_id: String) -> Result<(), String> {
                 .lock()
                 .map_err(|_| "Database connection lock poisoned")?;
             if let Some(conn) = lock.as_ref() {
-                let _ = conn.execute("UPDATE chats SET is_active = 0 WHERE address = ?1", [&group_id]);
+                let _ = conn.execute(
+                    "UPDATE chats SET is_active = 0 WHERE address = ?1",
+                    [&group_id],
+                );
                 let _ = conn.execute(
                     "DELETE FROM chat_members WHERE chat_address = ?1",
                     [&group_id],

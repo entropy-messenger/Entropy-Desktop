@@ -1,10 +1,9 @@
 use crate::app_state::DbState;
-use crate::commands::{vault_delete_media, DbChat, DbContact, DbMessage};
+use crate::commands::{DbChat, DbContact, DbMessage, vault_delete_media};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use tauri::{AppHandle, State};
-
 
 #[tauri::command]
 pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
@@ -219,12 +218,14 @@ pub async fn db_get_message_offset(
         .map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
-    let count: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM messages 
+    let count: u32 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM messages
          WHERE chat_address = ?1 AND timestamp > (SELECT timestamp FROM messages WHERE id = ?2)",
-        params![chat_address, message_id],
-        |row| row.get(0),
-    ).map_err(|e| e.to_string())?;
+            params![chat_address, message_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
 
     Ok(count)
 }
@@ -300,8 +301,8 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     let mut stmt = conn.prepare(
-        "SELECT 
-            c.address, c.is_group, c.alias, c.last_msg, c.last_timestamp, 
+        "SELECT
+            c.address, c.is_group, c.alias, c.last_msg, c.last_timestamp,
             c.unread_count, c.is_archived, c.last_sender_hash, c.last_status, c.is_pinned,
             COALESCE((SELECT trust_level FROM signal_identities_remote WHERE address LIKE c.address || ':%' LIMIT 1), 1) as trust_level,
             COALESCE((SELECT is_blocked FROM contacts WHERE hash = c.address), 0) != 0 as is_blocked,
@@ -364,12 +365,12 @@ pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> 
         .map_err(|_| "Database connection lock poisoned")?;
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
-    let mut affected_chats = std::collections::HashSet::new();
+    let mut affected_chats = HashSet::new();
     for id in &ids {
         if let Ok(addr) = conn.query_row(
             "SELECT chat_address FROM messages WHERE id = ?1",
             params![id],
-            |row| row.get::<_, String>(0)
+            |row| row.get::<_, String>(0),
         ) {
             affected_chats.insert(addr);
         }
@@ -382,22 +383,24 @@ pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> 
     }
 
     for addr in affected_chats {
-        let last_msg: Option<(String, i64, String, String)> = conn.query_row(
-            "SELECT content, timestamp, sender_hash, status FROM messages 
+        let last_msg: Option<(String, i64, String, String)> = conn
+            .query_row(
+                "SELECT content, timestamp, sender_hash, status FROM messages
              WHERE chat_address = ?1 ORDER BY timestamp DESC LIMIT 1",
-            params![addr],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        ).ok();
+                params![addr],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .ok();
 
         if let Some((content, timestamp, sender_hash, status)) = last_msg {
             let _ = conn.execute(
-                "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4 
+                "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4
                  WHERE address = ?5",
                 params![content.chars().take(100).collect::<String>(), timestamp, sender_hash, status, addr],
             );
         } else {
             let _ = conn.execute(
-                "UPDATE chats SET last_msg = NULL, last_timestamp = NULL, last_sender_hash = NULL, last_status = NULL 
+                "UPDATE chats SET last_msg = NULL, last_timestamp = NULL, last_sender_hash = NULL, last_status = NULL
                  WHERE address = ?1",
                 params![addr],
             );
@@ -510,7 +513,7 @@ pub async fn db_get_starred_messages(
         .map_err(|_| "Database connection lock poisoned")?;
     let conn = conn_lock.as_ref().ok_or("Database not initialized")?;
     let mut stmt = conn.prepare(
-        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json 
+        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json
          FROM messages WHERE is_starred = 1 ORDER BY timestamp ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -546,7 +549,7 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
     let conn = lock.as_ref().ok_or("Database not initialized")?;
 
     conn.execute(
-        "INSERT OR IGNORE INTO chats (address, is_group, alias, unread_count, is_archived) 
+        "INSERT OR IGNORE INTO chats (address, is_group, alias, unread_count, is_archived)
          VALUES (?1, ?2, ?3, 0, 0)",
         params![
             msg.chat_address,
@@ -557,16 +560,16 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
     .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT OR IGNORE INTO messages (id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_group, is_starred, reply_to_json) 
+        "INSERT OR IGNORE INTO messages (id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_group, is_starred, reply_to_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
-            msg.id, 
-            msg.chat_address, 
-            msg.sender_hash, 
-            msg.content, 
-            msg.timestamp, 
-            msg.r#type, 
-            msg.status, 
+            msg.id,
+            msg.chat_address,
+            msg.sender_hash,
+            msg.content,
+            msg.timestamp,
+            msg.r#type,
+            msg.status,
             msg.attachment_json,
             msg.is_group as i32,
             msg.is_starred as i32,
@@ -576,7 +579,7 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
 
     if msg.status != "sending" {
         conn.execute(
-            "UPDATE messages SET status = ?1 
+            "UPDATE messages SET status = ?1
              WHERE id = ?2 AND (
                 (status = 'sent' AND (?1 = 'delivered' OR ?1 = 'read')) OR
                 (status = 'delivered' AND ?1 = 'read') OR
@@ -596,7 +599,7 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
     }
 
     conn.execute(
-        "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4 
+        "UPDATE chats SET last_msg = ?1, last_timestamp = ?2, last_sender_hash = ?3, last_status = ?4
          WHERE LOWER(address) = LOWER(?5) AND (last_timestamp IS NULL OR ?2 > last_timestamp OR (?2 = last_timestamp AND last_status = 'sending'))",
         params![msg.content.chars().take(100).collect::<String>(), msg.timestamp, msg.sender_hash, msg.status, msg.chat_address],
     ).map_err(|e| e.to_string())?;
@@ -621,7 +624,7 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
             last_msg = excluded.last_msg,
             last_timestamp = excluded.last_timestamp,
             last_sender_hash = excluded.last_sender_hash,
-            last_status = CASE 
+            last_status = CASE
                 WHEN excluded.last_status = 'sending' OR excluded.last_status = 'pending' THEN
                     CASE WHEN chats.last_status IN ('sent', 'delivered', 'read') THEN chats.last_status ELSE excluded.last_status END
                 ELSE excluded.last_status
@@ -633,15 +636,15 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
             is_blocked = excluded.is_blocked,
             is_active = excluded.is_active",
         params![
-            chat.address, 
-            chat.is_group as i32, 
-            chat.alias, 
-            chat.last_msg, 
-            chat.last_timestamp, 
-            chat.unread_count, 
-            chat.is_archived as i32, 
-            chat.is_pinned as i32, 
-            chat.trust_level, 
+            chat.address,
+            chat.is_group as i32,
+            chat.alias,
+            chat.last_msg,
+            chat.last_timestamp,
+            chat.unread_count,
+            chat.is_archived as i32,
+            chat.is_pinned as i32,
+            chat.trust_level,
             chat.is_blocked as i32,
             chat.last_sender_hash,
             chat.last_status,

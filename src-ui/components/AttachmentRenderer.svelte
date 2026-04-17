@@ -7,6 +7,7 @@
     import { getAttachment, markAsDownloaded } from '../lib/actions/chat';
     import { fromBase64 } from '../lib/crypto';
     import { addToast } from '../lib/stores/ui';
+    import { transfers } from '../lib/stores/transfers';
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
 
     let { msg, chatId } = $props<{ msg: any, chatId: string }>();
@@ -20,6 +21,14 @@
         if (msg.attachment?.exportedPath) exportedPath = msg.attachment.exportedPath;
     });
     let wasCreatedInternally = $state(false);
+
+    let activeTransfer = $derived.by(() => {
+        const t_id = msg.attachment?.transferId;
+        if (!t_id) return null;
+        return $transfers[t_id] || null;
+    });
+
+    let progress = $derived(activeTransfer ? Math.round((activeTransfer.current / activeTransfer.total) * 100) : 0);
 
     async function loadAttachment() {
         if (!msg.attachment || blobUrl || loading) return;
@@ -129,9 +138,18 @@
             <span class="text-[10px] font-bold text-entropy-text-primary uppercase tracking-widest">Loading Audio...</span>
         </div>
     {:else if msg.status === 'sending'}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-2xl animate-pulse">
-            <LucideLoader size={16} class="animate-spin text-entropy-primary" />
-            <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">Processing...</span>
+        <div class="flex flex-col space-y-1 w-full max-w-[200px]">
+            <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-2xl animate-pulse">
+                <LucideLoader size={16} class="animate-spin text-entropy-primary" />
+                <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">
+                    {activeTransfer ? `Sending... ${progress}%` : "Processing..."}
+                </span>
+            </div>
+            {#if activeTransfer}
+                <div class="h-1 w-full bg-entropy-surface-light rounded-full overflow-hidden">
+                    <div class="h-full bg-entropy-primary transition-all duration-300" style="width: {progress}%"></div>
+                </div>
+            {/if}
         </div>
     {:else}
         <div class="flex items-center space-x-2 py-2 px-4 bg-red-500/10 rounded-2xl">
@@ -157,9 +175,13 @@
                     </div>
                 </button>
                 <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest opacity-80">
-                    {(msg.attachment.size || 0) / 1024 > 1024 
-                        ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
-                        : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
+                    {#if activeTransfer}
+                        <span class="text-entropy-primary animate-pulse">{activeTransfer.direction === 'upload' ? 'Sending' : 'Receiving'} {progress}%</span>
+                    {:else}
+                        {(msg.attachment.size || 0) / 1024 > 1024 
+                            ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
+                            : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
+                    {/if}
                 </div>
             </div>
 
@@ -180,5 +202,10 @@
                 </button>
             </div>
         </div>
+        {#if activeTransfer}
+            <div class="mt-1 h-1 w-full bg-entropy-surface-light rounded-full overflow-hidden">
+                <div class="h-full bg-entropy-primary transition-all duration-500 shadow-[0_0_8px_rgba(var(--entropy-primary-rgb),0.5)]" style="width: {progress}%"></div>
+            </div>
+        {/if}
     </div>
 {/if}
