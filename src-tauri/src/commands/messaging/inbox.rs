@@ -30,8 +30,7 @@ pub fn signal_decrypt_media(data: Vec<u8>, bundle: serde_json::Value) -> Result<
         .get("key")
         .and_then(|k| k.as_str())
         .ok_or("No decryption key in bundle")?;
-    let ciphertext_hex = hex::encode(data);
-    crypto_decrypt_media(ciphertext_hex, key_b64.to_string())
+    crypto_decrypt_media(data, key_b64.to_string())
 }
 
 async fn internal_signal_decrypt(
@@ -801,7 +800,7 @@ pub async fn process_incoming_binary(
                                     // Decrypt and save media arriving before metadata
                                     if let Ok(encrypted_bytes) = std::fs::read(&temp_path) {
                                         if let Ok(plaintext) = crypto_decrypt_media(
-                                            hex::encode(encrypted_bytes),
+                                            encrypted_bytes,
                                             key_str.clone(),
                                         ) {
                                             let _ = vault_save_media(
@@ -812,6 +811,11 @@ pub async fn process_incoming_binary(
                                             )
                                             .await;
                                             let _ = std::fs::remove_file(&temp_path);
+                                            let _ = app.emit("network-bin-complete", serde_json::json!({
+                                                "sender": sender,
+                                                "transfer_id": inner_transfer_id,
+                                                "msg_id": Some(msg_id.clone())
+                                            }));
                                         } else {
                                             // Decryption failed silently
                                         }
@@ -958,7 +962,7 @@ pub async fn process_incoming_binary(
                     if let Some(m) = meta {
                         // vault encryption bridge
                         if let Ok(plaintext) =
-                            crypto_decrypt_media(hex::encode(complete_data.clone()), m.key)
+                            crypto_decrypt_media(complete_data.clone(), m.key)
                         {
                             let _ = vault_save_media(
                                 app.clone(),
@@ -990,19 +994,6 @@ pub async fn process_incoming_binary(
                     }
                 }
             }
-        } else {
-            // active transfer progress
-            app.emit(
-                "network-bin-progress",
-                json!({
-                    "sender": sender,
-                    "transfer_id": transfer_id,
-                    "current": current_count,
-                    "total": total_actual,
-                    "type": frame_type
-                }),
-            )
-            .map_err(|e: tauri::Error| e.to_string())?;
         }
     } else if frame_type == 0x03 {
         // ignore

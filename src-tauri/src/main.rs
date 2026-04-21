@@ -117,13 +117,18 @@ fn main() {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK
             #[cfg(target_os = "linux")]
             {
-                use webkit2gtk::{PermissionRequest, PermissionRequestExt, WebViewExt};
+                use webkit2gtk::{PermissionRequestExt, UserMediaPermissionRequest, WebViewExt};
+                use webkit2gtk::glib::Cast;
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.with_webview(|w| {
                         let webview = w.inner();
                         webview.connect_permission_request(
-                            |_webview, request: &PermissionRequest| {
-                                request.allow();
+                            |_webview, request| {
+                                if request.dynamic_cast_ref::<UserMediaPermissionRequest>().is_some() {
+                                    request.allow();
+                                } else {
+                                    request.deny();
+                                }
                                 true
                             },
                         );

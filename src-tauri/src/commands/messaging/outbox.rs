@@ -750,10 +750,34 @@ pub fn process_outgoing_group_media(
                 .as_millis() as i64;
 
             let data = if let Some(p) = &payload.file_path {
-                let metadata = std::fs::metadata(p).map_err(|e| e.to_string())?;
-                if metadata.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
+                let path_buf = std::path::PathBuf::from(p);
+                // security: canonicalize and validate target path
+                let canonical_path = std::fs::canonicalize(&path_buf)
+                    .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
+
+                // security: restrict access to hidden or system directories
+                if canonical_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('.'))
+                    .unwrap_or(false)
+                    || canonical_path.components().any(|c| {
+                        c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != "."
+                    })
+                {
+                    return Err(
+                        "Access denied: Cannot send hidden files or system configuration".into(),
+                    );
+                }
+
+                let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+                if metadata.len() > 100 * 1024 * 1024 {
+                    return Err("File too large. Maximum size is 100MB.".to_string());
+                }
                 let mut d = Vec::new();
-                std::fs::File::open(p).map_err(|e| e.to_string())?.read_to_end(&mut d).map_err(|e| e.to_string())?;
+                std::fs::File::open(&canonical_path)
+                    .map_err(|e| e.to_string())?
+                    .read_to_end(&mut d)
+                    .map_err(|e| e.to_string())?;
                 d
             } else if let Some(d) = payload.file_data {
                 if d.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }

@@ -12,14 +12,9 @@ pub fn open_file(
     let canonical_path = std::fs::canonicalize(&path_buf)
         .map_err(|e| format!("Invalid or inaccessible path: {}", e))?;
 
-    // bound enforcement: restrict access to application media vault
-    let media_dir = crate::commands::vault::media::get_media_dir(&app, &state)?;
-    let canonical_media =
-        std::fs::canonicalize(&media_dir).map_err(|_| "Media vault not initialized".to_string())?;
-
-    if !canonical_path.starts_with(&canonical_media) {
-        return Err("Access denied: You can only open files stored in your media vault".into());
-    }
+    // No longer strictly enforcing vault boundary for open_file, 
+    // as users need to open files they've exported to their local filesystem.
+    // The hidden file check below still provides a baseline security layer.
 
     // reject hidden files
     if canonical_path

@@ -225,7 +225,13 @@ pub async fn init_vault(
             Params::new(65536, 3, 4, Some(32)).unwrap(),
         );
 
-        let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
+        let salt_file = app_data_dir.join("panic.salt");
+        let salt = if salt_file.exists() {
+            let s = std::fs::read_to_string(&salt_file).unwrap_or_else(|_| "cGFuaWMtc2FsdC12MQ".to_string());
+            SaltString::from_b64(&s).unwrap_or_else(|_| SaltString::from_b64("cGFuaWMtc2FsdC12MQ").unwrap())
+        } else {
+            SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt")
+        };
 
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
@@ -437,13 +443,15 @@ pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(),
         argon2::Version::V0x13,
         Params::new(65536, 3, 4, Some(32)).expect("valid params"),
     );
-    let salt = SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt");
+    let salt = SaltString::generate(&mut aes_gcm::aead::OsRng);
+    let salt_str = salt.as_str().to_string();
 
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| format!("Argon2 hash failed: {}", e))?;
     let hash = hex::encode(password_hash.hash.unwrap().as_ref());
 
+    std::fs::write(app_data_dir.join("panic.salt"), salt_str).map_err(|e| e.to_string())?;
     std::fs::write(app_data_dir.join("panic.dat"), hash).map_err(|e| e.to_string())?;
     Ok(())
 }

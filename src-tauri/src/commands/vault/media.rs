@@ -184,10 +184,9 @@ pub async fn db_export_media(
 
 // Logic for media encryption is handled in process_outgoing_media in outbox.rs
 
-pub fn crypto_decrypt_media(ciphertext_hex: String, key_b64: String) -> Result<Vec<u8>, String> {
-    let combined = hex::decode(ciphertext_hex).map_err(|e| e.to_string())?;
+pub fn crypto_decrypt_media(combined: Vec<u8>, key_b64: String) -> Result<Vec<u8>, String> {
     if combined.len() < 12 {
-        return Err("Ciphertext too short".into());
+        return Err("Data too short".into());
     }
 
     let key_bytes = base64::engine::general_purpose::STANDARD
