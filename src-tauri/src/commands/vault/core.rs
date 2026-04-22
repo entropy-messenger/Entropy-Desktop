@@ -301,8 +301,11 @@ pub async fn init_vault(
         .await
         .map_err(|e| e.to_string())??;
 
-        let key_query = format!("PRAGMA key = \"x'{}'\";", derived_key_hex);
-        let _ = conn.execute_batch(&key_query);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let key_query = format!("PRAGMA key = \"x'{}'\";", derived_key_hex);
+            let _ = conn.execute_batch(&key_query);
+        }
     }
 
     // Test if key is correct by reading user_version

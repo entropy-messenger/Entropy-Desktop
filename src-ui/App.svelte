@@ -22,6 +22,12 @@
 
   let currentUpdate = $state<any>(null);
   let updatePercent = $state(0);
+  let isMobile = $state(false);
+
+  const updateDimensions = () => {
+    isMobile = window.innerWidth < 1024;
+  };
+
   const checkNativeUpdate = async () => {
     if (!(window as any).__TAURI_INTERNALS__) return;
     try {
@@ -118,6 +124,10 @@
       } catch (e) {
       }
     }
+
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
   });
 
   const handleLogin = async () => {
@@ -231,7 +241,9 @@
 <svelte:window oncontextmenu={handleContextMenu} onkeydown={handleKeydown} />
 
 <main class="h-screen w-screen bg-entropy-bg overflow-hidden flex flex-col font-sans antialiased text-entropy-text-primary select-none">
-    <TitleBar />
+    {#if !isMobile}
+        <TitleBar />
+    {/if}
     
     {#if !$userStore.identityHash}
         
@@ -242,23 +254,23 @@
                 <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-entropy-accent/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
             </div>
 
-            <div class="max-w-6xl w-full mx-auto px-12 py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-[600px]">
-                <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
+            <div class="max-w-6xl w-full mx-auto px-6 lg:px-12 py-8 lg:py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-screen lg:min-h-[600px]">
+                <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-24 items-center">
                     <!-- Right/Branding Section -->
-                    <div class="space-y-12 text-center lg:text-left order-2 lg:order-1">
-                        <div class="flex flex-col items-center lg:items-start space-y-8">
-                            <div class="w-24 h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
-                                <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain" />
+                    <div class="space-y-8 lg:space-y-12 text-center lg:text-left order-1">
+                        <div class="flex flex-col items-center lg:items-start space-y-6 lg:space-y-8">
+                            <div class="w-20 h-20 lg:w-24 lg:h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
+                                <img src="/logo.png" alt="Entropy" class="w-12 h-12 lg:w-16 lg:h-16 object-contain" />
                             </div>
-                            <div class="space-y-4">
-                                <h1 class="text-7xl font-black text-white tracking-tighter leading-none">Entropy</h1>
-                                <p class="text-entropy-text-secondary text-xl font-medium max-w-md leading-relaxed opacity-80">
+                            <div class="space-y-3 lg:space-y-4">
+                                <h1 class="text-5xl lg:text-7xl font-black text-white tracking-tighter leading-none">Entropy</h1>
+                                <p class="text-entropy-text-secondary text-lg lg:text-xl font-medium max-w-md mx-auto lg:mx-0 leading-relaxed opacity-80">
                                     {hasExistingIdentity ? 'Your secure gateway to sovereign communication.' : 'Ultimate privacy. No accounts. No metadata. Total sovereignty.'}
                                 </p>
                             </div>
                         </div>
 
-                        {#if !hasExistingIdentity}
+                        {#if !hasExistingIdentity && !isMobile}
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-8">
                                 <div class="p-6 bg-white/[0.05] border border-white/10 rounded-2xl space-y-3">
                                      <div class="flex items-center space-x-3 text-entropy-accent">
@@ -289,7 +301,7 @@
                     </div>
 
                     <!-- Left/Form Section -->
-                    <div class="w-full space-y-8 order-1 lg:order-2">
+                    <div class="w-full space-y-8 order-2">
                         <div class="space-y-6">
                             <div class="flex justify-between items-center px-4">
                                 <label for="vault-password" class="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">
@@ -306,7 +318,7 @@
 
                             <div class="space-y-4">
                                 <div class="relative group">
-                                    <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                    <div class="absolute left-6 lg:left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-100 lg:scale-110">
                                         <LucideLock size={20} />
                                     </div>
                                     <input 
@@ -314,7 +326,7 @@
                                         type={showPassword ? 'text' : 'password'}
                                         bind:value={password}
                                         placeholder={hasExistingIdentity ? "Enter database password" : "Define database password"} 
-                                        class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm"
+                                        class="w-full pl-14 lg:pl-20 pr-14 lg:pr-20 py-5 lg:py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-lg lg:text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm"
                                         onkeydown={(e) => e.key === 'Enter' && (hasExistingIdentity ? handleLogin() : null)}
                                     />
                                     <button 
@@ -332,7 +344,7 @@
 
                                 {#if !hasExistingIdentity}
                                     <div class="relative group animate-in slide-in-from-top-6 duration-700">
-                                        <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                        <div class="absolute left-6 lg:left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-100 lg:scale-110">
                                             <LucideLock size={20} />
                                         </div>
                                         <input 
@@ -340,7 +352,7 @@
                                             type={showPassword ? 'text' : 'password'}
                                             bind:value={confirmPassword}
                                             placeholder="Confirm database password" 
-                                            class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm border-white/5"
+                                            class="w-full pl-14 lg:pl-20 pr-14 lg:pr-20 py-5 lg:py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-lg lg:text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm border-white/5"
                                             onkeydown={(e) => e.key === 'Enter' && handleCreate()}
                                         />
                                     </div>
@@ -396,25 +408,40 @@
             </div>
         </div>
     {:else}
-        <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
-            <Sidebar 
-                bind:showStarredMessages
-                onUpdateClick={handleUpdateClick} 
-                {updateAvailable}
-                {isUpdating}
-                {updatePercent}
-            />
-            <div class="flex-1 relative flex flex-col min-w-0">
-                <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
-            
-            </div>
+        <div class="flex-1 overflow-hidden bg-entropy-bg {isMobile ? 'relative' : 'flex'}">
+            {#if isMobile}
+                {#if !$userStore.activeChatHash}
+                    <Sidebar 
+                        bind:showStarredMessages
+                        onUpdateClick={handleUpdateClick} 
+                        {updateAvailable}
+                        {isUpdating}
+                        {updatePercent}
+                        {isMobile}
+                    />
+                {:else}
+                    <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} {isMobile} />
+                {/if}
+            {:else}
+                <Sidebar 
+                    bind:showStarredMessages
+                    onUpdateClick={handleUpdateClick} 
+                    {updateAvailable}
+                    {isUpdating}
+                    {updatePercent}
+                    {isMobile}
+                />
+                <div class="flex-1 relative flex flex-col min-w-0">
+                    <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} {isMobile} />
+                </div>
+            {/if}
         </div>
     {/if}
 
     <Toast />
     <Modal />
     {#if showOnboarding}
-        <Onboarding onComplete={() => showOnboarding = false} />
+        <Onboarding {isMobile} onComplete={() => showOnboarding = false} />
     {/if}
 </main>
 

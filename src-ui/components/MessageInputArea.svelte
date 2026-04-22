@@ -155,7 +155,7 @@
             </div>
         {/if}
 
-        <div class="p-3 bg-entropy-bg flex items-end space-x-2 min-h-[64px] pb-4">
+        <div class="p-3 bg-entropy-bg flex items-end space-x-2 min-h-[64px] pb-[calc(1rem+var(--sab,0px))]">
             {#if isRecording}
                 <RecordingBar 
                     onSend={(blob, duration) => {

@@ -160,14 +160,14 @@
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2">
 
-        <div class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all">
+        <div class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full">
             <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0 group-hover/file:scale-110 transition-transform">
                 <LucidePaperclip size={20} />
             </div>
-            <div class="flex-1 min-w-0">
+            <div class="flex-1 min-w-0 overflow-hidden">
                 <button 
                     onclick={openSavedFile}
-                    class="block text-left w-full group/name"
+                    class="block text-left w-full group/name min-w-0 overflow-hidden"
                     disabled={!exportedPath}
                 >
                     <div class="text-[13px] font-bold truncate text-entropy-text-primary tracking-tight leading-none mb-1 {exportedPath ? 'group-hover/name:text-entropy-primary group-hover/name:underline' : ''}">

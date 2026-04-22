@@ -1,0 +1,17 @@
+[env]
+OPENSSL_STATIC = "1"
+CC_x86_64_linux_android = "/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+AR_x86_64_linux_android = "/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+
+[target.x86_64-linux-android]
+ar = "/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+linker = "/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+
+[target.aarch64-linux-android]
+# No crypto link args
+
+[target.armv7-linux-androideabi]
+# No crypto link args
+
+[target.i686-linux-android]
+# No crypto link args

@@ -1,0 +1,7 @@
+        Info ANDROID_HOME not set, trying to locate Android SDK...
+        Info Using installed Android SDK: /home/moyzy/Android/Sdk
+        Info Using installed NDK: /home/moyzy/Android/Sdk/ndk/29.0.14206865
+Generating Android Studio project...
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri" relative to "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/entropy" is "../../../"
+victory: Project generated successfully!
+    Make cool apps! 🌻 🐕 🎉

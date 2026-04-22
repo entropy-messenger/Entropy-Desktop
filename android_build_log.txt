@@ -1,0 +1,430 @@
+        Info ANDROID_HOME not set, trying to locate Android SDK...
+        Info Using installed Android SDK: /home/moyzy/Android/Sdk
+        Info Using installed NDK: /home/moyzy/Android/Sdk/ndk/29.0.14206865
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> entropy-desktop@0.1.0 build
+> vite build
+
+vite v7.3.1 building client environment for production...
+transforming...
+9:28:54 AM [vite-plugin-svelte] src-ui/components/MessageBubble.svelte:81:8 Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events
+79: 
+80:     <div class="flex flex-col {msg.isMine ? 'items-end' : 'items-start'} max-w-[65%] relative z-10">
+81:         <div 
+                 ^
+82:             style="word-break: break-all; min-width: {msg.isMine ? '68px' : '52px'};"
+83:             ondblclick={() => setReplyingTo(msg)}
+9:28:55 AM [vite-plugin-svelte] src-ui/components/AttachmentRenderer.svelte:19:45 This reference only captures the initial value of `msg`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally
+17:     let error = $state(false);
+18:     let isExporting = $state(false);
+19:     let exportedPath = $state<string | null>(msg.attachment?.exportedPath || null);
+                                                    ^
+20:     $effect(() => {
+21:         if (msg.attachment?.exportedPath) exportedPath = msg.attachment.exportedPath;
+9:29:01 AM [vite-plugin-svelte] src-ui/components/VoiceNotePlayer.svelte:14:24 This reference only captures the initial value of `initialDuration`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
+12:   let isPlaying = $state(false);
+13:   let currentTime = $state(0);
+14:   let duration = $state(initialDuration);
+                                           ^
+15:   $effect(() => {
+16:     if (initialDuration > 0) duration = initialDuration;
+✓ 3751 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/stores/ui.ts is dynamically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/chat.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts but also statically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/App.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/AttachmentRenderer.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ChatHeader.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ContactProfile.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/CreateGroupOverlay.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageInputArea.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/Modal.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/RecordingBar.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/SettingsPanel.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/Sidebar.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/Toast.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/auth.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/vault.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/chat.ts is dynamically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageInputArea.svelte but also statically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/AttachmentRenderer.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ChatHeader.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ChatWindow.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ContactProfile.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MediaThumbnail.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageInputArea.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/Sidebar.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/auth.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/contacts.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/contacts.ts is dynamically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/chat.ts but also statically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ChatHeader.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ChatWindow.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/ContactProfile.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/CreateGroupOverlay.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageBubble.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageContent.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/MessageInputArea.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/SettingsPanel.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/Sidebar.svelte, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/auth.ts, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/stores/transfers.ts is dynamically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts, /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/network.ts but also statically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/components/AttachmentRenderer.svelte, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /home/moyzy/projects/entropymobile/DesktopApp/node_modules/@tauri-apps/plugin-notification/dist-js/index.js is dynamically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/lib/actions/chat.ts but also statically imported by /home/moyzy/projects/entropymobile/DesktopApp/src-ui/App.svelte, dynamic import will not move module into another chunk.
+
+dist/index.html                   0.45 kB
+dist/assets/index-B8pDNAEj.css   55.57 kB
+dist/assets/index-CtrkWht5.js     0.29 kB
+dist/assets/index-BXIa-90M.js     1.04 kB
+dist/assets/index-CpdZIkbT.js   249.49 kB
+✓ built in 9.35s
+[1m[92m   Compiling[0m cfg-if v1.0.4
+[1m[92m   Compiling[0m libc v0.2.180
+[1m[92m   Compiling[0m serde_core v1.0.228
+[1m[92m   Compiling[0m typenum v1.19.0
+[1m[92m   Compiling[0m serde v1.0.228
+[1m[92m   Compiling[0m generic-array v0.14.7
+[1m[92m   Compiling[0m smallvec v1.15.1
+[1m[92m   Compiling[0m subtle v2.6.1
+[1m[92m   Compiling[0m getrandom v0.3.4
+[1m[92m   Compiling[0m itoa v1.0.17
+[1m[92m   Compiling[0m stable_deref_trait v1.2.1
+[1m[92m   Compiling[0m log v0.4.29
+[1m[92m   Compiling[0m zeroize v1.8.2
+[1m[92m   Compiling[0m zerofrom v0.1.6
+[1m[92m   Compiling[0m parking_lot_core v0.9.12
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m memchr v2.7.6
+[1m[92m   Compiling[0m once_cell v1.21.3
+[1m[92m   Compiling[0m litemap v0.8.1
+[1m[92m   Compiling[0m pin-project-lite v0.2.16
+[1m[92m   Compiling[0m writeable v0.6.2
+[1m[92m   Compiling[0m zerocopy v0.8.35
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m yoke v0.8.1
+[1m[92m   Compiling[0m futures-core v0.3.31
+[1m[92m   Compiling[0m thiserror v2.0.18
+[1m[92m   Compiling[0m icu_properties_data v2.1.2
+[1m[92m   Compiling[0m icu_normalizer_data v2.1.1
+[1m[92m   Compiling[0m bitflags v2.10.0
+[1m[92m   Compiling[0m crossbeam-utils v0.8.21
+[1m[92m   Compiling[0m sha2-asm v0.6.4
+[1m[92m   Compiling[0m thiserror v1.0.69
+[1m[92m   Compiling[0m byteorder v1.5.0
+[1m[92m   Compiling[0m zerovec v0.11.5
+[1m[92m   Compiling[0m zerotrie v0.2.3
+[1m[92m   Compiling[0m siphasher v1.0.2
+[1m[92m   Compiling[0m zmij v1.0.17
+[1m[92m   Compiling[0m percent-encoding v2.3.2
+[1m[92m   Compiling[0m siphasher v0.3.11
+[1m[92m   Compiling[0m serde_json v1.0.149
+[1m[92m   Compiling[0m utf-8 v0.7.6
+[1m[92m   Compiling[0m phf_shared v0.11.3
+[1m[92m   Compiling[0m getrandom v0.2.17
+[1m[92m   Compiling[0m cpufeatures v0.2.17
+[1m[92m   Compiling[0m errno v0.3.14
+[1m[92m   Compiling[0m mio v1.1.1
+[1m[92m   Compiling[0m rand_core v0.6.4
+[1m[92m   Compiling[0m signal-hook-registry v1.4.8
+[1m[92m   Compiling[0m rand_core v0.9.5
+[1m[92m   Compiling[0m socket2 v0.6.2
+[1m[92m   Compiling[0m parking_lot v0.12.5
+[1m[92m   Compiling[0m utf8_iter v1.0.4
+[1m[92m   Compiling[0m new_debug_unreachable v1.0.6
+[1m[92m   Compiling[0m futures-sink v0.3.31
+[1m[92m   Compiling[0m pin-utils v0.1.0
+[1m[92m   Compiling[0m hax-lib v0.3.6
+[1m[92m   Compiling[0m phf v0.11.3
+[1m[92m   Compiling[0m form_urlencoded v1.2.2
+[1m[92m   Compiling[0m jni-sys v0.3.0
+[1m[92m   Compiling[0m precomputed-hash v0.1.1
+[1m[92m   Compiling[0m slab v0.4.11
+[1m[92m   Compiling[0m tinystr v0.8.2
+[1m[92m   Compiling[0m potential_utf v0.1.4
+[1m[92m   Compiling[0m futures-task v0.3.31
+[1m[92m   Compiling[0m mac v0.1.1
+[1m[92m   Compiling[0m icu_collections v2.1.1
+[1m[92m   Compiling[0m powerfmt v0.2.0
+[1m[92m   Compiling[0m futures-util v0.3.31
+[1m[92m   Compiling[0m futf v0.1.5
+[1m[92m   Compiling[0m httparse v1.10.1
+[1m[92m   Compiling[0m icu_locale_core v2.1.1
+[1m[92m   Compiling[0m crypto-common v0.1.7
+[1m[92m   Compiling[0m block-buffer v0.10.4
+[1m[92m   Compiling[0m num_enum v0.7.5
+[1m[92m   Compiling[0m aho-corasick v1.1.4
+[1m[92m   Compiling[0m phf_shared v0.10.0
+[1m[92m   Compiling[0m digest v0.10.7
+[1m[92m   Compiling[0m typeid v1.0.3
+[1m[92m   Compiling[0m regex-syntax v0.8.8
+[1m[92m   Compiling[0m alloc-no-stdlib v2.0.4
+[1m[92m   Compiling[0m unic-char-range v0.9.0
+[1m[92m   Compiling[0m time-core v0.1.8
+[1m[92m   Compiling[0m unic-common v0.9.0
+[1m[92m   Compiling[0m dtoa v1.0.11
+[1m[92m   Compiling[0m num-conv v0.2.0
+[1m[92m   Compiling[0m unic-ucd-version v0.9.0
+[1m[92m   Compiling[0m unic-char-property v0.9.0
+[1m[92m   Compiling[0m sha2 v0.10.9
+[1m[92m   Compiling[0m dtoa-short v0.3.5
+[1m[92m   Compiling[0m alloc-stdlib v0.2.2
+[1m[92m   Compiling[0m phf v0.10.1
+[1m[92m   Compiling[0m tauri v2.10.3
+[1m[92m   Compiling[0m tendril v0.4.3
+[1m[92m   Compiling[0m block-padding v0.3.3
+[1m[92m   Compiling[0m phf_shared v0.8.0
+[1m[92m   Compiling[0m erased-serde v0.4.9
+[1m[92m   Compiling[0m cssparser v0.29.6
+[1m[92m   Compiling[0m markup5ever v0.14.1
+[1m[92m   Compiling[0m matches v0.1.10
+[1m[92m   Compiling[0m raw-window-handle v0.6.2
+[1m[92m   Compiling[0m hashbrown v0.16.1
+[1m[92m   Compiling[0m nodrop v0.1.14
+[1m[92m   Compiling[0m icu_provider v2.1.1
+[1m[92m   Compiling[0m fnv v1.0.7
+[1m[92m   Compiling[0m winnow v0.7.14
+[1m[92m   Compiling[0m cesu8 v1.1.0
+[1m[92m   Compiling[0m equivalent v1.0.2
+[1m[92m   Compiling[0m servo_arc v0.2.0
+[1m[92m   Compiling[0m icu_normalizer v2.1.1
+[1m[92m   Compiling[0m icu_properties v2.1.2
+[1m[92m   Compiling[0m cookie v0.18.1
+[1m[92m   Compiling[0m uuid v1.20.0
+[1m[92m   Compiling[0m deranged v0.5.5
+[1m[92m   Compiling[0m serde_spanned v1.0.4
+[1m[92m   Compiling[0m indexmap v2.13.0
+[1m[92m   Compiling[0m toml_datetime v0.7.5+spec-1.1.0
+[1m[92m   Compiling[0m bytes v1.11.0
+[1m[92m   Compiling[0m string_cache v0.8.9
+[1m[92m   Compiling[0m idna_adapter v1.2.1
+[1m[92m   Compiling[0m regex-automata v0.4.13
+[1m[92m   Compiling[0m idna v1.1.0
+[1m[92m   Compiling[0m dpi v0.1.2
+[1m[92m   Compiling[0m http v1.4.0
+[1m[92m   Compiling[0m tokio v1.49.0
+[1m[92m   Compiling[0m url v2.5.8
+[1m[92m   Compiling[0m time v0.3.46
+[1m[92m   Compiling[0m ppv-lite86 v0.2.21
+[1m[92m   Compiling[0m combine v4.6.7
+[1m[92m   Compiling[0m toml_parser v1.0.6+spec-1.1.0
+[1m[92m   Compiling[0m jsonptr v0.6.3
+[1m[92m   Compiling[0m rand_chacha v0.9.0
+[1m[92m   Compiling[0m rand v0.9.2
+[1m[92m   Compiling[0m http-body v1.0.1
+[1m[92m   Compiling[0m cfb v0.7.3
+[1m[92m   Compiling[0m phf v0.8.0
+[1m[92m   Compiling[0m inout v0.1.4
+[1m[92m   Compiling[0m regex v1.12.2
+[1m[92m   Compiling[0m brotli-decompressor v5.0.0
+[1m[92m   Compiling[0m aws-lc-sys v0.37.0
+[1m[92m   Compiling[0m unic-ucd-ident v0.9.0
+[1m[92m   Compiling[0m libcrux-secrets v0.0.5
+[1m[92m   Compiling[0m ndk-sys v0.6.0+11769913
+[1m[92m   Compiling[0m fxhash v0.2.1
+[1m[92m   Compiling[0m selectors v0.24.0
+[1m[92m   Compiling[0m anyhow v1.0.100
+[1m[92m   Compiling[0m tower-service v0.3.3
+[1m[92m   Compiling[0m try-lock v0.2.5
+[1m[92m   Compiling[0m toml_writer v1.0.6+spec-1.1.0
+[1m[92m   Compiling[0m base64 v0.22.1
+[1m[92m   Compiling[0m bitflags v1.3.2
+[1m[92m   Compiling[0m same-file v1.0.6
+[1m[92m   Compiling[0m toml v0.9.11+spec-1.1.0
+[1m[92m   Compiling[0m walkdir v2.5.0
+[1m[92m   Compiling[0m ndk v0.9.0
+[1m[92m   Compiling[0m want v0.3.1
+[1m[92m   Compiling[0m libcrux-traits v0.0.6
+[1m[92m   Compiling[0m urlpattern v0.3.0
+[1m[92m   Compiling[0m brotli v8.0.2
+[1m[92m   Compiling[0m cipher v0.4.4
+[1m[92m   Compiling[0m infer v0.19.0
+[1m[92m   Compiling[0m serde-untagged v0.1.9
+[1m[92m   Compiling[0m json-patch v3.0.1
+[1m[92m   Compiling[0m html5ever v0.29.1
+[1m[92m   Compiling[0m jni v0.21.1
+[1m[92m   Compiling[0m serde_with v3.16.1
+[1m[92m   Compiling[0m crossbeam-channel v0.5.15
+[1m[92m   Compiling[0m tracing-core v0.1.36
+[1m[92m   Compiling[0m sync_wrapper v1.0.2
+[1m[92m   Compiling[0m futures-channel v0.3.31
+[1m[92m   Compiling[0m semver v1.0.27
+[1m[92m   Compiling[0m dunce v1.0.5
+[1m[92m   Compiling[0m glob v0.3.3
+[1m[92m   Compiling[0m tower-layer v0.3.3
+[1m[92m   Compiling[0m atomic-waker v1.1.2
+[1m[92m   Compiling[0m libcrux-intrinsics v0.0.6
+[1m[92m   Compiling[0m tauri-runtime v2.10.1
+[1m[92m   Compiling[0m wry v0.54.2
+[1m[92m   Compiling[0m tower v0.5.3
+[1m[92m   Compiling[0m hyper v1.8.1
+[1m[92m   Compiling[0m tracing v0.1.44
+[1m[92m   Compiling[0m kuchikiki v0.8.8-speedreader
+[1m[92m   Compiling[0m iri-string v0.7.10
+[1m[92m   Compiling[0m lazy_static v1.5.0
+[1m[92m   Compiling[0m tauri-utils v2.8.3
+[1m[92m   Compiling[0m ndk-context v0.1.1
+[1m[92m   Compiling[0m ipnet v2.11.0
+[1m[92m   Compiling[0m option-ext v0.2.0
+[1m[92m   Compiling[0m dirs-sys v0.5.0
+[1m[92m   Compiling[0m libcrux-sha3 v0.0.8
+[1m[92m   Compiling[0m tauri-runtime-wry v2.10.1
+[1m[92m   Compiling[0m curve25519-dalek v4.1.3
+[1m[92m   Compiling[0m tokio-util v0.7.18
+[1m[92m   Compiling[0m tao v0.34.5
+[1m[92m   Compiling[0m hyper-util v0.1.19
+[1m[92m   Compiling[0m http-body-util v0.1.3
+[1m[92m   Compiling[0m tower-http v0.6.8
+[1m[92m   Compiling[0m hmac v0.12.1
+[1m[92m   Compiling[0m universal-hash v0.5.1
+[1m[92m   Compiling[0m libcrux-platform v0.0.3
+[1m[92m   Compiling[0m rustls-pki-types v1.14.0
+[1m[92m   Compiling[0m opaque-debug v0.3.1
+[1m[92m   Compiling[0m polyval v0.6.2
+[1m[92m   Compiling[0m reqwest v0.13.2
+[1m[92m   Compiling[0m serialize-to-javascript v0.1.2
+[1m[92m   Compiling[0m zstd-sys v2.0.16+zstd.1.5.7
+[1m[92m   Compiling[0m dirs v6.0.0
+[1m[92m   Compiling[0m aes v0.8.4
+[1m[92m   Compiling[0m sha1 v0.10.6
+[1m[92m   Compiling[0m heck v0.5.0
+[1m[92m   Compiling[0m mime v0.3.17
+[1m[92m   Compiling[0m base64ct v1.8.3
+[1m[92m   Compiling[0m untrusted v0.9.0
+[1m[92m   Compiling[0m signal-hook v0.3.18
+[1m[92m   Compiling[0m libcrux-hacl-rs v0.0.4
+[1m[92m   Compiling[0m num-traits v0.2.19
+[1m[92m   Compiling[0m tauri-plugin-fs v2.4.5
+[1m[92m   Compiling[0m ctr v0.9.2
+[1m[92m   Compiling[0m crossbeam-epoch v0.9.18
+[1m[92m   Compiling[0m data-encoding v2.10.0
+[1m[92m   Compiling[0m either v1.15.0
+[1m[92m   Compiling[0m rayon-core v1.13.0
+[1m[92m   Compiling[0m rustix v1.1.3
+[1m[92m   Compiling[0m libcrux-ml-kem v0.0.8
+[1m[92m   Compiling[0m crossbeam-deque v0.8.6
+[1m[92m   Compiling[0m derive_more v2.1.1
+[1m[92m   Compiling[0m bzip2-sys v0.1.13+1.0.8
+[1m[92m   Compiling[0m x25519-dalek v2.0.1
+[1m[92m   Compiling[0m ghash v0.5.1
+[1m[92m   Compiling[0m hkdf v0.12.4
+[1m[92m   Compiling[0m aead v0.5.2
+[1m[92m   Compiling[0m hpke-rs-crypto v0.6.1
+[1m[92m   Compiling[0m os_pipe v1.2.3
+[1m[92m   Compiling[0m crc32fast v1.5.0
+[1m[92m   Compiling[0m is-docker v0.2.0
+[1m[92m   Compiling[0m libsignal-debug v0.91.0 (https://github.com/signalapp/libsignal.git#8418be45)
+[1m[92m   Compiling[0m foldhash v0.1.5
+[1m[92m   Compiling[0m simd-adler32 v0.3.8
+[1m[92m   Compiling[0m linux-raw-sys v0.11.0
+[1m[92m   Compiling[0m adler2 v2.0.1
+[1m[92m   Compiling[0m miniz_oxide v0.8.9
+[1m[92m   Compiling[0m hashbrown v0.15.5
+[1m[92m   Compiling[0m is-wsl v0.4.0
+[1m[92m   Compiling[0m libsignal-core v0.1.0 (https://github.com/signalapp/libsignal.git#8418be45)
+[1m[92m   Compiling[0m sigchld v0.2.4
+[1m[92m   Compiling[0m tauri-plugin-shell v2.3.4
+[1m[92m   Compiling[0m tauri-plugin-notification v2.3.3
+[1m[92m   Compiling[0m tauri-plugin-dialog v2.6.0
+[1m[92m   Compiling[0m hpke-rs v0.6.1
+[1m[92m   Compiling[0m spqr v1.5.1 (https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.1#f2589fef)
+[1m[92m   Compiling[0m libsqlite3-sys v0.31.0
+[1m[92m   Compiling[0m password-hash v0.4.2
+[1m[92m   Compiling[0m libcrux-sha2 v0.0.6
+[1m[92m   Compiling[0m cbc v0.1.2
+[1m[92m   Compiling[0m prost v0.14.3
+[1m[92m   Compiling[0m android_system_properties v0.1.5
+[1m[92m   Compiling[0m openssl-probe v0.2.1
+[1m[92m   Compiling[0m sorted-vec v0.8.10
+[1m[92m   Compiling[0m libcrux-hmac v0.0.6
+[1m[92m   Compiling[0m pathdiff v0.2.3
+[1m[92m   Compiling[0m open v5.3.3
+[1m[92m   Compiling[0m rustls-native-certs v0.8.3
+[1m[92m   Compiling[0m iana-time-zone v0.1.65
+[1m[92m   Compiling[0m signal-crypto v0.1.0 (https://github.com/signalapp/libsignal.git#8418be45)
+[1m[92m   Compiling[0m libsignal-protocol v0.1.0 (https://github.com/signalapp/libsignal.git#8418be45)
+[1m[92m   Compiling[0m pbkdf2 v0.11.0
+[1m[92m   Compiling[0m rayon v1.11.0
+[1m[92m   Compiling[0m xattr v1.6.1
+[1m[92m   Compiling[0m flate2 v1.1.9
+[1m[92m   Compiling[0m bzip2 v0.4.4
+[1m[92m   Compiling[0m shared_child v1.1.1
+[1m[92m   Compiling[0m hashlink v0.10.0
+[1m[92m   Compiling[0m data-encoding-macro v0.1.19
+[1m[92m   Compiling[0m num-integer v0.1.46
+[1m[92m   Compiling[0m aes-gcm-siv v0.11.1
+[1m[92m   Compiling[0m itertools v0.14.0
+[1m[92m   Compiling[0m password-hash v0.5.0
+[1m[92m   Compiling[0m blake2 v0.10.6
+[1m[92m   Compiling[0m filetime v0.2.27
+[1m[92m   Compiling[0m encoding_rs v0.8.35
+[1m[92m   Compiling[0m fallible-streaming-iterator v0.1.9
+[1m[92m   Compiling[0m const-str v1.1.0
+[1m[92m   Compiling[0m hex v0.4.3
+[1m[92m   Compiling[0m constant_time_eq v0.1.5
+[1m[92m   Compiling[0m assert_matches v1.5.0
+[1m[92m   Compiling[0m fallible-iterator v0.3.0
+[1m[92m   Compiling[0m argon2 v0.5.3
+[1m[92m   Compiling[0m entropy v0.1.0 (/home/moyzy/projects/entropymobile/DesktopApp/src-tauri)
+[1m[92m   Compiling[0m tar v0.4.44
+[1m[92m   Compiling[0m num-bigint v0.4.6
+[1m[92m   Compiling[0m chrono v0.4.43
+[1m[92m   Compiling[0m aes-gcm v0.10.3
+[1m[92m   Compiling[0m tokio-socks v0.5.2
+[1m[92m   Compiling[0m keyring v3.6.3
+[1m[92m   Compiling[0m zstd-safe v5.0.2+zstd.1.5.2
+[1m[92m   Compiling[0m zstd v0.11.2+zstd.1.5.2
+[1m[92m   Compiling[0m zip v0.6.6
+[1m[92m   Compiling[0m aws-lc-rs v1.15.4
+[1m[92m   Compiling[0m rustls v0.23.36
+[1m[92m   Compiling[0m rustls-webpki v0.103.9
+[1m[92m   Compiling[0m tungstenite v0.26.2
+[1m[92m   Compiling[0m tokio-rustls v0.26.4
+[1m[92m   Compiling[0m rusqlite v0.33.0
+[1m[92m   Compiling[0m tokio-tungstenite v0.26.2
+[1m[33mwarning[0m[1m: unused import: `tauri::Manager`[0m
+  [1m[94m--> [0msrc/lib.rs:21:5
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m use tauri::Manager;
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `total_actual`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:39
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                       [1m[33m^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_total_actual`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `current_count`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:53
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                                     [1m[33m^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_current_count`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `derived_key_hex`[0m
+   [1m[94m--> [0msrc/commands/vault/core.rs:284:13
+    [1m[94m|[0m
+[1m[94m284[0m [1m[94m|[0m         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
+    [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_derived_key_hex`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+ [1m[94m--> [0msrc/commands/system.rs:6:5
+  [1m[94m|[0m
+[1m[94m6[0m [1m[94m|[0m     app: tauri::AppHandle,
+  [1m[94m|[0m     [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `state`[0m
+ [1m[94m--> [0msrc/commands/system.rs:7:5
+  [1m[94m|[0m
+[1m[94m7[0m [1m[94m|[0m     state: State<'_, DbState>,
+  [1m[94m|[0m     [1m[33m^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_state`[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+  [1m[94m--> [0msrc/lib.rs:29:9
+   [1m[94m|[0m
+[1m[94m29[0m [1m[94m|[0m     let mut builder = tauri::Builder::default()
+   [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^^[0m
+   [1m[94m|[0m         [1m[94m|[0m
+   [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+   [1m[94m--> [0msrc/lib.rs:122:17
+    [1m[94m|[0m
+[1m[94m122[0m [1m[94m|[0m         .setup(|app| {
+    [1m[94m|[0m                 [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[91merror[0m[1m: linking with `/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang` failed: exit status: 1[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m:  "/home/moyzy/Android/Sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" "-Wl,--version-script=/tmp/rustcT839qE/list" "-Wl,--no-undefined-version" "/tmp/rustcT839qE/symbols.o" "<257 object files omitted>" "-Wl,--as-needed" "-Wl,-Bstatic" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/deps/{libtauri_plugin_dialog-c0457e6cde246557,libtauri_plugin_fs-c7804d5c1ce9b9a4,libtauri_plugin_notification-56fed9da13fb46b5,libtauri_plugin_shell-37e47f52b1eec967,libopen-5f22da4cd9734bc3,libpathdiff-8aaf145aa8061b4a,libis_wsl-9ac949d76c5262a2,libis_docker-6f93c4aed8c85fdf,libshared_child-e9af2efccfcb5d4a,libsigchld-36d7b533851bb8da,libsignal_hook-f5e49aafd021e4a4,libos_pipe-3a0512b5cacbacea,libencoding_rs-d200225ae9d74403,libchrono-333f87d8a38b9332,libiana_time_zone-ba7ffbf6ea3772cf,libandroid_system_properties-69300a560723df0c,libtokio_util-2b81e4df993e13d2,libargon2-2b47246e1e7e8b2d,libblake2-853d300e5fad6f72,libpassword_hash-624a37a45bea3017,libzip-310e4f6f681d7efa,libpbkdf2-4a9fa97444e6b673,libpassword_hash-8df2ee2ddfec8cde,libbase64ct-b3c904022b74c96e,libzstd-44988a6109fdd4f9,libzstd_safe-799cb8268d431abf,libzstd_sys-301a57ce0e2b5578,libbzip2-5197dfbd9dc66fb8,libbzip2_sys-e69e8ebeea60ac57,libflate2-bdd47c30ecb82f88,libminiz_oxide-efa600de379143df,libsimd_adler32-9eb9a7c859b0f6d2,libcrc32fast-15bcc5987c8bc8f1,libconstant_time_eq-d4e90abe0fa8a79c,libnum_bigint-bae0c363b4b5d3a1,libnum_integer-a61c443ec8b0b6f4,libnum_traits-0272fb4b2979ba08,libaes_gcm-e53471a53e387c6c,libtokio_socks-c327a24e27de6e35,liblibsignal_protocol-19486c272e1b2f0d,librayon-34b8ddec90935b7f,librayon_core-df148245635b69e2,libcrossbeam_deque-c0603955f0d3a0f7,libcrossbeam_epoch-6dcc1a8f223cd202,libhex-4d879ac1d62a9944,libspqr-41acb701e8dd7640,libsorted_vec-84b51218827358f9,liblibcrux_hmac-3b295ab688196b54,liblibcrux_sha2-2ec96625022ae66b,liblibcrux_hacl_rs-002fdf070f51c645,libsignal_crypto-1d8ae82471e5c9eb,libcbc-e91d48c82de0fafb,libghash-7ea146a75143dfcd,libhkdf-f174cc7b353492c5,libhpke_rs-ea3700052b8574ff,libhpke_rs_crypto-8e3cb17fbd743600,libconst_str-a30e128113645968,libdata_encoding_macro-8b0ffd708da27b1f,libitertools-ecd5d2072d2eba51,libeither-b83acf0af88d1171,libaes_gcm_siv-6df02457f8aff681,libctr-8130602381c4b536,libpolyval-bd61791615121223,libopaque_debug-2138d17cff1feb2a,libuniversal_hash-fb04c5b1616c532c,libaead-8ce4eb0ef3f226bc,liblibcrux_ml_kem-9a284194d7e7afc0,liblibcrux_platform-4b6b3d689427325c,liblibcrux_sha3-ce8ba6f4f15fed41,liblibcrux_traits-23ba872629f4d670,liblibcrux_secrets-8d92164f629d16de,libhax_lib-33d159de278b110e,liblibcrux_intrinsics-d635a3e2175b2ccc,libprost-8929be4a0c94382d,liblibsignal_core-5488389e69347445,liblibsignal_debug-5699c813729c0035,libderive_more-8e85d9d5bd687b4a,libx25519_dalek-e0d2b62e85cd0298,libcurve25519_dalek-e9e11f3a7a6e801d,libhmac-a296fde6784754ae,libaes-be5e9cd296563956,libcipher-e89c72d77621c416,libinout-f3c6491b6f505b6d,libblock_padding-b0edeb33731f73d2,libtauri-ec2827d7db594c1d,libheck-bc30217c84461fc6,libdirs-9c2c7d5d39dbeaa6,libdirs_sys-3e39615653026381,liboption_ext-f7d79627b3eb878c,libmime-caba44d59dfe7ff3,libtauri_runtime_wry-72352f286247377d,libwry-844411bc4fce684e,libsha2-b01a650d9d196294,libcpufeatures-db3e84745c311dd5,libkuchikiki-f415027e81ec85ee,libselectors-f72089b3c43f156f,libservo_arc-c35f261c1c606465,libnodrop-36ed10771c97e332,libphf-3a5158a3b27823cf,libphf_shared-a14085e1a5c3834d,libfxhash-aaf02de6e32d1848,libbitflags-aba57479ecd7ff11,libcssparser-da6c763da8f2afa2,libdtoa_short-512bcc87d866c502,libdtoa-c8eaab6cec1b89bf,libmatches-e53919f3ad8b845b,libphf-03123be66d5c3281,libphf_shared-fdd5971e8835721f,libsiphasher-7d07fc2fc2d18042,libindexmap-e5444cdf6674013b,libequivalent-5470b014f52de32c,libhashbrown-eaa083a5355702ce,libhtml5ever-070813f535f02b66,libmarkup5ever-6c594d6ed8e02e44,libstring_cache-1245bf6eb963c5bd,libprecomputed_hash-7af6e42fad49ff5b,libtendril-1d6d7e25ed4fe50c,libfutf-273cfadd3764c563,libdebug_unreachable-27e2d2f021d5e8a2,libmac-35f0bdd56a02ede8,libbase64-f503f6f706ef47d4,libtao-fa75cbcc3f00176e,libndk_context-9bf342f543ccf751,libonce_cell-34dbed3f5da5fdc7,libndk-39a9523410420f16,libndk_sys-f3ac1ecb384a3bd9,libnum_enum-44c85e2b459b1a94,libcrossbeam_channel-7929a1896ca705c4,libcrossbeam_utils-93b0e583e907a4e4,liblazy_static-b0a4680380bf4d5a,libtauri_runtime-d36d117e4a47b319,libjni-e9450b8d668596fb,libcesu8-d13d0c1384f4bd8d,libcombine-2ab23b30df93affd,libjni_sys-6c57c9af4a936579,libcookie-6bb6442fe6df297a,libtime-b8780bc76bb666ca,libtime_core-3ed8c65acd447ece,libnum_conv-1c576b36dc0c5780,libderanged-7f29ed2e6f3c4ac9,libpowerfmt-d5c588e582538198,libdpi-376b38b9bb526766,libserialize_to_javascript-18c0063beb09152e,libraw_window_handle-2243c615909acf10,libtauri_utils-a0c05ab59d046ac8,libdunce-01c0eeca372aa12c,libinfer-c469f603d1299864,libcfb-98b2aa9fd0395060,libfnv-3e6bdcf2974a96aa,libbyteorder-01ad17aefd29e975,libuuid-c5e4fce8bab745c6,libbrotli-24fa990bd61f7a39,libbrotli_decompressor-3f869a4ba07a3799,liballoc_stdlib-773ac6073f5e9c14,liballoc_no_stdlib-6afbd1f4c617b12a,liburlpattern-46b9f78163ef6ec3,libunic_ucd_ident-5ee2b8e566a20566,libunic_ucd_version-0cedd6d91ea64921,libunic_common-c3a1f437b1abb87b,libunic_char_property-1380ce6d2daeaef3,libunic_char_range-98e1620d2385c035,libregex-69536482f53662eb,libregex_automata-4b5ef07f1ec19a2e,libaho_corasick-33b2cc2ed53c7251,libregex_syntax-377833191799c420,libglob-f5eef3fa4a6547a2,libwalkdir-8d4ab5a5e52f75ab,libsame_file-0364f7c9ca84eb5b,libjson_patch-437093468a62ea04,libthiserror-925c2942bd7f2781,libjsonptr-b80c112821cbcbb6,libserde_with-37e8474de37f5a55,libserde_json-8c581db229a9a2d5,libmemchr-97c0f93f653dd1d7,libzmij-bc5e4627948eac57,libphf-609101c0540998a0,libphf_shared-f5f016c78a30dc12,libsiphasher-fcafdbe8035ffee6,libtoml-03bbe2c9c72219cf,libtoml_writer-1dd1f705d1253612,libtoml_parser-a7ec72f77b9e9cf9,libwinnow-571211e8668ac99f,libserde_spanned-67e4614ba4a3a08d,libtoml_datetime-e992a5962e206edb,libserde_untagged-571bc770b75d5c73,liberased_serde-e941b6c0b7ae834c,libtypeid-bbd4fe46ad7a408f,liburl-75c856fda1274346,libidna-14d9eb0c67f1b9f3,libutf8_iter-3f17f0e8c42d8727,libidna_adapter-ba91d2452c810337,libicu_properties-13201a26f179d195,libicu_properties_data-9d77e76aa3ccf053,libicu_normalizer-c47192bb0e428dde,libicu_normalizer_data-bd7eafefda985180,libicu_collections-f86a2271ae8d72fd,libpotential_utf-ce449941127020d7,libicu_provider-5d543e3f9885574b,libicu_locale_core-6e12facde8fa0fb6,libtinystr-6420826a24dac574,liblitemap-fa3b0628e2351caa,libwriteable-32d4b4d81ceeb9c0,libzerovec-2926ffc49ca879f1,libzerotrie-000f0d65444f6137,libyoke-bedf3c862478ac3b,libstable_deref_trait-b09da7c617d3d7b9,libzerofrom-56feeec9a816c5f0,libform_urlencoded-cfa8d52a16a4fa2f,libpercent_encoding-e742bff555a318cc,libanyhow-883f5a6167576903,libsemver-8abbf5da7e12b84c,libtokio_tungstenite-59eb6d9a7a6a27b9,librustls_native_certs-cddaf2b7b7fc06ec,libopenssl_probe-0762948b4d25e9f7,libtokio_rustls-7e8503210f457fc6,libfutures_util-ce1f67a42e7655ea,libslab-656e899e8a605ef2,libfutures_sink-4e35d69e92a53a57,libfutures_task-91d95f9f3d80f6d5,libpin_utils-eda03b8f643f7a30,libfutures_core-5cedbb4e431a488f,libtungstenite-d1fcd003f47de16f,libdata_encoding-374e22551a1edee3,librand-3b4f6586ed841e83,librand_chacha-2b203947a7fa35b9,libppv_lite86-1edee0db49a8fc07,libzerocopy-64d1be0475c37b41,librand_core-f0a653f1111d08c4,libgetrandom-57e835f70da93ae9,librustls-732ede8db29726a7,libwebpki-340b7fad44b28a8a,libuntrusted-5fc4de86105a1482,libaws_lc_rs-689800f05b0e4a95,libaws_lc_sys-70c82d0c4adb3db8,librustls_pki_types-7856a7e8fa508cc5,libzeroize-73cd8e0b10ac0706,libutf8-7481e57d507ec776,libsha1-ffffc31b43d2295d,libdigest-6669e67ff33f9c56,libsubtle-cf95cacddb6bf091,libblock_buffer-23ee47b039b02f6a,libcrypto_common-4159120cf6e9379d,libgeneric_array-41949d396296a748,libtypenum-772aafdb467966f3,librand_core-2a89d1b29de54042,libgetrandom-5c555544718d98f3,libhttparse-de12d147c08288f9,libthiserror-b562e20d5c462c91,liblog-f088abfd9ed767ec,libhttp-939d54379686667d,libitoa-d2cfc1a7ff3cb7dc,libtokio-fd0aba344e9d0c96,libsignal_hook_registry-4a1588c644ce8a01,liberrno-3bff22e896048afd,libsocket2-54ddda08334ad3b4,libbytes-7d559d4c7eab9029,libserde-b1f2ff080075c439,libserde_core-c790db5b85508cb5,libmio-72074da1338f0fd9,libparking_lot-251e10e19f2a12f8,libparking_lot_core-a0872bd09c334134,liblibc-1f59fcc7a892892a,libcfg_if-aff356f45cbd31b2,liblock_api-6cb936b6a0a938ab,libscopeguard-760b06e3e36a45d8,libpin_project_lite-a50f0f4c6c9623b2,librusqlite-d0d15b99ca5456ab,libbitflags-59a5bc6740611a7d,libsmallvec-f5ee5590dc0ac8e4,libhashlink-0c3916ba76c925c1,libhashbrown-e4609cf11c48ea68,libfoldhash-8c32631fdda2af3b,liblibsqlite3_sys-a852afe6da9eef52,libfallible_streaming_iterator-375847022f5026cc,libfallible_iterator-0fb2b51e9e696426}.rlib" "<sysroot>/lib/rustlib/aarch64-linux-android/lib/{libstd-*,libpanic_unwind-*,libobject-*,libmemchr-*,libaddr2line-*,libgimli-*,libcfg_if-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libminiz_oxide-*,libadler2-*,libunwind-*,liblibc-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "-Wl,-Bdynamic" "-landroid" "-ldl" "-llog" "-lunwind" "-ldl" "-lm" "-lc" "-L" "/tmp/rustcT839qE/raw-dylibs" "-Wl,--eh-frame-hdr" "-Wl,-z,noexecstack" "-L" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/build/sha2-asm-508035e2f28605e5/out" "-L" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/build/libsqlite3-sys-51fd86b99f967088/out" "-L" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/build/aws-lc-sys-6bde431d181c9ecc/out" "-L" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/build/bzip2-sys-a4cd1106e572e3b7/out/lib" "-L" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/build/zstd-sys-853e1729a3eb0b1f/out" "-o" "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/aarch64-linux-android/debug/deps/libentropy.so" "-Wl,--gc-sections" "-shared" "-Wl,-z,relro,-z,now" "-Wl,-O1" "-nodefaultlibs" "-lcrypto" "-lssl" "-landroid" "-llog" "-lOpenSLES"
+  [1m[94m= [0m[1mnote[0m: some arguments are omitted. use `--verbose` to show all linker arguments
+  [1m[94m= [0m[1mnote[0m: ld.lld: error: unable to find library -lcrypto
+          ld.lld: error: unable to find library -lssl
+          clang: error: linker command failed with exit code 1 (use -v to see invocation)
+          
+
+[1m[33mwarning[0m: `entropy` (lib) generated 8 warnings
+[1m[91merror[0m: could not compile `entropy` (lib) due to 1 previous error; 8 warnings emitted
+failed to build Android app: `Failed to run `cargo build`: command ["cargo", "build", "--package", "entropy", "--manifest-path", "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/Cargo.toml", "--target", "aarch64-linux-android", "--features", "tauri/custom-protocol", "--lib"] exited with code 101
+       Error failed to build Android app: `Failed to run `cargo build`: command ["cargo", "build", "--package", "entropy", "--manifest-path", "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/Cargo.toml", "--target", "aarch64-linux-android", "--features", "tauri/custom-protocol", "--lib"] exited with code 101

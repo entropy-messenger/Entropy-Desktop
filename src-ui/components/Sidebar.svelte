@@ -161,8 +161,8 @@
     };
 </script>
 
-<div class="h-full w-80 bg-entropy-bg flex flex-col relative shrink-0">
-  <div class="p-4 flex flex-col space-y-4 bg-entropy-surface/50">
+<div class="h-full w-full lg:w-80 bg-entropy-bg flex flex-col relative shrink-0">
+  <div class="p-4 flex flex-col space-y-4 bg-entropy-surface/50 pt-[var(--sat,1rem)]">
     <div class="flex justify-end items-center px-1">
         <div class="flex items-center space-x-1">
             <button onclick={toggleTheme} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-entropy-primary transition" title="Toggle Theme">

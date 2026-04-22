@@ -174,6 +174,9 @@ pub async fn db_export_media(
         out_file
             .write_all(&plaintext)
             .map_err(|e| format!("Failed to write to target file: {}", e))?;
+        out_file
+            .sync_all()
+            .map_err(|e| format!("Failed to sync file to disk: {}", e))?;
     } else {
         // Refuse to copy files from outside the media vault
         return Err("Export denied: Source path is outside the allowed media vault".into());

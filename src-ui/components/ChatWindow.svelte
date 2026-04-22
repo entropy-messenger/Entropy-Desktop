@@ -13,7 +13,7 @@
   import { tick } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   
-  let { showStarredMessages = $bindable(false), onCloseStarred }: { showStarredMessages?: boolean; onCloseStarred?: () => void } = $props();
+  let { showStarredMessages = $bindable(false), onCloseStarred, isMobile }: { showStarredMessages?: boolean; onCloseStarred?: () => void; isMobile?: boolean } = $props();
   
   let messageSearchQuery = $state("");
   let showMessageSearch = $state(false);
@@ -184,6 +184,7 @@
                 onToggleSearch={() => showMessageSearch = !showMessageSearch}
                 onShowGallery={() => showGallery = true}
                 onSelectionModeChange={(mode) => {selectionMode = mode; if (mode) selectedIds = [];}}
+                {isMobile}
             />
             
             {#if $playingVoiceNoteId}
@@ -258,6 +259,7 @@
                             scrollToMessage={scrollToMessage}
                             setReplyingTo={setReplyingTo}
                             toggleStar={toggleStar}
+                            {isMobile}
                         />
                     {/if}
                 {/each}

@@ -1,0 +1,206 @@
+        Info ANDROID_HOME not set, trying to locate Android SDK...
+        Info Using installed Android SDK: /home/moyzy/Android/Sdk
+        Info Using installed NDK: /home/moyzy/Android/Sdk/ndk/29.0.14206865
+        Info Detected connected device: WayDroid x86_64 Device with target "x86_64-linux-android"
+        Info Using 192.168.0.4 to access the development server.
+        Info Replacing devUrl host with 192.168.0.4. If your frontend is not listening on that address, try configuring your development server to use the `TAURI_DEV_HOST` environment variable or 0.0.0.0 as host.
+     Running BeforeDevCommand (`npm run dev`)
+
+> entropy-desktop@0.1.0 dev
+> vite --host
+
+
+  VITE v7.3.1  ready in 783 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://192.168.0.4:5173/
+  ➜  Network: http://192.168.240.1:5173/
+[1m[33mwarning[0m[1m: unused import: `tauri::Manager`[0m
+  [1m[94m--> [0msrc/lib.rs:21:5
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m use tauri::Manager;
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `total_actual`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:39
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                       [1m[33m^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_total_actual`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `current_count`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:53
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                                     [1m[33m^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_current_count`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `derived_key_hex`[0m
+   [1m[94m--> [0msrc/commands/vault/core.rs:284:13
+    [1m[94m|[0m
+[1m[94m284[0m [1m[94m|[0m         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
+    [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_derived_key_hex`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+ [1m[94m--> [0msrc/commands/system.rs:6:5
+  [1m[94m|[0m
+[1m[94m6[0m [1m[94m|[0m     app: tauri::AppHandle,
+  [1m[94m|[0m     [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `state`[0m
+ [1m[94m--> [0msrc/commands/system.rs:7:5
+  [1m[94m|[0m
+[1m[94m7[0m [1m[94m|[0m     state: State<'_, DbState>,
+  [1m[94m|[0m     [1m[33m^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_state`[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+  [1m[94m--> [0msrc/lib.rs:29:9
+   [1m[94m|[0m
+[1m[94m29[0m [1m[94m|[0m     let mut builder = tauri::Builder::default()
+   [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^^[0m
+   [1m[94m|[0m         [1m[94m|[0m
+   [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+   [1m[94m--> [0msrc/lib.rs:122:17
+    [1m[94m|[0m
+[1m[94m122[0m [1m[94m|[0m         .setup(|app| {
+    [1m[94m|[0m                 [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[33mwarning[0m: `entropy` (lib) generated 8 warnings (run `cargo fix --lib -p entropy` to apply 7 suggestions)
+[1m[92m    Finished[0m `dev` profile [optimized + debuginfo] target(s) in 0.76s
+        Info symlinking lib "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" in jniLibs dir "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/app/src/main/jniLibs/x86_64"
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libandroid.so"
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libdl.so"
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "liblog.so"
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libm.so"
+        Info "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libc.so"
+        Info symlink at "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/app/src/main/jniLibs/x86_64/libentropy.so" points to "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so"
+
+> entropy-desktop@0.1.0 tauri
+> tauri android android-studio-script --target x86_64
+
+        Info connection; remote_addr=127.0.0.1:53016 conn_id=0
+[1m[32m        Info[0m Using installed NDK: /home/moyzy/Android/Sdk/ndk/29.0.14206865
+[1m[92m   Compiling[0m tauri v2.10.3
+[1m[92m   Compiling[0m tauri-macros v2.5.5
+[1m[92m   Compiling[0m entropy v0.1.0 (/home/moyzy/projects/entropymobile/DesktopApp/src-tauri)
+[1m[92m   Compiling[0m tauri-plugin-fs v2.4.5
+[1m[92m   Compiling[0m tauri-plugin-shell v2.3.4
+[1m[92m   Compiling[0m tauri-plugin-notification v2.3.3
+[1m[92m   Compiling[0m tauri-plugin-dialog v2.6.0
+w: file:///home/moyzy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.10.3/mobile/android/src/main/java/app/tauri/AppPlugin.kt:35:37 'onBackPressed(): Unit' is deprecated. Deprecated in Java
+w: file:///home/moyzy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.10.3/mobile/android/src/main/java/app/tauri/plugin/PluginMethodData.kt:11:23 Parameter 'methodDecorator' is never used
+[1m[33mwarning[0m[1m: unused import: `tauri::Manager`[0m
+  [1m[94m--> [0msrc/lib.rs:21:5
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m use tauri::Manager;
+   [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `total_actual`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:39
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                       [1m[33m^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_total_actual`[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `current_count`[0m
+   [1m[94m--> [0msrc/commands/messaging/inbox.rs:196:53
+    [1m[94m|[0m
+[1m[94m196[0m [1m[94m|[0m         let (is_complete, entry_data, total_actual, current_count) = {
+    [1m[94m|[0m                                                     [1m[33m^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_current_count`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `derived_key_hex`[0m
+   [1m[94m--> [0msrc/commands/vault/core.rs:284:13
+    [1m[94m|[0m
+[1m[94m284[0m [1m[94m|[0m         let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
+    [1m[94m|[0m             [1m[33m^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_derived_key_hex`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+ [1m[94m--> [0msrc/commands/system.rs:6:5
+  [1m[94m|[0m
+[1m[94m6[0m [1m[94m|[0m     app: tauri::AppHandle,
+  [1m[94m|[0m     [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `state`[0m
+ [1m[94m--> [0msrc/commands/system.rs:7:5
+  [1m[94m|[0m
+[1m[94m7[0m [1m[94m|[0m     state: State<'_, DbState>,
+  [1m[94m|[0m     [1m[33m^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_state`[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+  [1m[94m--> [0msrc/lib.rs:29:9
+   [1m[94m|[0m
+[1m[94m29[0m [1m[94m|[0m     let mut builder = tauri::Builder::default()
+   [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^^[0m
+   [1m[94m|[0m         [1m[94m|[0m
+   [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused variable: `app`[0m
+   [1m[94m--> [0msrc/lib.rs:122:17
+    [1m[94m|[0m
+[1m[94m122[0m [1m[94m|[0m         .setup(|app| {
+    [1m[94m|[0m                 [1m[33m^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_app`[0m
+
+[1m[33mwarning[0m: `entropy` (lib) generated 8 warnings (run `cargo fix --lib -p entropy` to apply 7 suggestions)
+[1m[92m    Finished[0m `dev` profile [optimized + debuginfo] target(s) in 1m 44s
+[1m[32m        Info[0m symlinking lib "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" in jniLibs dir "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/app/src/main/jniLibs/x86_64"
+[1m[32m        Info[0m "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libandroid.so"
+[1m[32m        Info[0m "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libdl.so"
+[1m[32m        Info[0m "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "liblog.so"
+[1m[32m        Info[0m "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libm.so"
+[1m[32m        Info[0m "/home/moyzy/projects/entropymobile/DesktopApp/src-tauri/target/x86_64-linux-android/debug/libentropy.so" requires shared lib "libc.so"
+Java compiler version 21 has deprecated support for compiling with source/target version 8.
+Try one of the following options:
+    1. [Recommended] Use Java toolchain with a lower language version
+    2. Set a higher source/target version
+    3. Use a lower version of the JDK running the build (if you're not using Java toolchain)
+For more details on how to configure these settings, see https://developer.android.com/build/jdks.
+To suppress this warning, set android.javaCompile.suppressSourceTargetDeprecationWarning=true in gradle.properties.
+warning: [options] source value 8 is obsolete and will be removed in a future release
+warning: [options] target value 8 is obsolete and will be removed in a future release
+warning: [options] To suppress warnings about obsolete options, use -Xlint:-options.
+3 warnings
+w: file:///home/moyzy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-plugin-notification-2.3.3/android/src/main/java/NotificationSchedule.kt:99:7 'when' is exhaustive so 'else' is redundant here
+w: file:///home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/app/src/main/java/com/entropy/messenger/generated/RustWebView.kt:26:18 'setter for databaseEnabled: Boolean' is deprecated. Deprecated in Java
+w: file:///home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/app/src/main/java/com/entropy/messenger/generated/WryActivity.kt:34:42 'onBackPressed(): Unit' is deprecated. This method has been deprecated in favor of using the
+      {@link OnBackPressedDispatcher} via {@link #getOnBackPressedDispatcher()}.
+      The OnBackPressedDispatcher controls how back button events are dispatched
+      to one or more {@link OnBackPressedCallback} objects.
+Java compiler version 21 has deprecated support for compiling with source/target version 8.
+Try one of the following options:
+    1. [Recommended] Use Java toolchain with a lower language version
+    2. Set a higher source/target version
+    3. Use a lower version of the JDK running the build (if you're not using Java toolchain)
+For more details on how to configure these settings, see https://developer.android.com/build/jdks.
+To suppress this warning, set android.javaCompile.suppressSourceTargetDeprecationWarning=true in gradle.properties.
+warning: [options] source value 8 is obsolete and will be removed in a future release
+warning: [options] target value 8 is obsolete and will be removed in a future release
+warning: [options] To suppress warnings about obsolete options, use -Xlint:-options.
+3 warnings
+
+[Incubating] Problems report is available at: file:///home/moyzy/projects/entropymobile/DesktopApp/src-tauri/gen/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+Performing Streamed Install
+Success
+Starting: Intent { cmp=com.entropy.messenger/.MainActivity }
+9:57:51 AM [vite-plugin-svelte] src-ui/components/MessageBubble.svelte:81:8 Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events
+9:57:51 AM [vite-plugin-svelte] src-ui/components/AttachmentRenderer.svelte:19:45 This reference only captures the initial value of `msg`. Did you mean to reference it inside a derived instead?
+https://svelte.dev/e/state_referenced_locally
+9:57:51 AM [vite-plugin-svelte] src-ui/components/VoiceNotePlayer.svelte:14:24 This reference only captures the initial value of `initialDuration`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally
