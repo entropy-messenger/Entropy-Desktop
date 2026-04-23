@@ -60,8 +60,13 @@
         const parts = path.split(/[/\\]/);
         const fileName = parts[parts.length - 1];
         
+        // On mobile, paths are content:// URIs that Rust can't read.
+        // We read it here in the frontend first.
+        const { readFile } = await import('@tauri-apps/plugin-fs');
+        const fileData = await readFile(path);
+        
         const { sendFile } = await import('../lib/actions/chat');
-        sendFile(activeChat.peerHash, { name: fileName, type: 'file', path }, 'file');
+        sendFile(activeChat.peerHash, { name: fileName, type: 'file', data: fileData }, 'file');
     }
   }
 

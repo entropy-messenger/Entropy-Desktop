@@ -10,7 +10,7 @@
   const handleClose = () => appWindow.hide(); 
 </script>
 
-<div data-tauri-drag-region class="h-9 bg-entropy-surface/95 backdrop-blur-md flex items-center justify-between px-3 select-none shrink-0 z-[100]">
+<div data-tauri-drag-region class="h-9 bg-entropy-surface/95 backdrop-blur-md flex items-center justify-between px-3 select-none shrink-0 z-[11000]">
     <div class="flex items-center space-x-2 pointer-events-none" data-tauri-drag-region>
         <img src="/logo.png" alt="logo" class="w-6 h-6 object-contain -ml-0.5" />
     </div>

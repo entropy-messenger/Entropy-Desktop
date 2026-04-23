@@ -11,6 +11,7 @@
         msg, 
         isMine, 
         chatAddress,
+        isMobile = false,
         compactMode = false,
         scrollToMessage
     } = $props<{
@@ -18,6 +19,7 @@
         isMine: boolean;
         chatAddress: string;
         compactMode?: boolean;
+        isMobile?: boolean;
         scrollToMessage?: (id: string) => void;
     }>();
 
@@ -118,7 +120,8 @@
     {/if}
 
     {#if (msg.type === 'voice_note' || msg.type === 'file') && msg.attachment}
-        <AttachmentRenderer {msg} chatId={chatAddress} />
+        <AttachmentRenderer {msg} chatId={chatAddress} {isMobile} />
+        
         {#if !compactMode}
              <div class="absolute bottom-1 right-2 px-1.5 py-0.5 rounded-full bg-black/40 backdrop-blur-md flex items-center space-x-1 select-none pointer-events-none z-20">
                 {#if msg.isStarred}<LucideStar size={9} class="text-yellow-400 fill-yellow-400/50" />{/if}

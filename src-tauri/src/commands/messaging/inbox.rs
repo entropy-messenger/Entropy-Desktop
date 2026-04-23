@@ -193,7 +193,7 @@ pub async fn process_incoming_binary(
         let _link_key = format!("{}:{}", sender, transfer_id);
         let assembler_key = format!("{}:{}:{:02x}", sender, transfer_id, frame_type);
 
-        let (is_complete, entry_data, total_actual, current_count) = {
+        let (is_complete, entry_data, _total_actual, _current_count) = {
             let mut assembler = net_state
                 .media_assembler
                 .lock()
@@ -989,6 +989,7 @@ pub async fn process_incoming_binary(
                         let file_path = media_dir.join(&temp_filename);
                         if let Ok(mut f) = std::fs::File::create(&file_path) {
                             let _ = f.write_all(&complete_data);
+                            let _ = f.sync_all();
                             // Media reassembly complete
                         }
                     }

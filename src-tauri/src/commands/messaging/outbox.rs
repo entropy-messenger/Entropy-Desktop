@@ -291,6 +291,7 @@ pub fn process_outgoing_media(
                 let file_path = media_dir.join(&msg_id);
                 let mut f = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
                 f.write_all(&final_blob).map_err(|e| e.to_string())?;
+                f.sync_all().map_err(|e| e.to_string())?;
                 file_path.to_string_lossy().to_string()
             };
             let saved_vault_path = local_file_path;
@@ -802,7 +803,9 @@ pub fn process_outgoing_group_media(
                 final_blob.extend(local_ciphertext);
                 let media_dir = get_media_dir(&app, &db_state)?;
                 let file_path = media_dir.join(&msg_id);
-                std::fs::File::create(&file_path).map_err(|e| e.to_string())?.write_all(&final_blob).map_err(|e| e.to_string())?;
+                let mut f = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
+                f.write_all(&final_blob).map_err(|e| e.to_string())?;
+                f.sync_all().map_err(|e| e.to_string())?;
             };
 
             let transfer_id: u32 = rand::random();

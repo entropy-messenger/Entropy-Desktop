@@ -14,7 +14,9 @@
   import { signalManager } from './lib/signal_manager';
   import Toast from './components/Toast.svelte';
   import Modal from './components/Modal.svelte';
-  import { addToast, showConfirm } from './lib/stores/ui';
+  import Lightbox from './components/Lightbox.svelte';
+  import { addToast, showConfirm, contextMenu } from './lib/stores/ui';
+  import { LucideDownload } from 'lucide-svelte';
   import { exportVault, importVault, resetDatabase as resetAccountAction } from './lib/actions/vault';
   import { getVersion } from '@tauri-apps/api/app';
 
@@ -440,8 +442,33 @@
 
     <Toast />
     <Modal />
+    <Lightbox />
     {#if showOnboarding}
         <Onboarding {isMobile} onComplete={() => showOnboarding = false} />
+    {/if}
+
+    {#if $contextMenu && $contextMenu.visible}
+        <div
+            class="fixed inset-0 z-[9998]"
+            onclick={() => contextMenu.set(null)}
+            oncontextmenu={(e) => { e.preventDefault(); contextMenu.set(null); }}
+        ></div>
+        <div
+            class="fixed z-[9999] min-w-[170px] bg-entropy-surface/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden py-1 animate-in fade-in zoom-in-95 duration-100"
+            style="left: {$contextMenu.x}px; top: {$contextMenu.y}px;"
+            onclick={(e) => e.stopPropagation()}
+        >
+            <div class="px-3 py-1.5 border-b border-white/5 mb-1 bg-white/5">
+                <p class="text-[9px] font-black text-entropy-text-dim uppercase tracking-[0.2em] truncate">File Options</p>
+            </div>
+            <button
+                onclick={() => { $contextMenu?.onSave(); contextMenu.set(null); }}
+                class="w-full flex items-center space-x-3 px-3 py-2.5 text-left text-[12px] font-bold text-entropy-text-primary hover:bg-entropy-primary hover:text-white transition-all group"
+            >
+                <LucideDownload size={15} class="text-entropy-primary group-hover:text-white transition-colors" />
+                <span>{$contextMenu?.label || 'Save to Device'}</span>
+            </button>
+        </div>
     {/if}
 </main>
 

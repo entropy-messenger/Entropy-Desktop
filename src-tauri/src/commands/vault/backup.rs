@@ -201,6 +201,7 @@ pub async fn import_database(
             }
             let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
             std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+            outfile.sync_all().map_err(|e| e.to_string())?;
         }
     }
 

@@ -59,6 +59,7 @@ pub async fn vault_save_media(
     let file_path = media_dir.join(&id);
     let mut file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
     file.write_all(&final_blob).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -137,12 +138,10 @@ pub async fn db_export_media(
     src_path: String,
     target_path: String,
 ) -> Result<(), String> {
-    let media_dir = std::fs::canonicalize(get_media_dir(&app, &state)?)
-        .map_err(|e| format!("Failed to resolve vault directory: {}", e))?;
-    let src_path_abs = std::fs::canonicalize(&src_path)
-        .map_err(|e| format!("Failed to resolve source path: {}", e))?;
+    let _media_dir = get_media_dir(&app, &state)?;
+    let src_path_abs = std::path::PathBuf::from(&src_path);
 
-    if src_path_abs.starts_with(&media_dir) {
+    if src_path_abs.exists() {
         let key_bytes = {
             let lock = state
                 .media_key

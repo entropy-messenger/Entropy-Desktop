@@ -113,6 +113,7 @@
                 isMine={msg.isMine} 
                 chatAddress={activeChat.peerHash} 
                 {scrollToMessage}
+                {isMobile}
             />
         </div>
 
