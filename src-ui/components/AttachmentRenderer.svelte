@@ -84,12 +84,17 @@
     function openContextMenu(e: MouseEvent) {
         e.preventDefault();
         e.stopPropagation();
+
+        // On mobile, if it's previewable media and we have it, we don't need a menu
+        if (isMobile && (isImage || isVideo) && (exportedPath || isMine)) return;
+
         contextMenu.set({
             x: e.clientX,
             y: e.clientY,
             visible: true,
             fileName: msg.attachment?.fileName || 'File',
-            label: exportedPath || isMine ? 'Open File' : 'Save to Device',
+            // On mobile, non-media always shows "Save to Device"
+            label: (isMobile && !isImage && !isVideo) ? 'Save to Device' : (exportedPath || isMine ? 'Open File' : 'Save to Device'),
             onSave: doExport
         });
     }
@@ -97,7 +102,8 @@
     async function doExport() {
 
         // Already exported or sender has original — open directly
-        if (exportedPath) {
+        // Skip this on mobile for non-media so they can always "resave" since we can't "open"
+        if (exportedPath && !(isMobile && !isImage && !isVideo)) {
             openSavedFile();
             return;
         }
