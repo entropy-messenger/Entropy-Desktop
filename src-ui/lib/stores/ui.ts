@@ -23,6 +23,10 @@ export interface LightboxOptions {
     alt: string;
     fileName: string;
     size: number;
+    type: 'image' | 'video';
+    content?: string;
+    timestamp?: number;
+    senderNickname?: string;
 }
 
 export interface ContextMenuOptions {

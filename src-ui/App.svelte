@@ -110,27 +110,73 @@
     }
   };
 
-  onMount(async () => {
-    if ((window as any).__TAURI_INTERNALS__) {
-        await new Promise(r => setTimeout(r, 100));
+    import { lightbox, modal } from './lib/stores/ui';
+
+    onMount(() => {
+      const init = async () => {
+        if ((window as any).__TAURI_INTERNALS__) {
+            await new Promise(r => setTimeout(r, 100));
+            checkNativeUpdate();
+        }
         
-        checkNativeUpdate();
-    }
-    
-    isInitializing = false;
-    hasExistingIdentity = await hasVault();
+        isInitializing = false;
+        hasExistingIdentity = await hasVault();
 
-    if ((window as any).__TAURI_INTERNALS__) {
-      try {
-        await checkNotificationPermission();
-      } catch (e) {
-      }
-    }
+        if ((window as any).__TAURI_INTERNALS__) {
+          try {
+            await checkNotificationPermission();
+          } catch (e) {
+            // Permission failed silently
+          }
+        }
 
-    updateDimensions();
-    window.addEventListener('resize', updateDimensions);
-    return () => window.removeEventListener('resize', updateDimensions);
-  });
+        updateDimensions();
+      };
+
+      init();
+
+      // Handle Android Back Button / Gesture
+      const handlePopState = (e: PopStateEvent) => {
+          // Check Svelte stores to see what we should close
+          if ($lightbox) {
+              lightbox.set(null);
+          } else if ($modal) {
+              modal.set(null);
+          } else if ($userStore.activeChatHash && isMobile) {
+              userStore.update(s => ({ ...s, activeChatHash: null }));
+          }
+      };
+
+      window.addEventListener('popstate', handlePopState);
+      window.addEventListener('resize', updateDimensions);
+      
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+        window.removeEventListener('resize', updateDimensions);
+      };
+    });
+
+    // Track the 'depth' of our UI so we know how many states to push/pop
+    let navDepth = $state(0);
+
+    $effect(() => {
+        // Calculate how many layers are currently 'open'
+        let currentDepth = 0;
+        if (isMobile && $userStore.activeChatHash) currentDepth++;
+        if ($modal) currentDepth++;
+        if ($lightbox) currentDepth++;
+
+        // If we just added a layer, push a new history state
+        if (currentDepth > navDepth) {
+            for (let i = 0; i < (currentDepth - navDepth); i++) {
+                history.pushState({ depth: navDepth + i + 1 }, '');
+            }
+        } 
+        // Note: We don't manually pop history here because the USER 
+        // does that with the back button, which triggers handlePopState.
+        
+        navDepth = currentDepth;
+    });
 
   const handleLogin = async () => {
     if (!password) return;
@@ -184,7 +230,9 @@
         }
 
         if (e.key === 'Escape') {
-            userStore.update(s => ({ ...s, activeChatHash: null }));
+            if (!$lightbox && !$modal) {
+                userStore.update(s => ({ ...s, activeChatHash: null }));
+            }
         }
     }
 

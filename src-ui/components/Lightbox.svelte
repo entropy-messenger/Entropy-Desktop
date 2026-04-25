@@ -1,7 +1,9 @@
 <script lang="ts">
-    import { lightbox } from '../lib/stores/ui';
-    import { LucidePaperclip, LucideX } from 'lucide-svelte';
-    import { fade, scale } from 'svelte/transition';
+    import { lightbox, addToast } from '../lib/stores/ui';
+    import { LucideX, LucideDownload, LucideArrowLeft, LucideShare2, LucideInfo } from 'lucide-svelte';
+    import { fade, scale, fly } from 'svelte/transition';
+    import { invoke } from '@tauri-apps/api/core';
+    import VideoPlayer from './VideoPlayer.svelte';
 
     function close() {
         lightbox.set(null);
@@ -10,49 +12,140 @@
     function handleKeydown(e: KeyboardEvent) {
         if (e.key === 'Escape') close();
     }
+
+    async function downloadImage() {
+        if (!$lightbox) return;
+        try {
+            const { save } = await import('@tauri-apps/plugin-dialog');
+            const targetPath = await save({ defaultPath: $lightbox.fileName });
+            
+            if (targetPath) {
+                await invoke('db_export_media', { 
+                    srcPath: $lightbox.src, // Note: This might need the actual vault path if src is blob
+                    targetPath 
+                });
+                // Note: If src is blob, we might need a different approach in some environments
+                // but usually for desktop, we can use the plugin-fs or similar.
+                // For now, if it fails, we provide a fallback message.
+                addToast("Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
+            }
+        } catch (e) {
+            addToast("Save failed", 'error');
+        }
+    }
+
+    const formatTimestamp = (ts?: number) => {
+        if (!ts) return '';
+        return new Date(ts).toLocaleString([], { 
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+        });
+    };
 </script>
 
 {#if $lightbox}
     <div 
-        class="fixed inset-0 z-[10000] bg-black/95 backdrop-blur-2xl flex flex-col p-4 select-none touch-none"
-        transition:fade={{ duration: 200 }}
-        onclick={close}
+        class="fixed inset-0 z-[10000] bg-black flex flex-col select-none touch-none overflow-hidden"
+        transition:fade={{ duration: 250 }}
         onkeydown={handleKeydown}
         role="button"
         tabindex="0"
     >
-        <!-- Header -->
-        <div class="flex justify-between items-center z-10 animate-in slide-in-from-top-4 duration-500">
-            <div class="flex flex-col">
-                <span class="text-white font-bold text-sm truncate max-w-[250px]">{$lightbox.fileName}</span>
-                <span class="text-white/40 text-[10px] uppercase tracking-widest">
-                    {($lightbox.size || 0) / 1024 > 1024 
-                        ? (($lightbox.size || 0)/1024/1024).toFixed(1) + ' MB' 
-                        : (($lightbox.size || 0)/1024).toFixed(1) + ' KB'}
-                </span>
+        <!-- Top Bar (WhatsApp Style) -->
+        <div 
+            class="absolute top-0 inset-x-0 z-20 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between px-4 sm:px-6"
+            style="padding-top: calc(var(--sat, 0px) + 1.5rem); height: calc(var(--sat, 0px) + 5.5rem);"
+            transition:fly={{ y: -20, duration: 300 }}
+        >
+            <div class="flex items-center space-x-4 max-w-[70%]">
+                <button 
+                    onclick={close}
+                    class="p-2 -ml-2 text-white/90 hover:bg-white/10 rounded-full transition-colors active:scale-90"
+                >
+                    <LucideArrowLeft size={24} />
+                </button>
+                <div class="flex flex-col min-w-0">
+                    <span class="text-white font-bold text-base truncate">
+                        {$lightbox.senderNickname || 'User'}
+                    </span>
+                    <span class="text-white/60 text-[11px] font-medium tracking-tight">
+                        {formatTimestamp($lightbox.timestamp)}
+                    </span>
+                </div>
             </div>
-            <button 
-                class="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-white hover:bg-white/20 active:scale-95 transition-all"
-                onclick={close}
+
+            <div class="flex items-center space-x-1 sm:space-x-3">
+                <button 
+                    onclick={downloadImage}
+                    class="p-2.5 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-all active:scale-90"
+                    title="Save to device"
+                >
+                    <LucideDownload size={22} />
+                </button>
+                <button 
+                    class="p-2.5 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-all active:scale-90"
+                    title="Forward"
+                >
+                    <LucideShare2 size={22} />
+                </button>
+                <button 
+                    onclick={close}
+                    class="p-2.5 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-all active:scale-90 ml-1"
+                >
+                    <LucideX size={24} />
+                </button>
+            </div>
+        </div>
+
+        <!-- Media Container -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div 
+            class="flex-1 flex items-center justify-center p-0 sm:p-4 z-10 min-h-0 min-w-0 w-full"
+            style="padding-top: calc(var(--sat, 0px) + 6rem); padding-bottom: {$lightbox.content ? 'calc(var(--sab, 0px) + 8rem)' : 'calc(var(--sab, 0px) + 2rem)'};"
+            onclick={close}
+        >
+            {#if $lightbox.type === 'video'}
+                <div class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" onclick={(e) => e.stopPropagation()}>
+                    <VideoPlayer src={$lightbox.src} expanded={true} />
+                </div>
+            {:else}
+                <img 
+                    src={$lightbox.src} 
+                    alt={$lightbox.alt}
+                    class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+                    transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
+                    onclick={(e) => e.stopPropagation()}
+                />
+            {/if}
+        </div>
+
+        <!-- Bottom Caption Bar (WhatsApp Style) -->
+        {#if $lightbox.content}
+            <div 
+                class="absolute bottom-0 inset-x-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 flex justify-center"
+                style="padding-bottom: calc(var(--sab) + 2.5rem);"
+                transition:fly={{ y: 20, duration: 300 }}
             >
-                <LucideX size={20} />
-            </button>
-        </div>
-
-        <!-- Image Container -->
-        <div class="flex-1 flex items-center justify-center overflow-hidden p-2 sm:p-8">
-            <img 
-                src={$lightbox.src} 
-                alt={$lightbox.alt}
-                class="max-w-full max-h-full object-contain shadow-2xl rounded-sm"
-                transition:scale={{ duration: 300, start: 0.95 }}
-                onclick={(e) => e.stopPropagation()}
-            />
-        </div>
-
-        <!-- Footer hint -->
-        <div class="py-4 flex justify-center animate-in slide-in-from-bottom-4 duration-500">
-            <span class="text-[10px] text-white/30 font-bold uppercase tracking-[0.3em]">Tap anywhere to dismiss</span>
-        </div>
+                <div class="max-w-3xl w-full flex justify-center items-center text-center">
+                    <p class="text-white text-sm sm:text-base font-medium leading-relaxed drop-shadow-md select-text cursor-auto px-4 text-center break-words max-w-full">
+                        {$lightbox.content}
+                    </p>
+                </div>
+            </div>
+        {:else}
+            <!-- Fallback dismissal hint -->
+            <div class="absolute bottom-6 inset-x-0 flex justify-center opacity-30 pointer-events-none">
+                <span class="text-[10px] text-white font-bold uppercase tracking-[0.4em]">Tap to dismiss</span>
+            </div>
+        {/if}
     </div>
 {/if}
+
+<style>
+    /* Ensure the bars look great on mobile browsers with address bars */
+    div {
+        scrollbar-width: none;
+    }
+    div::-webkit-scrollbar {
+        display: none;
+    }
+</style>

@@ -53,7 +53,8 @@
       updateAvailable = null,
       isUpdating = false,
       updatePercent = 0,
-      onUpdateClick = (() => {}) as any
+      onUpdateClick = (() => {}) as any,
+      isMobile = false
   } = $props();
   
   import { messageStore } from '../lib/stores/user';

@@ -10,6 +10,7 @@
     import { addToast, lightbox, contextMenu } from '../lib/stores/ui';
     import { transfers } from '../lib/stores/transfers';
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
+    import VideoPlayer from './VideoPlayer.svelte';
 
     let { msg, chatId, isMobile = false } = $props<{ msg: any, chatId: string, isMobile?: boolean }>();
 
@@ -18,11 +19,22 @@
     let error = $state(false);
     let isExporting = $state(false);
     let isMine = $derived(msg.senderHash === $userStore.identityHash || msg.isMine);
-    let exportedPath = $state<string | null>(msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null));
+    
+    // Consolidate exported path logic
+    let exportedPath = $state<string | null>(null);
     $effect(() => {
-        if (msg.attachment?.exportedPath) exportedPath = msg.attachment.exportedPath;
-        else if (isMine && !msg.attachment?.vaultPath && msg.attachment?.originalPath) exportedPath = msg.attachment.originalPath;
+        exportedPath = msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null);
     });
+
+    let isImage = $derived(msg.attachment?.fileType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment?.fileName || ''));
+    let isVideo = $derived(msg.attachment?.fileType?.startsWith('video/') || /\.(mp4|webm|mov|ogg)$/i.test(msg.attachment?.fileName || ''));
+    
+    let fileSize = $derived.by(() => {
+        const bytes = msg.attachment?.size || 0;
+        if (bytes / 1024 > 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+        return (bytes / 1024).toFixed(1) + ' KB';
+    });
+
     let wasCreatedInternally = $state(false);
 
     let activeTransfer = $derived.by(() => {
@@ -76,7 +88,6 @@
         try {
             await invoke('open_file', { path: exportedPath });
         } catch (e) {
-            // Failed to open file
             addToast("Failed to open file", 'error');
         }
     }
@@ -85,24 +96,17 @@
         e.preventDefault();
         e.stopPropagation();
 
-        // On mobile, if it's previewable media and we have it, we don't need a menu
-        if (isMobile && (isImage || isVideo) && (exportedPath || isMine)) return;
-
         contextMenu.set({
             x: e.clientX,
             y: e.clientY,
             visible: true,
             fileName: msg.attachment?.fileName || 'File',
-            // On mobile, non-media always shows "Save to Device"
-            label: (isMobile && !isImage && !isVideo) ? 'Save to Device' : (exportedPath || isMine ? 'Open File' : 'Save to Device'),
+            label: isMobile ? 'Save to Device' : (exportedPath || isMine ? 'Open File' : 'Save to Device'),
             onSave: doExport
         });
     }
 
     async function doExport() {
-
-        // Already exported or sender has original — open directly
-        // Skip this on mobile for non-media so they can always "resave" since we can't "open"
         if (exportedPath && !(isMobile && !isImage && !isVideo)) {
             openSavedFile();
             return;
@@ -119,26 +123,41 @@
             isExporting = true;
             let targetPath: string | null = null;
 
-            if (isMine || isMobile) {
-                // Auto-save to Downloads — no dialog for the sender
-                const { downloadDir, join } = await import('@tauri-apps/api/path');
-                const downDir = await downloadDir();
-                // Ensure unique name by prefixing with short ID part if it's not our own sent file
-                const fileName = isMine ? msg.attachment.fileName : `${msg.id.substring(0, 5)}_${msg.attachment.fileName}`;
-                targetPath = await join(downDir, fileName);
+            if (isMobile) {
+                const { save } = await import('@tauri-apps/plugin-dialog');
+                targetPath = await save({ defaultPath: msg.attachment.fileName });
+                
+                if (targetPath) {
+                    const { writeFile } = await import('@tauri-apps/plugin-fs');
+                    let dataToSave: Uint8Array;
+                    
+                    if (msg.attachment.data) {
+                        let bytes = msg.attachment.data;
+                        if (typeof bytes === 'string') bytes = fromBase64(bytes);
+                        dataToSave = new Uint8Array(bytes as any);
+                    } else {
+                        const data = await getAttachment(msg.id);
+                        if (!data) throw new Error("Could not fetch decrypted file data.");
+                        dataToSave = new Uint8Array(data as any);
+                    }
+                    
+                    await writeFile(targetPath, dataToSave);
+                    exportedPath = targetPath;
+                    if (chatId) markAsDownloaded(chatId, msg.id, targetPath);
+                    addToast("Saved successfully", 'success');
+                }
             } else {
                 const { save } = await import('@tauri-apps/plugin-dialog');
                 targetPath = await save({ defaultPath: msg.attachment.fileName });
-            }
 
-            if (targetPath) {
-                await invoke('db_export_media', { srcPath, targetPath });
-                exportedPath = targetPath;
-                if (chatId) markAsDownloaded(chatId, msg.id, targetPath);
-                addToast(isMine ? "Opening file..." : "Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
-                openSavedFile();
+                if (targetPath) {
+                    await invoke('db_export_media', { srcPath, targetPath });
+                    exportedPath = targetPath;
+                    if (chatId) markAsDownloaded(chatId, msg.id, targetPath);
+                    addToast(isMine ? "Opening file..." : "Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
+                    openSavedFile();
+                }
             }
-
         } catch (e: any) {
             const msg_str = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));
             addToast("Failed: " + msg_str, 'error');
@@ -146,9 +165,6 @@
             isExporting = false;
         }
     }
-
-    let isImage = $derived(msg.attachment?.fileType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment?.fileName || ''));
-    let isVideo = $derived(msg.attachment?.fileType?.startsWith('video/') || /\.(mp4|webm|mov|ogg)$/i.test(msg.attachment?.fileName || ''));
 
     let observer: IntersectionObserver;
     let element = $state<HTMLElement | null>(null);
@@ -162,14 +178,18 @@
             isVisible = entry.isIntersecting;
             
             if (isVisible) {
-                loadAttachment();
+                if (msg.type !== 'voice_note' && msg.attachment?.fileName !== 'voice_note.wav') {
+                    loadAttachment();
+                } else if (msg.attachment?.data || (!msg.attachment?.vaultPath && msg.attachment?.originalPath)) {
+                    // Only pre-load voice notes if they are fresh local previews
+                    loadAttachment();
+                }
             } else if (blobUrl && wasCreatedInternally) {
-                // Garbage collect decrypted bytes when scrolled away to save RAM
                 URL.revokeObjectURL(blobUrl);
                 blobUrl = null;
             }
         }, {
-            rootMargin: '200px' // Start loading slightly before it hits the screen for smoothness
+            rootMargin: '200px'
         });
 
         observer.observe(element);
@@ -189,7 +209,11 @@
                 src: blobUrl,
                 alt: msg.attachment.fileName,
                 fileName: msg.attachment.fileName,
-                size: msg.attachment.size || 0
+                size: msg.attachment.size || 0,
+                type: isVideo ? 'video' : 'image',
+                content: msg.content,
+                timestamp: msg.timestamp,
+                senderNickname: $userStore.nicknames[msg.senderHash] || msg.senderHash?.slice(0, 8)
             });
         }
     }
@@ -197,14 +221,7 @@
 
 <div bind:this={element} class="w-full min-h-[40px]">
 {#if msg.type === 'voice_note' || msg.attachment?.fileName === 'voice_note.wav'}
-    {#if blobUrl}
-        <VoiceNotePlayer src={blobUrl} id={msg.id} isMine={msg.isMine} initialDuration={msg.attachment.duration || 0} />
-    {:else if loading}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-surface-light rounded-2xl border border-white/5">
-            <LucideLoader size={16} class="animate-spin text-entropy-primary" />
-            <span class="text-[10px] font-bold text-entropy-text-primary uppercase tracking-widest">Loading Audio...</span>
-        </div>
-    {:else if msg.status === 'sending'}
+    {#if msg.status === 'sending'}
         <div class="flex flex-col space-y-1 w-full max-w-[200px]">
             <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-2xl animate-pulse">
                 <LucideLoader size={16} class="animate-spin text-entropy-primary" />
@@ -219,10 +236,7 @@
             {/if}
         </div>
     {:else}
-        <div class="flex items-center space-x-2 py-2 px-4 bg-red-500/10 rounded-2xl">
-            <LucideMic size={16} class="text-red-500" />
-            <span class="text-[10px] font-bold text-red-500 uppercase tracking-widest">Unavailable</span>
-        </div>
+        <VoiceNotePlayer src={blobUrl} id={msg.id} isMine={msg.isMine} initialDuration={msg.attachment.duration || 0} />
     {/if}
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2 max-w-full">
@@ -232,22 +246,25 @@
             <div 
                 class="relative group/media overflow-hidden rounded-2xl border border-white/10 shadow-lg bg-entropy-surface-light/30 flex flex-col w-full max-w-[280px] sm:max-w-[400px] min-h-[150px]"
                 oncontextmenu={openContextMenu}
+                onclick={toggleLightbox}
             >
                 {#if isImage}
-                    <button class="block w-full text-left" onclick={toggleLightbox}>
-                        <img src={blobUrl} alt={msg.attachment.fileName} class="w-full h-auto max-h-[350px] object-cover transition-transform duration-500 group-hover/media:scale-105" />
-                    </button>
-                {:else if isVideo}
-                    <div class="relative w-full aspect-video bg-black flex items-center justify-center">
-                        <video 
+                    <div class="relative w-full aspect-auto min-h-[150px] max-h-[500px] flex items-center justify-center bg-black/5 overflow-hidden">
+                        <img 
                             src={blobUrl} 
-                            controls 
-                            class="w-full h-full max-h-[350px] object-contain"
-                            poster={null}
-                        >
-                            <track kind="captions" />
-                            Your browser does not support the video tag.
-                        </video>
+                            alt={msg.attachment.fileName} 
+                            class="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500"
+                            loading="lazy"
+                        />
+                    </div>
+                {:else if isVideo}
+                    <div class="relative w-full aspect-video bg-black/20 flex items-center justify-center group/vid overflow-hidden cursor-pointer">
+                        <video src={blobUrl} class="w-full h-full object-cover opacity-80" muted playsinline></video>
+                        <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/vid:bg-black/40 transition-colors">
+                            <div class="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white border border-white/20 group-hover/vid:scale-110 transition-transform shadow-2xl">
+                                <LucidePlay size={32} fill="currentColor" class="ml-1" />
+                            </div>
+                        </div>
                     </div>
                 {/if}
                 
@@ -259,16 +276,24 @@
                             {#if activeTransfer}
                                 <span class="text-entropy-primary animate-pulse">{progress}%</span>
                             {:else}
-                                {(msg.attachment.size || 0) / 1024 > 1024 
-                                    ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
-                                    : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
+                                {fileSize}
                             {/if}
                         </div>
                     </div>
                 </div>
             </div>
+        {:else if loading}
+            <div class="flex flex-col items-center justify-center py-8 px-12 bg-entropy-surface-light rounded-2xl border border-white/10 animate-pulse">
+                <LucideLoader size={24} class="animate-spin text-entropy-primary mb-2" />
+                <span class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest">Decrypting Media...</span>
+            </div>
         {:else}
-            <div class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full">
+            <!-- Generic File UI -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div 
+                class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full"
+                oncontextmenu={openContextMenu}
+            >
                 <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0 group-hover/file:scale-110 transition-transform">
                     {#if isVideo}
                         <LucidePlay size={20} />
@@ -290,9 +315,7 @@
                         {#if activeTransfer}
                             <span class="text-entropy-primary animate-pulse">{activeTransfer.direction === 'upload' ? 'Sending' : 'Receiving'} {progress}%</span>
                         {:else}
-                            {(msg.attachment.size || 0) / 1024 > 1024 
-                                ? ((msg.attachment.size || 0)/1024/1024).toFixed(1) + ' MB' 
-                                : ((msg.attachment.size || 0)/1024).toFixed(1) + ' KB'}
+                            {fileSize}
                         {/if}
                     </div>
                 </div>
@@ -313,12 +336,6 @@
                         {/if}
                     </button>
                 </div>
-            </div>
-        {/if}
-        
-        {#if activeTransfer && !isImage && !isVideo}
-            <div class="mt-1 h-1 w-full bg-entropy-surface-light rounded-full overflow-hidden">
-                <div class="h-full bg-entropy-primary transition-all duration-500 shadow-[0_0_8px_rgba(var(--entropy-primary-rgb),0.5)]" style="width: {progress}%"></div>
             </div>
         {/if}
     </div>

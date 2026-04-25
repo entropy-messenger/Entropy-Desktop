@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { LucidePlay, LucidePause, LucideMic } from 'lucide-svelte';
+  import { LucidePlay, LucidePause, LucideMic, LucideLoader } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { invoke } from '@tauri-apps/api/core';
@@ -10,6 +10,7 @@
   let audioEl = $state<HTMLAudioElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
   let isPlaying = $state(false);
+  let isLoading = $state(false);
   let currentTime = $state(0);
   let duration = $state(initialDuration);
   $effect(() => {
@@ -21,48 +22,76 @@
   const speeds = [1, 1.5, 2];
 
   let lastGeneratedId = $state<string | null>(null);
-  async function generateWaveform() {
-    if (!id || (id === lastGeneratedId && waveformData.length > 0)) return;
-    try {
-      let arrayBuffer: ArrayBuffer;
-      
-      if (id === 'preview' && src) {
-        blobUrl = src;
-        const response = await fetch(src);
-        arrayBuffer = await response.arrayBuffer();
-      } else {
-        const bytes = await invoke<number[]>('vault_load_media', { id });
-        arrayBuffer = new Uint8Array(bytes).buffer;
-        
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
-        blobUrl = URL.createObjectURL(new Blob([arrayBuffer]));
-      }
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      
-      const rawData = audioBuffer.getChannelData(0);
-      const samples = 45; 
-      const blockSize = Math.floor(rawData.length / samples);
-      const result = [];
-      
-      for (let i = 0; i < samples; i++) {
-        let blockStart = blockSize * i;
-        let sum = 0;
-        for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
-          sum = sum + Math.abs(rawData[blockStart + j]);
-        }
-        result.push(sum / (blockSize || 1));
+  async function loadAudioBytes() {
+      if (!id || id === 'preview') return;
+      try {
+          isLoading = true;
+          const bytes = await invoke<number[]>('vault_load_media', { id });
+          const arrayBuffer = new Uint8Array(bytes).buffer;
+          
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          blobUrl = URL.createObjectURL(new Blob([arrayBuffer]));
+          
+          // Generate real waveform
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          
+          const rawData = audioBuffer.getChannelData(0);
+          const samples = 45; 
+          const blockSize = Math.floor(rawData.length / samples);
+          const result = [];
+          
+          for (let i = 0; i < samples; i++) {
+            let blockStart = blockSize * i;
+            let sum = 0;
+            for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
+              sum = sum + Math.abs(rawData[blockStart + j]);
+            }
+            result.push(sum / (blockSize || 1));
+          }
+          
+          const max = Math.max(...result) || 1;
+          waveformData = result.map(n => Math.max(0.1, n / max));
+          lastGeneratedId = id;
+          drawWaveform();
+      } catch (e) {
+          console.error("Failed to load audio bytes:", e);
+      } finally {
+          isLoading = false;
       }
-      
-      const max = Math.max(...result) || 1;
-      waveformData = result.map(n => Math.max(0.1, n / max));
-      lastGeneratedId = id;
-      drawWaveform();
-    } catch (e) {
-      // Waveform generation failed
-      waveformData = Array(45).fill(0.2);
-    }
+  }
+
+  async function generatePreviewWaveform() {
+      if (!src) return;
+      try {
+          blobUrl = src;
+          const response = await fetch(src);
+          const arrayBuffer = await response.arrayBuffer();
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+          
+          const rawData = audioBuffer.getChannelData(0);
+          const samples = 45; 
+          const blockSize = Math.floor(rawData.length / samples);
+          const result = [];
+          
+          for (let i = 0; i < samples; i++) {
+            let blockStart = blockSize * i;
+            let sum = 0;
+            for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
+              sum = sum + Math.abs(rawData[blockStart + j]);
+            }
+            result.push(sum / (blockSize || 1));
+          }
+          
+          const max = Math.max(...result) || 1;
+          waveformData = result.map(n => Math.max(0.1, n / max));
+          drawWaveform();
+      } catch(e) {
+          waveformData = Array(45).fill(0.2);
+          drawWaveform();
+      }
   }
 
   function drawWaveform() {
@@ -97,8 +126,26 @@
     });
   }
 
-  function togglePlay() {
+  async function togglePlay() {
     if (!audioEl) return;
+
+    // JIT Loading Logic
+    if (!blobUrl && !src && !isLoading) {
+        await loadAudioBytes();
+        
+        // Wait a micro-tick for Svelte to bind the new blobUrl to audioEl.src
+        setTimeout(() => {
+            if (!audioEl) return;
+            audioEl.play().catch(err => {
+                isPlaying = false;
+                playingVoiceNoteId.set(null);
+            });
+            isPlaying = true;
+            playingVoiceNoteId.set(id);
+        }, 50);
+        return;
+    }
+
     if (isPlaying) {
       audioEl.pause();
       isPlaying = false;
@@ -106,7 +153,6 @@
     } else {
       playingVoiceNoteId.set(id);
       audioEl.play().catch(err => {
-          // Playback failed
           isPlaying = false;
           playingVoiceNoteId.set(null);
       });
@@ -150,6 +196,21 @@
 
   function handleSeek(e: MouseEvent) {
     if (!canvasEl || !audioEl) return;
+    
+    // Auto-load if attempting to seek an unloaded audio
+    if (!blobUrl && !src && !isLoading) {
+        loadAudioBytes().then(() => {
+            setTimeout(() => {
+                executeSeek(e);
+            }, 50);
+        });
+        return;
+    }
+    executeSeek(e);
+  }
+
+  function executeSeek(e: MouseEvent) {
+    if (!canvasEl || !audioEl) return;
     const rect = canvasEl.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const progress = Math.max(0, Math.min(1, x / rect.width));
@@ -166,16 +227,33 @@
   }
 
   onMount(() => {
-    generateWaveform();
+    if (src) {
+        generatePreviewWaveform();
+    } else {
+        // Create a high-entropy dummy waveform that is unique to each ID
+        const result = [];
+        const str = id || 'fallback';
+        for (let i = 0; i < 45; i++) {
+            // Use different characters from the ID to jitter each bar uniquely
+            const charCode = str.charCodeAt(i % str.length);
+            const secondaryCode = str.charCodeAt((i + 5) % str.length);
+            
+            // Generate a more 'jagged' and unique variation
+            let val = ((charCode * (i + 1)) % 50) / 100; // 0.0 to 0.5
+            val = val + ((secondaryCode % 10) / 40);    // add some jitter
+            
+            result.push(Math.max(0.15, Math.min(0.7, val)));
+        }
+        waveformData = result;
+        drawWaveform();
+    }
+    
     return () => {
       if (audioEl) audioEl.pause();
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   });
 
-  $effect(() => {
-    if (src) generateWaveform();
-  });
 </script>
 
 <div class="flex items-center space-x-3 py-1 px-1.5 min-w-[240px] select-none rounded-[1rem] transition-all {isPlaying ? 'bg-black/5' : ''}">
@@ -183,7 +261,9 @@
     onclick={togglePlay}
     class="w-10 h-10 shrink-0 rounded-full flex items-center justify-center transition-all {isMine ? 'bg-white text-entropy-primary hover:bg-white/90' : 'bg-entropy-primary text-white hover:bg-entropy-primary-dim'}"
   >
-    {#if isPlaying}
+    {#if isLoading}
+        <LucideLoader size={20} class="animate-spin {isMine ? 'text-entropy-primary' : 'text-white'}" />
+    {:else if isPlaying}
       <LucidePause size={20} fill="currentColor" />
     {:else}
       <LucidePlay size={20} fill="currentColor" class="translate-x-0.5" />
