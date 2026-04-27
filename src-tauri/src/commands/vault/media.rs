@@ -1,7 +1,7 @@
 use crate::app_state::DbState;
-use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
+use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
+    XChaCha20Poly1305, Key, XNonce,
 };
 use base64::Engine;
 use std::io::{Read, Write};
@@ -22,6 +22,8 @@ pub fn get_media_dir(
     }
     Ok(media_dir)
 }
+
+// vault_save_media handles encryption now.
 
 #[tauri::command]
 pub async fn vault_save_media(
@@ -45,15 +47,18 @@ pub async fn vault_save_media(
         lock.clone().ok_or("Media key not initialized")?
     };
 
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, data.as_ref())
-        .map_err(|e| e.to_string())?;
-
-    let mut final_blob = nonce.to_vec();
-    final_blob.extend(ciphertext);
+    let key = Key::from_slice(&key_bytes);
+    let cipher = XChaCha20Poly1305::new(key);
+    
+    let mut final_blob = Vec::new();
+    
+    // Split data into chunks to match the streaming loader
+    for chunk in data.chunks(1279) {
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = cipher.encrypt(&nonce, chunk).map_err(|e| e.to_string())?;
+        final_blob.extend_from_slice(&nonce);
+        final_blob.extend_from_slice(&ciphertext);
+    }
 
     let media_dir = get_media_dir(&app, &state)?;
     let file_path = media_dir.join(&id);
@@ -96,18 +101,34 @@ pub async fn vault_load_media(
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
 
-    if buffer.len() < 12 {
-        return Err("File too short (corrupted)".to_string());
+    let key = Key::from_slice(&key_bytes);
+    let cipher = XChaCha20Poly1305::new(key);
+    
+    let mut plaintext = Vec::new();
+    let mut offset = 0;
+    
+    // Decrypt chunked AEAD
+    println!("[VAULT] Loading media ID: {}. Key fingerprint: {}", id, hex::encode(&key_bytes[..4]));
+    while offset + 24 < buffer.len() {
+        let nonce = XNonce::from_slice(&buffer[offset..offset+24]);
+        offset += 24;
+        
+        // We need to know the chunk size. 
+        // In our outbox, each chunk was 1279 bytes -> ciphertext was 1279 + 16 = 1295 bytes.
+        // Total block size = 24 + 1295 = 1319 bytes.
+        let chunk_cipher_len = 1295; 
+        let end = std::cmp::min(offset + chunk_cipher_len, buffer.len());
+        let ciphertext = &buffer[offset..end];
+        offset = end;
+
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
+        let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| {
+            let err = format!("Vault chunk decryption failed: {}", e);
+            println!("[VAULT-ERROR] {}", err);
+            err
+        })?;
+        plaintext.extend(chunk_plain);
     }
-
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&buffer[0..12]);
-    let ciphertext = &buffer[12..];
-
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
 
     Ok(plaintext)
 }
@@ -149,8 +170,8 @@ pub async fn db_export_media(
                 .map_err(|_| "Media key lock poisoned")?;
             lock.clone().ok_or("Media key not initialized")?
         };
-        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-        let cipher = Aes256Gcm::new(key);
+        let key = Key::from_slice(&key_bytes);
+        let cipher = XChaCha20Poly1305::new(key);
 
         let mut file = std::fs::File::open(&src_path_abs)
             .map_err(|e| format!("Failed to open source file: {}", e))?;
@@ -158,24 +179,24 @@ pub async fn db_export_media(
         file.read_to_end(&mut buffer)
             .map_err(|e| format!("Failed to read source file: {}", e))?;
 
-        if buffer.len() < 12 {
-            return Err("Source file too short (corrupted)".to_string());
+        let mut plaintext = Vec::new();
+        let mut offset = 0;
+        
+        while offset + 24 < buffer.len() {
+            let nonce = XNonce::from_slice(&buffer[offset..offset+24]);
+            offset += 24;
+            
+            let chunk_cipher_len = 1295; 
+            let end = std::cmp::min(offset + chunk_cipher_len, buffer.len());
+            let ciphertext = &buffer[offset..end];
+            offset = end;
+
+            let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| format!("Vault export chunk decryption failed: {}", e))?;
+            plaintext.extend(chunk_plain);
         }
 
-        let nonce = Nonce::from_slice(&buffer[0..12]);
-        let ciphertext = &buffer[12..];
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed during export: {}", e))?;
-
-        let mut out_file = std::fs::File::create(&target_path)
-            .map_err(|e| format!("Failed to create target file: {}", e))?;
-        out_file
-            .write_all(&plaintext)
-            .map_err(|e| format!("Failed to write to target file: {}", e))?;
-        out_file
-            .sync_all()
-            .map_err(|e| format!("Failed to sync file to disk: {}", e))?;
+        let target_path_abs = std::path::PathBuf::from(&target_path);
+        std::fs::write(target_path_abs, plaintext).map_err(|e| e.to_string())?;
     } else {
         // Refuse to copy files from outside the media vault
         return Err("Export denied: Source path is outside the allowed media vault".into());
@@ -187,22 +208,28 @@ pub async fn db_export_media(
 // Logic for media encryption is handled in process_outgoing_media in outbox.rs
 
 pub fn crypto_decrypt_media(combined: Vec<u8>, key_b64: String) -> Result<Vec<u8>, String> {
-    if combined.len() < 12 {
-        return Err("Data too short".into());
-    }
-
     let key_bytes = base64::engine::general_purpose::STANDARD
         .decode(key_b64)
         .map_err(|e| e.to_string())?;
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
+    let key = Key::from_slice(&key_bytes);
+    let cipher = XChaCha20Poly1305::new(key);
 
-    let nonce = Nonce::from_slice(&combined[..12]);
-    let ciphertext = &combined[12..];
+    let mut plaintext = Vec::new();
+    let mut offset = 0;
+    
+    // Decrypt chunked AEAD
+    while offset + 24 < combined.len() {
+        let nonce = XNonce::from_slice(&combined[offset..offset+24]);
+        offset += 24;
+        
+        let chunk_cipher_len = 1295; 
+        let end = std::cmp::min(offset + chunk_cipher_len, combined.len());
+        let ciphertext = &combined[offset..end];
+        offset = end;
 
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
+        let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| format!("Network chunk decryption failed: {}", e))?;
+        plaintext.extend(chunk_plain);
+    }
 
     Ok(plaintext)
 }

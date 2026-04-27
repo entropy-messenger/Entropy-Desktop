@@ -16,6 +16,7 @@
 
     let blobUrl = $state<string | null>(null);
     let loading = $state(false);
+    let failed = $state(false);
     let error = $state(false);
     let isExporting = $state(false);
     let isMine = $derived(msg.senderHash === $userStore.identityHash || msg.isMine);
@@ -24,6 +25,13 @@
     let exportedPath = $state<string | null>(null);
     $effect(() => {
         exportedPath = msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null);
+    });
+
+    // Automatically trigger decryption load for images/videos once available
+    $effect(() => {
+        if ((isImage || isVideo) && msg.attachment?.vaultPath && !blobUrl && !loading && !failed) {
+            loadAttachment();
+        }
     });
 
     let isImage = $derived(msg.attachment?.fileType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment?.fileName || ''));
@@ -46,7 +54,7 @@
     let progress = $derived(activeTransfer ? Math.round((activeTransfer.current / activeTransfer.total) * 100) : 0);
 
     async function loadAttachment() {
-        if (!msg.attachment || blobUrl || loading) return;
+        if (!msg.attachment || blobUrl || loading || failed) return;
         
         // Step 1: High Performance Native Path (Only for unencrypted local files)
         const path = msg.attachment.originalPath;
@@ -68,16 +76,18 @@
 
         // Step 3: Vault Retrieval
         loading = true;
+        failed = false;
         try {
             const data = await getAttachment(msg.id);
             if (data) {
                 blobUrl = URL.createObjectURL(new Blob([data as any], {type: msg.attachment.fileType}));
                 wasCreatedInternally = true;
             } else {
-                error = true;
+                failed = true;
             }
         } catch (e) {
-            error = true;
+            console.error("[UI] Decryption failed:", e);
+            failed = true;
         } finally {
             loading = false;
         }
@@ -231,7 +241,7 @@
                         />
                     </div>
                 {:else if isVideo}
-                    <div class="relative w-full aspect-video bg-black/20 flex items-center justify-center group/vid overflow-hidden cursor-pointer">
+                    <div class="relative w-full aspect-video bg-black flex items-center justify-center group/vid overflow-hidden cursor-pointer">
                         <img 
                             src={msg.attachment.thumbnail} 
                             class="w-full h-full object-cover opacity-80 blur-[2px] scale-105" 

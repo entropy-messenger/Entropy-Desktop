@@ -23,9 +23,9 @@ pub struct PacedMessage {
     pub msg: Message,
 }
 
-pub struct FragmentBuffer {
+pub struct MediaTransferState {
     pub total: u32,
-    pub chunks: std::collections::HashMap<u32, Vec<u8>>,
+    pub received_chunks: Vec<bool>,
     pub last_activity: std::time::Instant,
 }
 
@@ -47,7 +47,7 @@ pub struct NetworkState {
     pub identity_hash: Mutex<Option<String>>,
     pub session_token: Mutex<Option<String>>,
     pub halted_targets: Mutex<std::collections::HashSet<String>>,
-    pub media_assembler: Mutex<std::collections::HashMap<String, FragmentBuffer>>,
+    pub media_assembler: Mutex<std::collections::HashMap<String, MediaTransferState>>,
     pub pending_media_links: Mutex<std::collections::HashMap<String, PendingMediaMetadata>>, // transfer_key -> (msg_id, dec_key)
     pub binary_receiver: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     pub is_refilling: Mutex<bool>,

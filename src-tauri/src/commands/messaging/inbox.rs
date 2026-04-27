@@ -9,8 +9,17 @@
 //! Once reassembled, payloads are passed to the Signal decryption pipeline where session
 //! state is updated and messages are persisted to the encrypted local vault.
 
-use crate::app_state::{DbState, NetworkState};
-use crate::commands::*;
+use chacha20poly1305::{
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    XChaCha20Poly1305, Key, XNonce,
+};
+use crate::app_state::{DbState, NetworkState, MediaTransferState};
+use crate::commands::{
+    get_media_dir, internal_db_save_message, internal_send_to_network,
+    internal_signal_encrypt, internal_db_upsert_chat, db_update_messages,
+    db_set_contact_global_nickname, DbMessage, DbChat
+};
+use crate::commands::vault::crypto_decrypt_media;
 use crate::signal_store::SqliteSignalStore;
 use base64::Engine;
 use libsignal_protocol::{
@@ -21,7 +30,6 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rusqlite::params;
 use serde_json::json;
-use std::io::Write;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[tauri::command]
@@ -190,63 +198,91 @@ pub async fn process_incoming_binary(
             return Err("Fragment data too short".into());
         }
         let chunk_data = &raw_chunk_data[..chunk_len];
-        let _link_key = format!("{}:{}", sender, transfer_id);
-        let assembler_key = format!("{}:{}:{:02x}", sender, transfer_id, frame_type);
+        if frame_type == 0x02 {
+            println!("[INBOX] Received fragment {}/{} ({} bytes) for TID: {} from {}", index + 1, total, chunk_data.len(), transfer_id, sender);
+        }
 
-        let (is_complete, entry_data, _total_actual, _current_count) = {
-            let mut assembler = net_state
+        let (is_complete, complete_data) = {
+            let mut assemblers = net_state
                 .media_assembler
                 .lock()
                 .map_err(|_| "Network state poisoned")?;
-            let entry = assembler.entry(assembler_key.clone()).or_insert_with(|| {
-                crate::app_state::FragmentBuffer {
-                    total,
-                    chunks: std::collections::HashMap::new(),
-                    last_activity: std::time::Instant::now(),
-                }
+            let transfer_key = format!("{}:{}:{}", sender, transfer_id, frame_type);
+            let assembler = assemblers.entry(transfer_key.clone()).or_insert_with(|| MediaTransferState {
+                total,
+                received_chunks: vec![false; total as usize],
+                last_activity: std::time::Instant::now(),
             });
 
-            // security: validate index range and cap hashmap entries per assembler
-            if index >= entry.total || entry.chunks.len() >= 76800 {
-                return Err("Index out of range".into());
-            }
+            if (index as usize) < assembler.received_chunks.len() {
+                if !assembler.received_chunks[index as usize] {
+                    let db_state = app.state::<DbState>();
+                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                        let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                        let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                        let file_path = media_dir.join(&temp_filename);
 
-            entry.chunks.insert(index, chunk_data.to_vec());
-            entry.last_activity = std::time::Instant::now();
-
-            let complete = entry.chunks.len() >= entry.total as usize;
-            let mut data = Vec::new();
-            let tot = entry.total;
-            let cur = entry.chunks.len() as u32;
-
-            if complete {
-                for i in 0..entry.total {
-                    if let Some(chunk) = entry.chunks.get(&i) {
-                        data.extend_from_slice(chunk);
+                        use std::io::{Seek, SeekFrom, Write};
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .open(&file_path)
+                        {
+                            let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
+                            let _ = f.write_all(chunk_data);
+                        }
                     }
+                    assembler.received_chunks[index as usize] = true;
+                    assembler.last_activity = std::time::Instant::now();
                 }
-                assembler.remove(&assembler_key);
             }
 
-            // Throttled progress emission (every 2% or completion)
-            let progress_step = (tot / 50).max(1);
-            if cur % progress_step == 0 || cur == tot {
+            let current_count = assembler.received_chunks.iter().filter(|&&b| b).count() as u32;
+            let complete = current_count >= assembler.total;
+
+            let progress_step = (total / 20).max(1);
+            if index % progress_step == 0 || complete {
                 let _ = app.emit("transfer://progress", json!({
                     "transferId": transfer_id,
                     "sender": sender,
-                    "current": cur,
-                    "total": tot,
+                    "current": current_count,
+                    "total": total,
                     "direction": "download"
                 }));
             }
 
-            (complete, data, tot, cur)
+            if complete {
+                println!("[INBOX] Reassembly complete for TID: {}. FrameType: {}", transfer_id, frame_type);
+                if frame_type == 0x01 || frame_type == 0x04 {
+                    let db_state = app.state::<DbState>();
+                    let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                    let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                        let file_path = media_dir.join(&temp_filename);
+                        if let Ok(data) = std::fs::read(&file_path) {
+                            let _ = std::fs::remove_file(file_path);
+                            assemblers.remove(&transfer_key);
+                            (true, Some(data))
+                        } else {
+                            (false, None)
+                        }
+                    } else {
+                        (false, None)
+                    }
+                } else {
+                    // For media (0x02), we don't read into RAM here.
+                    // The specialized handler will handle the file.
+                    assemblers.remove(&transfer_key);
+                    (true, None)
+                }
+            } else {
+                (false, None)
+            }
         };
 
         if is_complete {
-            let complete_data = entry_data;
-
             if frame_type == 0x01 || frame_type == 0x04 {
+                let complete_data = complete_data.ok_or("Failed to load reassembled data")?;
                 let envelope: serde_json::Value = serde_json::from_slice(&complete_data)
                     .map_err(|e| format!("Failed to parse reassembled message envelope: {}", e))?;
 
@@ -367,12 +403,9 @@ pub async fn process_incoming_binary(
                                                 is_group: true,
                                                 reply_to_json: None,
                                             };
-                                            let _ = internal_db_save_message(
-                                                &db_state,
-                                                sys_msg.clone(),
-                                            )
-                                            .await;
-                                            let _ = app.emit("msg://added", json!(sys_msg));
+                                            if let Ok(_) = internal_db_save_message(&db_state, sys_msg.clone()).await {
+                                                let _ = app.emit("msg://added", json!(sys_msg));
+                                            }
                                         }
                                     }
                                 }
@@ -676,7 +709,7 @@ pub async fn process_incoming_binary(
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
-                                    .map_err(|e| e.to_string())?;
+                                    .map_err(|e: tauri::Error| e.to_string())?;
 
                                 // Automated delivery receipts for 1:1 chats
                                 if !is_group {
@@ -791,33 +824,89 @@ pub async fn process_incoming_binary(
                                 let inner_transfer_key =
                                     format!("{}:{}", sender, inner_transfer_id);
                                 let temp_filename =
-                                    format!("transfer_{}_{}.bin", sender, inner_transfer_id);
+                                    format!("transfer_{}_{}_media.bin", sender, inner_transfer_id);
                                 let temp_path = media_dir.join(&temp_filename);
                                 let key_str =
                                     bundle["key"].as_str().unwrap_or_default().to_string();
 
                                 if temp_path.exists() {
-                                    // Decrypt and save media arriving before metadata
-                                    if let Ok(encrypted_bytes) = std::fs::read(&temp_path) {
-                                        if let Ok(plaintext) = crypto_decrypt_media(
-                                            encrypted_bytes,
-                                            key_str.clone(),
+                                    // Decrypt and save media arriving before metadata (Streaming O(1) RAM)
+                                    if let Ok(key_bytes) = base64::engine::general_purpose::STANDARD.decode(&key_str) {
+                                        let transit_key = Key::from_slice(&key_bytes);
+                                        let transit_cipher = XChaCha20Poly1305::new(transit_key);
+
+                                        let vault_key_bytes = {
+                                            let lock = db_state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
+                                            lock.clone().ok_or("Media key not initialized")?
+                                        };
+                                        let vault_key = Key::from_slice(&vault_key_bytes);
+                                        let vault_cipher = XChaCha20Poly1305::new(vault_key);
+
+                                        let vault_path = media_dir.join(&msg_id);
+                                        
+                                        if let (Ok(mut src), Ok(mut dst)) = (
+                                            std::fs::File::open(&temp_path),
+                                            std::fs::File::create(&vault_path)
                                         ) {
-                                            let _ = vault_save_media(
-                                                app.clone(),
-                                                db_state.clone(),
-                                                msg_id.clone(),
-                                                plaintext,
-                                            )
-                                            .await;
+                                            println!("[BRIDGE] Starting metadata-triggered decryption bridge for TID: {}. Key fingerprint: {}", inner_transfer_id, hex::encode(&vault_key_bytes[..4]));
+                                            use std::io::{Read, Write};
+                                            let mut buf = vec![0u8; 1319];
+                                            use sha2::{Sha256, Digest};
+                                            let mut file_hasher = Sha256::new();
+                                            let expected_hash = bundle["sha256"].as_str().unwrap_or_default();
+
+                                            let mut total_blocks = 0;
+                                            loop {
+                                                let mut block_buf = vec![0u8; 1319];
+                                                let mut n = 0;
+                                                while n < 1319 {
+                                                    match src.read(&mut block_buf[n..]) {
+                                                        Ok(0) => break,
+                                                        Ok(read) => n += read,
+                                                        Err(_) => break,
+                                                    }
+                                                }
+                                                if n == 0 { break; }
+
+                                                let chunk = &block_buf[..n];
+                                                if chunk.len() > 40 {
+                                                    let nonce = XNonce::from_slice(&chunk[..24]);
+                                                    let ciphertext = &chunk[24..];
+                                                    if let Ok(ptext) = transit_cipher.decrypt(nonce, ciphertext) {
+                                                        file_hasher.update(&ptext);
+                                                        if total_blocks == 0 {
+                                                            println!("[BRIDGE] First block plaintext peek: {:02x?}", &ptext[..std::cmp::min(ptext.len(), 4)]);
+                                                        }
+                                                        let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                                                        if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, ptext.as_slice()) {
+                                                            let _ = dst.write_all(&v_nonce);
+                                                            let _ = dst.write_all(&v_cipher);
+                                                            total_blocks += 1;
+                                                        }
+                                                    } else {
+                                                        println!("[BRIDGE-ERROR] Failed to decrypt chunk in metadata-bridge. Index: {}", total_blocks);
+                                                    }
+                                                } else {
+                                                    break; // Tail too short
+                                                }
+                                            }
+                                            let total_bytes = dst.metadata().map(|m| m.len()).unwrap_or(0);
+                                            let actual_hash = hex::encode(file_hasher.finalize());
+                                            let _ = dst.sync_all();
+
+                                            if actual_hash == expected_hash {
+                                                println!("[BRIDGE] Integrity verified! Hash: {}", actual_hash);
+                                            } else {
+                                                println!("[BRIDGE-ERROR] HASH MISMATCH! Expected: {}, Got: {}", expected_hash, actual_hash);
+                                            }
+                                            
+                                            println!("[BRIDGE] Decryption complete for TID: {}. Saved {} bytes to Vault.", inner_transfer_id, total_bytes);
                                             let _ = std::fs::remove_file(&temp_path);
                                             let _ = app.emit("network-bin-complete", serde_json::json!({
                                                 "sender": sender,
                                                 "transfer_id": inner_transfer_id,
                                                 "msg_id": Some(msg_id.clone())
                                             }));
-                                        } else {
-                                            // Decryption failed silently
                                         }
                                     }
                                 } else {
@@ -915,7 +1004,7 @@ pub async fn process_incoming_binary(
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
-                                    .map_err(|e| e.to_string())?;
+                                    .map_err(|e: tauri::Error| e.to_string())?;
 
                                 // enforce 1:1 delivery receipts
                                 if !is_group {
@@ -948,10 +1037,13 @@ pub async fn process_incoming_binary(
                     }
                 }
             } else if frame_type == 0x02 {
-                // media reassembly
+                // media reassembly complete
                 let db_state = app.state::<DbState>();
                 let link_key = format!("{}:{}", sender, transfer_id);
                 if let Ok(media_dir) = get_media_dir(&app, &db_state) {
+                    let temp_filename = format!("transfer_{}_{}_media.bin", sender, transfer_id);
+                    let temp_path = media_dir.join(&temp_filename);
+
                     let meta = {
                         let mut links = net_state
                             .pending_media_links
@@ -961,38 +1053,87 @@ pub async fn process_incoming_binary(
                     };
 
                     if let Some(m) = meta {
-                        // vault encryption bridge
-                        if let Ok(plaintext) =
-                            crypto_decrypt_media(complete_data.clone(), m.key)
-                        {
-                            let _ = vault_save_media(
-                                app.clone(),
-                                db_state.clone(),
-                                m.id.clone(),
-                                plaintext,
-                            )
-                            .await;
-                            app.emit(
-                                "network-bin-complete",
-                                json!({
-                                    "sender": sender,
-                                    "transfer_id": transfer_id,
-                                    "msg_id": Some(m.id)
-                                }),
-                            )
-                            .map_err(|e| e.to_string())?;
-                        } else {
-                            // Media decryption failed
+                        // Vault decryption bridge (Streaming O(1) RAM)
+                        if temp_path.exists() {
+                            let key_bytes = base64::engine::general_purpose::STANDARD.decode(&m.key).map_err(|e| e.to_string())?;
+                            let transit_key = Key::from_slice(&key_bytes);
+                            let transit_cipher = XChaCha20Poly1305::new(transit_key);
+
+                            let vault_key_bytes = {
+                                let lock = db_state.media_key.lock().map_err(|_| "Media key lock poisoned")?;
+                                lock.clone().ok_or("Media key not initialized")?
+                            };
+                            let vault_key = Key::from_slice(&vault_key_bytes);
+                            let vault_cipher = XChaCha20Poly1305::new(vault_key);
+
+                            let vault_path = media_dir.join(&m.id);
+
+                            if let (Ok(mut src), Ok(mut dst)) = (
+                                std::fs::File::open(&temp_path),
+                                std::fs::File::create(&vault_path)
+                            ) {
+                                println!("[BRIDGE] Starting binary-triggered decryption bridge for TID: {}. Key fingerprint: {}", transfer_id, hex::encode(&vault_key_bytes[..4]));
+                                use std::io::{Read, Write};
+                                let mut buf = vec![0u8; 1319]; // Nonce(24) + Data(1279) + Tag(16)
+                                use sha2::{Sha256, Digest};
+                                let mut file_hasher = Sha256::new();
+                                
+                                let mut total_blocks = 0;
+                                loop {
+                                    let mut block_buf = vec![0u8; 1319];
+                                    let mut n = 0;
+                                    while n < 1319 {
+                                        match src.read(&mut block_buf[n..]) {
+                                            Ok(0) => break,
+                                            Ok(read) => n += read,
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    if n == 0 { break; }
+
+                                    let chunk = &block_buf[..n];
+                                    if chunk.len() > 40 {
+                                        let nonce = XNonce::from_slice(&chunk[..24]);
+                                        let ciphertext = &chunk[24..];
+                                        if let Ok(ptext) = transit_cipher.decrypt(nonce, ciphertext) {
+                                            file_hasher.update(&ptext);
+                                            if total_blocks == 0 {
+                                                println!("[BRIDGE] First block plaintext peek: {:02x?}", &ptext[..std::cmp::min(ptext.len(), 4)]);
+                                            }
+                                            // Re-encrypt for vault
+                                            let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                                            if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, ptext.as_slice()) {
+                                                let _ = dst.write_all(&v_nonce);
+                                                let _ = dst.write_all(&v_cipher);
+                                                total_blocks += 1;
+                                            }
+                                        } else {
+                                            println!("[BRIDGE-ERROR] Failed to decrypt chunk in binary-bridge. Index: {}", total_blocks);
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                let total_bytes = dst.metadata().map(|m| m.len()).unwrap_or(0);
+                                let actual_hash = hex::encode(file_hasher.finalize());
+                                let _ = dst.sync_all();
+                                println!("[BRIDGE] Decryption complete for TID: {}. Saved {} bytes to Vault. Actual Hash: {}", transfer_id, total_bytes, actual_hash);
+                                let _ = std::fs::remove_file(&temp_path);
+
+                                app.emit(
+                                    "network-bin-complete",
+                                    json!({
+                                        "sender": sender,
+                                        "transfer_id": transfer_id,
+                                        "msg_id": Some(m.id)
+                                    }),
+                                )
+                                .map_err(|e| e.to_string())?;
+                            }
                         }
                     } else {
-                        // Metadata not arrived yet, save raw Encrypted fragments to temp file
-                        let temp_filename = format!("transfer_{}_{}.bin", sender, transfer_id);
-                        let file_path = media_dir.join(&temp_filename);
-                        if let Ok(mut f) = std::fs::File::create(&file_path) {
-                            let _ = f.write_all(&complete_data);
-                            let _ = f.sync_all();
-                            // Media reassembly complete
-                        }
+                        // Metadata not arrived yet, keep the .bin file.
+                        // It will be processed when the metadata (frame type 0x04) arrives.
                     }
                 }
             }

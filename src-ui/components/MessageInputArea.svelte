@@ -60,20 +60,22 @@
         const parts = path.split(/[/\\]/);
         const fileName = parts[parts.length - 1];
         
-        const { readFile } = await import('@tauri-apps/plugin-fs');
-        const fileData = await readFile(path);
-        
         // Detect file type for thumbnail generation
         const ext = fileName.split('.').pop()?.toLowerCase();
         let mimeType = 'application/octet-stream';
         if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
         if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
 
+        // We still need a temporary Blob or local URL to generate the thumbnail
+        // but we don't hold the whole file in a JS array anymore.
+        const { readFile } = await import('@tauri-apps/plugin-fs');
+        const fileData = await readFile(path); // Still need this for thumbnail lib unfortunately unless we use a better thumb generator
+        
         const { generateThumbnail } = await import('../lib/utils/thumbnails');
         const thumbnail = await generateThumbnail(new File([fileData], fileName, { type: mimeType }));
 
         const { sendFile } = await import('../lib/actions/chat');
-        sendFile(activeChat.peerHash, { name: fileName, type: mimeType, data: fileData }, 'file', 0, thumbnail || undefined);
+        sendFile(activeChat.peerHash, { name: fileName, type: mimeType, path }, 'file', 0, thumbnail || undefined);
     }
   }
 

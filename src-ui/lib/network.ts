@@ -173,6 +173,16 @@ export class NetworkLayer {
                 }
             });
         });
+
+        listen('network-bin-complete', (event) => {
+            const { msg_id } = event.payload as any;
+            if (!msg_id) return;
+            
+            // Mark the message as ready in the UI store
+            import('./actions/chat').then(m => {
+                m.refreshMessageUI(msg_id);
+            });
+        });
     }
 
     private connectingPromise: Promise<void> | null = null;

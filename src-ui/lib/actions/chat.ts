@@ -24,6 +24,24 @@ export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
 
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
 
+/**
+ * Force a reactive UI refresh for a specific message.
+ * Used when a background process (like media re-encryption) completes.
+ */
+export const refreshMessageUI = (msgId: string) => {
+    messageStore.update(m => {
+        for (const chatAddress in m) {
+            const list = m[chatAddress];
+            const idx = list.findIndex(x => x.id === msgId);
+            if (idx !== -1) {
+                list[idx] = { ...list[idx] };
+                break;
+            }
+        }
+        return { ...m };
+    });
+};
+
 export const sendMessage = async (destIdRaw: string, content: string) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
@@ -61,21 +79,12 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
     const chat = state.chats[destId];
 
     try {
-        let fileData: Uint8Array | null = null;
-        if (file.data) {
-            fileData = file.data instanceof ArrayBuffer ? new Uint8Array(file.data) : file.data;
-        } else if (file && (file instanceof File || typeof (file as any).arrayBuffer === 'function')) {
-            const source = (file as any)._target || file;
-            const buffer = await (source as any).arrayBuffer();
-            fileData = new Uint8Array(buffer);
-        }
-
         const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
         await invoke(command, {
             payload: {
                 recipient: destId,
                 filePath: file.path || null,
-                fileData: fileData ? Array.from(fileData) : null,
+                fileData: null, // Zero-RAM: Rust will read from path
                 fileName: file.name,
                 fileType: file.type,
                 msgType: type,

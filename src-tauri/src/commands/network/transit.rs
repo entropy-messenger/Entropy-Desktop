@@ -200,6 +200,93 @@ pub async fn internal_send_to_network(
     }
 }
 
+pub async fn internal_dispatch_fragment(
+    app: AppHandle,
+    state: &NetworkState,
+    target_hash_bytes: [u8; 64],
+    msg_id: Option<String>,
+    transfer_id: u32,
+    index: u32,
+    total: u32,
+    chunk_data: &[u8],
+    is_media: bool,
+    is_volatile: bool,
+) -> Result<(), String> {
+    let mut envelope = Vec::with_capacity(PACKET_SIZE);
+    envelope.extend_from_slice(&target_hash_bytes);
+    if is_media {
+        envelope.push(0x02);
+    } else if is_volatile {
+        envelope.push(0x04);
+    } else {
+        envelope.push(0x01);
+    }
+    envelope.extend_from_slice(&transfer_id.to_be_bytes());
+    envelope.extend_from_slice(&index.to_be_bytes());
+    envelope.extend_from_slice(&total.to_be_bytes());
+    envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
+    envelope.extend_from_slice(chunk_data);
+
+    if let Some(ref id) = msg_id {
+        state
+            .pending_transfers
+            .lock()
+            .map_err(|_| "Network state poisoned")?
+            .insert(transfer_id, id.clone());
+    }
+
+    let paced_msg = PacedMessage {
+        msg: Message::Binary(envelope.into()),
+    };
+
+    let is_connected = state
+        .sender
+        .lock()
+        .map_err(|_| "Network state poisoned")?
+        .is_some();
+
+    if is_connected {
+        let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+        if let Some(tx) = sender_lock.as_ref() {
+            tx.send(paced_msg).map_err(|e| e.to_string())?;
+        }
+        
+        // Progress emission
+        if index % 20 == 0 || index == total - 1 {
+            let _ = app.emit("transfer://progress", json!({
+                "transferId": transfer_id,
+                "current": index + 1,
+                "total": total,
+                "direction": "upload",
+                "msgId": msg_id
+            }));
+        }
+        Ok(())
+    } else {
+        let db_lock = app.state::<DbState>();
+        let conn_lock = db_lock
+            .conn
+            .lock()
+            .map_err(|_| "Database connection lock poisoned")?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let Some(conn) = conn_lock.as_ref() {
+            let content = match &paced_msg.msg {
+                Message::Binary(b) => b.to_vec(),
+                _ => vec![],
+            };
+            let _ = conn.execute(
+                "INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![msg_id, "binary", content, timestamp],
+            );
+        }
+        Ok(())
+    }
+}
+
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
     let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
     if let Some(tx) = &*sender_lock {
@@ -249,7 +336,7 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
                 && let Some(conn) = lock.as_ref()
             {
                 let query = format!(
-                    "DELETE FROM outbox WHERE id IN ({})",
+                    "DELETE FROM pending_outbox WHERE id IN ({})",
                     ids_to_delete
                         .iter()
                         .map(|_| "?")
