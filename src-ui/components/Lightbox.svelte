@@ -1,9 +1,50 @@
 <script lang="ts">
     import { lightbox, addToast } from '../lib/stores/ui';
-    import { LucideX, LucideDownload, LucideArrowLeft, LucideShare2, LucideInfo } from 'lucide-svelte';
+    import { LucideX, LucideDownload, LucideArrowLeft, LucideShare2, LucideInfo, LucideLoader } from 'lucide-svelte';
     import { fade, scale, fly } from 'svelte/transition';
     import { invoke } from '@tauri-apps/api/core';
     import VideoPlayer from './VideoPlayer.svelte';
+    import { getAttachment } from '../lib/actions/chat';
+
+    let loading = $state(false);
+    let blobUrl = $state<string | null>(null);
+
+    $effect(() => {
+        const lb = $lightbox;
+        if (lb) {
+            if (lb.src) {
+                blobUrl = lb.src;
+            } else if (lb.id) {
+                loadFullMedia(lb.id, lb.fileType || 'application/octet-stream');
+            }
+        }
+        
+        return () => {
+            if (blobUrl && blobUrl.startsWith('blob:')) {
+                URL.revokeObjectURL(blobUrl);
+            }
+            blobUrl = null;
+            loading = false;
+        };
+    });
+
+    async function loadFullMedia(id: string, type: string) {
+        loading = true;
+        try {
+            const data = await getAttachment(id);
+            if (data) {
+                blobUrl = URL.createObjectURL(new Blob([data], { type }));
+            } else {
+                addToast("Failed to fetch attachment", 'error');
+                close();
+            }
+        } catch (e) {
+            addToast("Failed to decrypt media", 'error');
+            close();
+        } finally {
+            loading = false;
+        }
+    }
 
     function close() {
         lightbox.set(null);
@@ -14,19 +55,22 @@
     }
 
     async function downloadImage() {
-        if (!$lightbox) return;
+        if (!$lightbox || !blobUrl) return;
         try {
             const { save } = await import('@tauri-apps/plugin-dialog');
             const targetPath = await save({ defaultPath: $lightbox.fileName });
             
             if (targetPath) {
-                await invoke('db_export_media', { 
-                    srcPath: $lightbox.src, // Note: This might need the actual vault path if src is blob
-                    targetPath 
-                });
-                // Note: If src is blob, we might need a different approach in some environments
-                // but usually for desktop, we can use the plugin-fs or similar.
-                // For now, if it fails, we provide a fallback message.
+                // Since we have the blob data here, we could potentially use it,
+                // but the backend command db_export_media expects a path.
+                // However, we can use plugin-fs to write the data if we have it.
+                const { writeFile } = await import('@tauri-apps/plugin-fs');
+                
+                // Fetch the blob data again or use the cached version
+                const response = await fetch(blobUrl);
+                const arrayBuffer = await response.arrayBuffer();
+                await writeFile(targetPath, new Uint8Array(arrayBuffer));
+                
                 addToast("Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
             }
         } catch (e) {
@@ -103,18 +147,30 @@
             style="padding-top: calc(var(--sat, 0px) + 6rem); padding-bottom: {$lightbox.content ? 'calc(var(--sab, 0px) + 8rem)' : 'calc(var(--sab, 0px) + 2rem)'};"
             onclick={close}
         >
-            {#if $lightbox.type === 'video'}
-                <div class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" onclick={(e) => e.stopPropagation()}>
-                    <VideoPlayer src={$lightbox.src} expanded={true} />
+            {#if loading}
+                <div class="flex flex-col items-center space-y-4">
+                    <div class="relative">
+                        <LucideLoader size={48} class="animate-spin text-white/20" />
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <LucideLoader size={24} class="animate-spin text-white" style="animation-direction: reverse; animation-duration: 0.5s;" />
+                        </div>
+                    </div>
+                    <span class="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Decrypting Sovereign Media</span>
                 </div>
-            {:else}
-                <img 
-                    src={$lightbox.src} 
-                    alt={$lightbox.alt}
-                    class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
-                    transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
-                    onclick={(e) => e.stopPropagation()}
-                />
+            {:else if blobUrl}
+                {#if $lightbox.type === 'video'}
+                    <div class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" onclick={(e) => e.stopPropagation()}>
+                        <VideoPlayer src={blobUrl} expanded={true} />
+                    </div>
+                {:else}
+                    <img 
+                        src={blobUrl} 
+                        alt={$lightbox.alt}
+                        class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+                        transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
+                        onclick={(e) => e.stopPropagation()}
+                    />
+                {/if}
             {/if}
         </div>
 

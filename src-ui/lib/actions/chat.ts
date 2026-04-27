@@ -54,7 +54,7 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     }
 };
 
-export const sendFile = async (destIdRaw: string, file: { name: string, type: string, path?: string, data?: Uint8Array | ArrayBuffer }, type: 'file' | 'voice_note' = 'file', duration?: number) => {
+export const sendFile = async (destIdRaw: string, file: { name: string, type: string, path?: string, data?: Uint8Array | ArrayBuffer }, type: 'file' | 'voice_note' = 'file', duration?: number, thumbnail?: string) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
@@ -80,6 +80,7 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
                 fileType: file.type,
                 msgType: type,
                 duration: duration,
+                thumbnail: thumbnail || null,
                 isGroup: !!chat?.isGroup,
                 groupMembers: chat?.members || null,
                 groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,

@@ -58,6 +58,7 @@ pub struct OutgoingMedia {
     pub msg_type: Option<String>,
     pub group_name: Option<String>,
     pub duration: Option<f64>,
+    pub thumbnail: Option<String>,
     #[serde(rename = "isGroup", default)]
     pub is_group: bool,
     pub group_members: Option<Vec<String>>,
@@ -316,6 +317,7 @@ pub fn process_outgoing_media(
                 "size": data.len(),
                 "msg_type": payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
                 "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
                 "replyTo": payload.reply_to,
             });
 
@@ -347,6 +349,7 @@ pub fn process_outgoing_media(
                         "fileType": payload.file_type,
                         "size": data.len(),
                         "duration": payload.duration,
+                        "thumbnail": payload.thumbnail,
                         "transferId": transfer_id,
                         "bundle": bundle,
                         "vaultPath": saved_vault_path
@@ -827,6 +830,7 @@ pub fn process_outgoing_group_media(
                 "size": data.len(),
                 "msg_type": payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
                 "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
                 "replyTo": payload.reply_to,
                 "groupId": payload.recipient,
                 "groupName": payload.group_name,
@@ -847,6 +851,7 @@ pub fn process_outgoing_group_media(
                     "fileType": payload.file_type,
                     "size": data.len(),
                     "duration": payload.duration,
+                    "thumbnail": payload.thumbnail,
                     "transferId": transfer_id,
                     "bundle": bundle,
                     "vaultPath": get_media_dir(&app, &db_state).map(|d| d.join(&msg_id).to_string_lossy().to_string()).unwrap_or_default()

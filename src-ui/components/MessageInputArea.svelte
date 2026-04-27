@@ -60,13 +60,20 @@
         const parts = path.split(/[/\\]/);
         const fileName = parts[parts.length - 1];
         
-        // On mobile, paths are content:// URIs that Rust can't read.
-        // We read it here in the frontend first.
         const { readFile } = await import('@tauri-apps/plugin-fs');
         const fileData = await readFile(path);
         
+        // Detect file type for thumbnail generation
+        const ext = fileName.split('.').pop()?.toLowerCase();
+        let mimeType = 'application/octet-stream';
+        if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+        if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
+
+        const { generateThumbnail } = await import('../lib/utils/thumbnails');
+        const thumbnail = await generateThumbnail(new File([fileData], fileName, { type: mimeType }));
+
         const { sendFile } = await import('../lib/actions/chat');
-        sendFile(activeChat.peerHash, { name: fileName, type: 'file', data: fileData }, 'file');
+        sendFile(activeChat.peerHash, { name: fileName, type: mimeType, data: fileData }, 'file', 0, thumbnail || undefined);
     }
   }
 

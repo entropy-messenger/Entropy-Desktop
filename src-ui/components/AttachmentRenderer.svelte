@@ -166,56 +166,30 @@
         }
     }
 
-    let observer: IntersectionObserver;
     let element = $state<HTMLElement | null>(null);
-    let isVisible = $state(false);
 
-    $effect(() => {
-        if (!element || (!isImage && !isVideo && msg.type !== 'voice_note')) return;
-
-        observer = new IntersectionObserver((entries) => {
-            const entry = entries[0];
-            isVisible = entry.isIntersecting;
-            
-            if (isVisible) {
-                if (msg.type !== 'voice_note' && msg.attachment?.fileName !== 'voice_note.wav') {
-                    loadAttachment();
-                } else if (msg.attachment?.data || (!msg.attachment?.vaultPath && msg.attachment?.originalPath)) {
-                    // Only pre-load voice notes if they are fresh local previews
-                    loadAttachment();
-                }
-            } else if (blobUrl && wasCreatedInternally) {
-                URL.revokeObjectURL(blobUrl);
-                blobUrl = null;
-            }
-        }, {
-            rootMargin: '200px'
-        });
-
-        observer.observe(element);
-
-        return () => {
-            observer.disconnect();
-            if (blobUrl && wasCreatedInternally) {
-                URL.revokeObjectURL(blobUrl);
-            }
-        };
-    });
+    // Interaction handler to trigger full decryption (Lightbox)
+    function triggerFullView(e: MouseEvent) {
+        e.stopPropagation();
+        if (isImage || isVideo) {
+            toggleLightbox(e);
+        }
+    }
 
     function toggleLightbox(e: MouseEvent | TouchEvent) {
         e.stopPropagation();
-        if (blobUrl) {
-            lightbox.set({
-                src: blobUrl,
-                alt: msg.attachment.fileName,
-                fileName: msg.attachment.fileName,
-                size: msg.attachment.size || 0,
-                type: isVideo ? 'video' : 'image',
-                content: msg.content,
-                timestamp: msg.timestamp,
-                senderNickname: $userStore.nicknames[msg.senderHash] || msg.senderHash?.slice(0, 8)
-            });
-        }
+        lightbox.set({
+            id: msg.id,
+            src: blobUrl,
+            alt: msg.attachment.fileName,
+            fileName: msg.attachment.fileName,
+            fileType: msg.attachment.fileType,
+            size: msg.attachment.size || 0,
+            type: isVideo ? 'video' : 'image',
+            content: msg.content,
+            timestamp: msg.timestamp,
+            senderNickname: $userStore.nicknames[msg.senderHash] || msg.senderHash?.slice(0, 8)
+        });
     }
 </script>
 
@@ -240,26 +214,29 @@
     {/if}
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2 max-w-full">
-        {#if (isImage || isVideo) && blobUrl}
+        {#if (isImage || isVideo)}
             <!-- Media Container with Context Menu Support -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
                 class="relative group/media overflow-hidden rounded-2xl border border-white/10 shadow-lg bg-entropy-surface-light/30 flex flex-col w-full max-w-[280px] sm:max-w-[400px] min-h-[150px]"
                 oncontextmenu={openContextMenu}
-                onclick={toggleLightbox}
+                onclick={triggerFullView}
             >
                 {#if isImage}
                     <div class="relative w-full aspect-auto min-h-[150px] max-h-[500px] flex items-center justify-center bg-black/5 overflow-hidden">
                         <img 
-                            src={blobUrl} 
+                            src={msg.attachment.thumbnail || blobUrl} 
                             alt={msg.attachment.fileName} 
-                            class="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500"
-                            loading="lazy"
+                            class="w-full h-full object-cover cursor-pointer hover:scale-105 transition-all duration-500 {msg.attachment.thumbnail && !blobUrl ? 'blur-[2px] scale-105' : ''}"
                         />
                     </div>
                 {:else if isVideo}
                     <div class="relative w-full aspect-video bg-black/20 flex items-center justify-center group/vid overflow-hidden cursor-pointer">
-                        <video src={blobUrl} class="w-full h-full object-cover opacity-80" muted playsinline></video>
+                        <img 
+                            src={msg.attachment.thumbnail} 
+                            class="w-full h-full object-cover opacity-80 blur-[2px] scale-105" 
+                            alt="Video preview"
+                        />
                         <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/vid:bg-black/40 transition-colors">
                             <div class="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white border border-white/20 group-hover/vid:scale-110 transition-transform shadow-2xl">
                                 <LucidePlay size={32} fill="currentColor" class="ml-1" />

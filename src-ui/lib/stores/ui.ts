@@ -19,9 +19,11 @@ export interface ModalOptions {
 }
 
 export interface LightboxOptions {
-    src: string;
+    id?: string;
+    src: string | null;
     alt: string;
     fileName: string;
+    fileType?: string;
     size: number;
     type: 'image' | 'video';
     content?: string;

@@ -860,6 +860,7 @@ pub async fn process_incoming_binary(
                                         "fileType": bundle["file_type"],
                                         "size": size,
                                         "duration": duration,
+                                        "thumbnail": decrypted_json["thumbnail"],
                                         "bundle": bundle,
                                         "vaultPath": final_file_path.to_string_lossy().to_string()
                                     }).to_string()),

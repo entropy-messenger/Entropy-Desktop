@@ -346,6 +346,9 @@
                         <div class="hidden lg:block pt-12">
                             <div class="flex items-center space-x-12">
                                 <button onclick={handleImportVault} class="text-[10px] font-black text-white/40 uppercase tracking-[0.3em] hover:text-white transition-colors">Restore Backup</button>
+                                {#if import.meta.env.DEV}
+                                    <button onclick={handleResetAccount} class="text-[10px] font-black text-red-500/40 uppercase tracking-[0.3em] hover:text-red-500 transition-colors">Reset Identity</button>
+                                {/if}
                             </div>
                         </div>
                     </div>
