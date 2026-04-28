@@ -29,8 +29,6 @@
 
   let activeChat = $derived($userStore.activeChatHash ? $userStore.chats[$userStore.activeChatHash] : null);
   let activeMessages = $derived($userStore.activeChatHash ? ($messageStore[$userStore.activeChatHash] || []) : []);
-  
-  let virtualizedMessages = $derived(activeMessages);
 
   const getDayLabel = (ts: number) => {
     const date = new Date(ts);
@@ -47,7 +45,7 @@
   };
 
   let groupedMessages = $derived.by(() => {
-    const msgs = virtualizedMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase()));
+    const msgs = activeMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase()));
     const result: (any)[] = [];
     let lastDateLabel = "";
 

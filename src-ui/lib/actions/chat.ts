@@ -83,38 +83,74 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    try {
-        const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
-        await invoke(command, {
-            payload: {
-                recipient: destId,
-                filePath: file.path || null,
-                fileData: null, // Zero-RAM: Rust will read from path
-                fileName: file.name,
-                fileType: file.type,
-                msgType: type,
-                duration: duration,
-                thumbnail: thumbnail || null,
-                isGroup: !!chat?.isGroup,
-                groupMembers: chat?.members || null,
-                groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,
-                replyTo: state.replyingTo ? {
-                    id: state.replyingTo.id,
-                    content: state.replyingTo.content,
-                    senderHash: state.replyingTo.senderHash,
-                    senderAlias: state.replyingTo.senderAlias,
-                    type: state.replyingTo.type
-                } : null
+    // 1. Create an Optimistic Message for immediate UI feedback
+    const tempId = 'opt-' + Math.random().toString(36).substring(2, 9);
+    const optimisticMsg: Message = {
+        id: tempId,
+        content: type === 'voice_note' ? 'Voice Note' : file.name,
+        senderHash: state.identityHash,
+        timestamp: Date.now(),
+        isMine: true,
+        status: 'sending',
+        type: type,
+        attachment: {
+            fileName: file.name,
+            fileType: file.type,
+            size: (file as any).size || 0,
+            originalPath: file.path,
+            vaultPath: '', // Will be filled by backend
+            thumbnail: thumbnail
+        }
+    };
+
+    // Add to UI immediately
+    addMessage(destId, optimisticMsg);
+
+    const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
+    invoke(command, {
+        payload: {
+            recipient: destId,
+            filePath: file.path || null,
+            fileData: null,
+            fileName: file.name,
+            fileType: file.type,
+            msgType: type,
+            duration: duration,
+            thumbnail: thumbnail || null,
+            isGroup: !!chat?.isGroup,
+            groupMembers: chat?.members || null,
+            groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,
+            replyTo: state.replyingTo ? {
+                id: state.replyingTo.id,
+                content: state.replyingTo.content,
+                senderHash: state.replyingTo.senderHash,
+                senderAlias: state.replyingTo.senderAlias,
+                type: state.replyingTo.type
+            } : null
+        }
+    }).catch(async (e: any) => {
+        // Handle failure
+        messageStore.update(mStore => {
+            if (mStore[destId]) {
+                mStore[destId] = mStore[destId].map(m => m.id === tempId ? { ...m, status: 'failed' } : m);
             }
+            return { ...mStore };
         });
-        setReplyingTo(null);
-    } catch (e: any) {
         const { addToast } = await import('../stores/ui');
-        addToast(e.toString(), 'error');
-    }
+        addToast("Media failed to send: " + e.toString(), 'error');
+    });
+
+    setReplyingTo(null);
 };
 
-export const addMessage = async (peerHash: string, msg: Message) => {
+export const addMessage = async (peerHashRaw: string, msg: Message) => {
+    const peerHash = peerHashRaw.toLowerCase();
+
+    // Early-exit if this message ID is already known — prevents duplicate events
+    // from retried packets inflating unread counters or adding ghost entries.
+    const existingMsgs = get(messageStore)[peerHash] || [];
+    if (existingMsgs.some(m => m.id === msg.id)) return;
+
     if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
         attachmentCache.set(msg.id, msg.attachment.data);
         await invoke('vault_save_media', { id: msg.id, data: msg.attachment.data }).catch(() => { });
@@ -175,6 +211,31 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         const msgs = mStore[peerHash] || [];
         if (msgs.some(m => m.id === msg.id)) return mStore;
 
+        // De-duplicate Optimistic messages
+        let finalMsgs = msgs;
+        if (msg.isMine && !msg.id.startsWith('opt-')) {
+            const incomingFileName = (msg.attachment?.fileName || msg.attachment?.file_name || "").toLowerCase();
+            const cleanIncomingContent = (msg.content.startsWith('File: ') ? msg.content.substring(6) : msg.content).toLowerCase();
+            
+            const ghostIndex = msgs.findIndex(m => {
+                if (!m.id.startsWith('opt-') || m.status !== 'sending') return false;
+                
+                // Match by attachment filename (case-insensitive)
+                const ghostFileName = (m.attachment?.fileName || "").toLowerCase();
+                if (incomingFileName && ghostFileName === incomingFileName) return true;
+                
+                // Fallback: Match by content string (case-insensitive)
+                const ghostContent = (m.content || "").toLowerCase();
+                return ghostContent === cleanIncomingContent || ghostContent === msg.content.toLowerCase();
+            });
+
+            if (ghostIndex !== -1) {
+                finalMsgs = [...msgs];
+                finalMsgs[ghostIndex] = msg;
+                return { ...mStore, [peerHash]: finalMsgs.sort((a, b) => a.timestamp - b.timestamp) };
+            }
+        }
+
         const chat = get(userStore).chats[peerHash];
 
         if (chat?.hasMoreNewer && !msg.isMine) {
@@ -182,11 +243,10 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         }
         if (chat?.hasMoreNewer && msg.isMine) {
             needsSnapToPresent = true;
-            return mStore; // We will let the snapshot loader handle it
+            return mStore;
         }
 
-        const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
-
+        const combined = [...finalMsgs, msg].sort((a, b) => a.timestamp - b.timestamp);
         let final = combined;
         if (combined.length > 2000) {
             if (chat?.hasMoreNewer) {
@@ -214,7 +274,6 @@ export const addMessage = async (peerHash: string, msg: Message) => {
 };
 
 export const syncChatToDb = async (chat: Chat) => {
-    const state = get(userStore);
     try {
         await invoke('db_upsert_chat', {
             chat: {
@@ -225,7 +284,9 @@ export const syncChatToDb = async (chat: Chat) => {
                 lastTimestamp: chat.lastTimestamp || null,
                 lastSenderHash: chat.lastSenderHash || null,
                 lastStatus: chat.lastStatus || null,
-                unreadCount: chat.unreadCount || 0,
+                // Unread count is managed exclusively by Rust.
+                // Always pass 0 here so the DB count is never overwritten by stale frontend values.
+                unreadCount: 0,
                 isArchived: !!chat.isArchived,
                 isPinned: !!chat.isPinned,
                 isBlocked: !!chat.isBlocked,

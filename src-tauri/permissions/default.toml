@@ -56,7 +56,8 @@ commands.allow = [
     "nickname_lookup",
     "identity_resolve",
     "db_set_contact_global_nickname",
-    "update_group_name"
+    "update_group_name",
+    "get_media_proxy_port"
 ]
 
 [[set]]

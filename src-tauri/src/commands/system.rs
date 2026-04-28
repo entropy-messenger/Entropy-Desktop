@@ -40,3 +40,9 @@ pub fn open_file(
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn get_media_proxy_port(state: State<'_, DbState>) -> Result<u16, String> {
+    let port = state.media_proxy_port.lock().map_err(|_| "Lock poisoned")?;
+    port.ok_or_else(|| "Media proxy not initialized".to_string())
+}

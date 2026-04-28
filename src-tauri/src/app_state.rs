@@ -17,6 +17,7 @@ pub struct DbState {
     pub conn: Mutex<Option<Connection>>,
     pub media_key: Mutex<Option<Vec<u8>>>,
     pub profile: Mutex<String>,
+    pub media_proxy_port: Mutex<Option<u16>>,
 }
 
 pub struct PacedMessage {

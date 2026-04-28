@@ -32,6 +32,7 @@ pub fn run() {
             conn: Mutex::new(None),
             media_key: Mutex::new(None),
             profile: Mutex::new(profile),
+            media_proxy_port: Mutex::new(None),
         })
         .manage(NetworkState {
             is_enabled: Mutex::new(false),
@@ -92,6 +93,7 @@ pub fn run() {
             commands::send_receipt,
             commands::send_profile_update,
             commands::open_file,
+            commands::get_media_proxy_port,
             commands::db_get_messages,
             commands::db_search_messages,
             commands::db_update_messages,

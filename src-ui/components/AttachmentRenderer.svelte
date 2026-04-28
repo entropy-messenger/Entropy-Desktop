@@ -7,7 +7,8 @@
     import { convertFileSrc, invoke } from '@tauri-apps/api/core';
     import { getAttachment, markAsDownloaded } from '../lib/actions/chat';
     import { fromBase64 } from '../lib/crypto';
-    import { addToast, lightbox, contextMenu } from '../lib/stores/ui';
+    import { addToast, lightbox, contextMenu, mediaProxyPort } from '../lib/stores/ui';
+    import { get } from 'svelte/store';
     import { transfers } from '../lib/stores/transfers';
     import VoiceNotePlayer from './VoiceNotePlayer.svelte';
     import VideoPlayer from './VideoPlayer.svelte';
@@ -77,7 +78,16 @@
 
         // Step 1.5: Local Proxy Path (Zero-RAM for large media)
         if (msg.attachment.vaultPath && (isVideo || (isImage && (msg.attachment.size || 0) > 5 * 1024 * 1024))) {
-            blobUrl = `http://localhost:51761/media/${msg.id}`;
+            let port = get(mediaProxyPort);
+            if (!port) {
+                try {
+                    port = await invoke('get_media_proxy_port');
+                    mediaProxyPort.set(port);
+                } catch (e) {
+                    console.error("[UI] Failed to get media proxy port:", e);
+                }
+            }
+            blobUrl = `http://localhost:${port || 51761}/media/${msg.id}`;
             wasCreatedInternally = false;
             loading = false;
             return;
