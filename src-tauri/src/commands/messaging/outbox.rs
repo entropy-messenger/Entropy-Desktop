@@ -221,8 +221,8 @@ pub fn process_outgoing_media(
                 .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
 
-            // fetch data and validate
-            let data = if let Some(p) = &payload.file_path {
+            // validate path
+            let canonical_path_opt = if let Some(p) = &payload.file_path {
                 let path_buf = std::path::PathBuf::from(p);
                 // security: canonicalize and validate target path
                 let canonical_path = std::fs::canonicalize(&path_buf)
@@ -246,15 +246,12 @@ pub fn process_outgoing_media(
                 if metadata.len() > 100 * 1024 * 1024 {
                     return Err("File too large. Maximum size is 100MB.".to_string());
                 }
-                let mut file = std::fs::File::open(&canonical_path).map_err(|e| e.to_string())?;
-                let mut d = Vec::new();
-                file.read_to_end(&mut d).map_err(|e| e.to_string())?;
-                d
+                Some(canonical_path)
             } else if let Some(ref d) = payload.file_data {
                 if d.len() > 100 * 1024 * 1024 {
                     return Err("File too large. Maximum size is 100MB.".to_string());
                 }
-                d.clone()
+                None
             } else {
                 return Err("No file path or data provided".into());
             };
@@ -284,7 +281,7 @@ pub fn process_outgoing_media(
             routing_hash[..r_len].copy_from_slice(&recipient_bytes[..r_len]);
 
             // 4. Streaming Dispatch (Zero-RAM)
-            let file_size = if let Some(ref p) = payload.file_path {
+            let file_size = if let Some(ref p) = canonical_path_opt {
                 std::fs::metadata(p).map_err(|e| e.to_string())?.len()
             } else if let Some(ref d) = payload.file_data {
                 d.len() as u64
@@ -295,10 +292,10 @@ pub fn process_outgoing_media(
             let total_fragments = (file_size as f64 / net_chunk_capacity as f64).ceil() as u32;
             let transfer_id: u32 = rand::random();
 
-            let mut reader: Box<dyn std::io::Read> = if let Some(p) = payload.file_path {
+            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_opt {
                 Box::new(std::io::BufReader::new(std::fs::File::open(p).map_err(|e| e.to_string())?))
-            } else if let Some(d) = payload.file_data {
-                Box::new(std::io::Cursor::new(d))
+            } else if let Some(ref d) = payload.file_data {
+                Box::new(std::io::Cursor::new(d.clone()))
             } else {
                 return Err("No data source".into());
             };
@@ -406,7 +403,7 @@ pub fn process_outgoing_media(
                     serde_json::json!({
                         "fileName": payload.file_name,
                         "fileType": payload.file_type,
-                        "size": data.len(),
+                        "size": file_size,
                         "duration": payload.duration,
                         "thumbnail": payload.thumbnail,
                         "transferId": transfer_id,
@@ -796,7 +793,7 @@ pub fn process_outgoing_group_media(
                 .map_err(|e| format!("Clock error: {}", e))?
                 .as_millis() as i64;
 
-            let data = if let Some(p) = &payload.file_path {
+            let canonical_path_opt = if let Some(p) = &payload.file_path {
                 let path_buf = std::path::PathBuf::from(p);
                 let canonical_path = std::fs::canonicalize(&path_buf)
                     .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
@@ -814,20 +811,23 @@ pub fn process_outgoing_group_media(
                     );
                 }
 
-                let mut d = Vec::new();
-                std::fs::File::open(&canonical_path)
-                    .map_err(|e| e.to_string())?
-                    .read_to_end(&mut d)
-                    .map_err(|e| e.to_string())?;
-                d
-            } else if let Some(d) = payload.file_data {
-                d
+                let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+                if metadata.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
+                Some(canonical_path)
+            } else if let Some(ref d) = payload.file_data {
+                if d.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
+                None
             } else {
                 return Err("No file path or data provided".into());
             };
 
-            let file_size = data.len();
-            if file_size > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
+            let file_size = if let Some(ref p) = canonical_path_opt {
+                std::fs::metadata(p).map_err(|e| e.to_string())?.len()
+            } else if let Some(ref d) = payload.file_data {
+                d.len() as u64
+            } else {
+                return Err("No data source".into());
+            };
 
             // 1. Prepare Keys
             use sha2::{Sha256, Digest};
@@ -854,10 +854,16 @@ pub fn process_outgoing_group_media(
             
             // 4. Streaming Dispatch (Zero-RAM)
             let net_chunk_capacity = 1279; 
-            let total_fragments = (data.len() as f64 / net_chunk_capacity as f64).ceil() as u32;
+            let total_fragments = (file_size as f64 / net_chunk_capacity as f64).ceil() as u32;
             let transfer_id: u32 = rand::random();
 
-            let mut reader = std::io::Cursor::new(data.clone());
+            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_opt {
+                Box::new(std::io::BufReader::new(std::fs::File::open(p).map_err(|e| e.to_string())?))
+            } else if let Some(ref d) = payload.file_data {
+                Box::new(std::io::Cursor::new(d.clone()))
+            } else {
+                return Err("No data source".into());
+            };
             let mut buffer = [0u8; 1279]; 
             let mut fragment_index = 0;
             println!("[OUTBOX-GROUP] Starting group media dispatch. TID: {}, MsgID: {}, Total Fragments: {}", transfer_id, msg_id, total_fragments);

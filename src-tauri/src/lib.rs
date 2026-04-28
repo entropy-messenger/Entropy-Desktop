@@ -10,6 +10,7 @@ mod app_state;
 mod commands;
 mod noise;
 mod signal_store;
+mod media_proxy;
 
 use app_state::{DbState, NetworkState};
 use std::sync::Mutex;
@@ -184,6 +185,9 @@ pub fn run() {
                     })
                     .build(app)?;
             }
+
+            // Start the Zero-RAM Media Proxy
+            media_proxy::start_media_server(app.handle().clone());
 
             Ok(())
         })

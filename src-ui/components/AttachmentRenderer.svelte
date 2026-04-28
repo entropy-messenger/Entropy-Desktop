@@ -27,7 +27,17 @@
         exportedPath = msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null);
     });
 
-    // Automatically trigger decryption load for images/videos once available
+    // Cleanup Blob URLs on unmount to prevent memory leaks
+    $effect(() => {
+        return () => {
+            if (blobUrl && wasCreatedInternally) {
+                URL.revokeObjectURL(blobUrl);
+            }
+        };
+    });
+
+    // Automatically trigger load for images/videos once available.
+    // Small images use In-Memory decryption, while videos/large files use the Zero-RAM Proxy.
     $effect(() => {
         if ((isImage || isVideo) && msg.attachment?.vaultPath && !blobUrl && !loading && !failed) {
             loadAttachment();
@@ -60,6 +70,14 @@
         const path = msg.attachment.originalPath;
         if (path && !msg.attachment.vaultPath) {
             blobUrl = convertFileSrc(path);
+            wasCreatedInternally = false;
+            loading = false;
+            return;
+        }
+
+        // Step 1.5: Local Proxy Path (Zero-RAM for large media)
+        if (msg.attachment.vaultPath && (isVideo || (isImage && (msg.attachment.size || 0) > 5 * 1024 * 1024))) {
+            blobUrl = `http://localhost:51761/media/${msg.id}`;
             wasCreatedInternally = false;
             loading = false;
             return;

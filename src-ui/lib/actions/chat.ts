@@ -15,7 +15,12 @@ export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
     try {
         const bytes = await invoke<number[]>('vault_load_media', { id });
         const uint8 = new Uint8Array(bytes);
-        attachmentCache.set(id, uint8);
+        
+        // Only cache small files to prevent RAM exhaustion
+        if (uint8.length < 5 * 1024 * 1024) {
+            attachmentCache.set(id, uint8);
+        }
+        
         return uint8;
     } catch (e) {
         return null;

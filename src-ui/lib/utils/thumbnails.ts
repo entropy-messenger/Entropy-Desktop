@@ -3,18 +3,16 @@
  * Generates a high-quality micro-thumbnail (base64) for images and videos.
  * Targeted size: 5-8KB.
  */
-export async function generateThumbnail(file: File): Promise<string | null> {
-    const isImage = file.type.startsWith('image/');
-    const isVideo = file.type.startsWith('video/');
+export async function generateThumbnail(url: string, type: string): Promise<string | null> {
+    const isImage = type.startsWith('image/');
+    const isVideo = type.startsWith('video/');
 
     if (!isImage && !isVideo) return null;
 
     return new Promise((resolve) => {
         if (isImage) {
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const img = new Image();
-                img.onload = () => {
+            const img = new Image();
+            img.onload = () => {
                     const canvas = document.createElement('canvas');
                     // We want a small but recognizable thumbnail
                     const maxDim = 120; 
@@ -42,14 +40,13 @@ export async function generateThumbnail(file: File): Promise<string | null> {
                         resolve(null);
                     }
                 };
-                img.src = e.target?.result as string;
-            };
-            reader.readAsDataURL(file);
+                img.onerror = () => resolve(null);
+                img.src = url;
         } else if (isVideo) {
             const video = document.createElement('video');
             video.preload = 'metadata';
             video.muted = true;
-            video.src = URL.createObjectURL(file);
+            video.src = url;
             
             video.onloadedmetadata = () => {
                 video.currentTime = 0.5; // Seek a bit to avoid black frame
@@ -75,16 +72,13 @@ export async function generateThumbnail(file: File): Promise<string | null> {
                 if (ctx) {
                     ctx.drawImage(video, 0, 0, width, height);
                     const data = canvas.toDataURL('image/webp', 0.6);
-                    URL.revokeObjectURL(video.src);
                     resolve(data);
                 } else {
-                    URL.revokeObjectURL(video.src);
                     resolve(null);
                 }
             };
 
             video.onerror = () => {
-                URL.revokeObjectURL(video.src);
                 resolve(null);
             };
         }
