@@ -211,33 +211,34 @@ pub async fn process_incoming_binary(
             let assembler = assemblers.entry(transfer_key.clone()).or_insert_with(|| MediaTransferState {
                 total,
                 received_chunks: vec![false; total as usize],
-                last_activity: std::time::Instant::now(),
+                last_activity: std::time::Instant::now(), file_handle: None, received_count: 0,
             });
 
             if (index as usize) < assembler.received_chunks.len() {
                 if !assembler.received_chunks[index as usize] {
-                    let db_state = app.state::<DbState>();
-                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
-                        let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
-                        let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
-                        let file_path = media_dir.join(&temp_filename);
-
-                        use std::io::{Seek, SeekFrom, Write};
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .write(true)
-                            .open(&file_path)
-                        {
-                            let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
-                            let _ = f.write_all(chunk_data);
+                    if assembler.file_handle.is_none() {
+                        let db_state = app.state::<DbState>();
+                        if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                            let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                            let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                            let file_path = media_dir.join(&temp_filename);
+                            if let Ok(f) = std::fs::OpenOptions::new().create(true).write(true).open(&file_path) {
+                                assembler.file_handle = Some(f);
+                            }
                         }
                     }
-                    assembler.received_chunks[index as usize] = true;
+
+                    if let Some(ref mut f) = assembler.file_handle {
+                        use std::io::{Seek, SeekFrom, Write};
+                        let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
+                        let _ = f.write_all(chunk_data);
+                    }
+                    assembler.received_chunks[index as usize] = true; assembler.received_count += 1;
                     assembler.last_activity = std::time::Instant::now();
                 }
             }
 
-            let current_count = assembler.received_chunks.iter().filter(|&&b| b).count() as u32;
+            let current_count = assembler.received_count;
             let complete = current_count >= assembler.total;
 
             let progress_step = (total / 20).max(1);

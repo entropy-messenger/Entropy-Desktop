@@ -266,8 +266,6 @@ pub fn process_outgoing_media(
             };
             let vault_key = ChaKey::from_slice(&vault_key_bytes);
             
-            let net_cipher = XChaCha20Poly1305::new(&net_key);
-            let vault_cipher = XChaCha20Poly1305::new(vault_key);
 
             // 2. Prepare Vault storage
             let media_dir = get_media_dir(&app, &db_state)?;
@@ -300,57 +298,92 @@ pub fn process_outgoing_media(
                 return Err("No data source".into());
             };
             
-            let mut buffer = [0u8; 1279]; 
             let mut fragment_index = 0;
-            println!("[OUTBOX] Starting media dispatch. TID: {}, MsgID: {}, Total Fragments: {}", transfer_id, msg_id, total_fragments);
+            let batch_size = 32;
+            println!("[OUTBOX] Starting media dispatch with Parallel Encryption (Batch size: {}). TID: {}, Total Fragments: {}", batch_size, transfer_id, total_fragments);
 
             use std::io::Read;
             loop {
-                let mut n = 0;
-                while n < 1279 {
-                    match reader.read(&mut buffer[n..]) {
-                        Ok(0) => break,
-                        Ok(read) => n += read,
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                    }
-                }
-                if n == 0 { break; }
-                let chunk = &buffer[..n];
-                hasher.update(chunk);
-
-                // A. Vault block
-                let vault_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let vault_chunk_encrypted = vault_cipher.encrypt(&vault_nonce, chunk).map_err(|e| e.to_string())?;
-                vault_file.write_all(&vault_nonce).map_err(|e| e.to_string())?;
-                vault_file.write_all(&vault_chunk_encrypted).map_err(|e| e.to_string())?;
-
-                // B. Network Fragment (Self-Healing Chunked AEAD)
-                let net_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let net_chunk_encrypted = net_cipher.encrypt(&net_nonce, chunk).map_err(|e| e.to_string())?;
+                let mut batch = Vec::with_capacity(batch_size);
                 
-                let mut packet_data = Vec::with_capacity(net_nonce.len() + net_chunk_encrypted.len());
-                packet_data.extend_from_slice(&net_nonce);
-                packet_data.extend_from_slice(&net_chunk_encrypted);
-
-                if fragment_index % 50 == 0 {
-                    println!("[OUTBOX] Fragment {} size: {} bytes (+81B header)", fragment_index, packet_data.len());
+                // 1. Sequential Read & Hash Batch (Maintains hash integrity)
+                for _ in 0..batch_size {
+                    let mut chunk_buf = vec![0u8; 1279];
+                    let mut n = 0;
+                    while n < 1279 {
+                        match reader.read(&mut chunk_buf[n..]) {
+                            Ok(0) => break,
+                            Ok(read) => n += read,
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    if n == 0 { break; }
+                    let actual_chunk = if n < 1279 { chunk_buf[..n].to_vec() } else { chunk_buf };
+                    hasher.update(&actual_chunk);
+                    batch.push(actual_chunk);
                 }
 
-                crate::commands::network::transit::internal_dispatch_fragment(
-                    app.clone(),
-                    &net_state,
-                    routing_hash,
-                    Some(msg_id.clone()),
-                    transfer_id,
-                    fragment_index,
-                    total_fragments,
-                    &packet_data,
-                    true,
-                    false,
-                ).await?;
+                if batch.is_empty() { break; }
 
-                fragment_index += 1;
+                // 2. Parallel Encryption Batch (CPU-bound)
+                let mut tasks = Vec::with_capacity(batch.len());
+                for chunk in batch {
+                    let v_net_key = net_key.clone();
+                    let v_vault_key_bytes = vault_key_bytes.clone();
+                    
+                    tasks.push(tokio::task::spawn_blocking(move || {
+                        use chacha20poly1305::{XChaCha20Poly1305, Key as ChaKey};
+                        use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
+
+                        let vault_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&v_vault_key_bytes));
+                        let net_cipher = XChaCha20Poly1305::new(&v_net_key);
+
+                        let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                        let v_enc = vault_cipher.encrypt(&v_nonce, chunk.as_slice()).map_err(|e| e.to_string())?;
+
+                        let n_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                        let n_enc = net_cipher.encrypt(&n_nonce, chunk.as_slice()).map_err(|e| e.to_string())?;
+
+                        Ok::<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String>((
+                            v_nonce.to_vec(), v_enc, n_nonce.to_vec(), n_enc
+                        ))
+                    }));
+                }
+
+                // 3. Await and Sequential Dispatch (Maintains fragment order)
+                let results = futures_util::future::join_all(tasks).await;
+                for res in results {
+                    let (v_nonce, v_enc, n_nonce, n_enc) = res.map_err(|e| e.to_string())??;
+                    
+                    // A. Vault persistence
+                    vault_file.write_all(&v_nonce).map_err(|e| e.to_string())?;
+                    vault_file.write_all(&v_enc).map_err(|e| e.to_string())?;
+
+                    // B. Network Dispatch
+                    let mut packet_data = Vec::with_capacity(n_nonce.len() + n_enc.len());
+                    packet_data.extend_from_slice(&n_nonce);
+                    packet_data.extend_from_slice(&n_enc);
+
+                    if fragment_index % 100 == 0 {
+                        println!("[OUTBOX] Dispatched fragment {}/{}", fragment_index, total_fragments);
+                    }
+
+                    crate::commands::network::transit::internal_dispatch_fragment(
+                        app.clone(),
+                        &net_state,
+                        routing_hash,
+                        Some(msg_id.clone()),
+                        transfer_id,
+                        fragment_index,
+                        total_fragments,
+                        &packet_data,
+                        true,
+                        false,
+                    ).await?;
+
+                    fragment_index += 1;
+                }
             }
             println!("[OUTBOX] All binary fragments dispatched for TID: {}", transfer_id);
             vault_file.sync_all().map_err(|e| e.to_string())?;

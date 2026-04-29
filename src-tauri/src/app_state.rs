@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use std::collections::VecDeque;
+use std::fs::File;
 
 pub struct DbState {
     pub conn: Mutex<Option<Connection>>,
@@ -28,6 +29,8 @@ pub struct MediaTransferState {
     pub total: u32,
     pub received_chunks: Vec<bool>,
     pub last_activity: std::time::Instant,
+    pub file_handle: Option<std::fs::File>,
+    pub received_count: u32,
 }
 
 pub struct PendingMediaMetadata {
