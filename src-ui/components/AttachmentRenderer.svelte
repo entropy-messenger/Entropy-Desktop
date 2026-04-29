@@ -235,7 +235,7 @@
 {#if msg.type === 'voice_note' || msg.attachment?.fileName === 'voice_note.wav'}
     {#if msg.status === 'sending'}
         <div class="flex flex-col space-y-1 w-full max-w-[200px]">
-            <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-2xl animate-pulse">
+            <div class="flex items-center space-x-2 py-2 px-4 bg-entropy-primary/10 rounded-[0.9rem] animate-pulse">
                 <LucideLoader size={16} class="animate-spin text-entropy-primary" />
                 <span class="text-[10px] font-bold text-entropy-primary uppercase tracking-wider">
                     {activeTransfer ? `Sending... ${progress}%` : "Processing..."}
@@ -256,38 +256,42 @@
             <!-- Media Container with Context Menu Support -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
-                class="relative group/media overflow-hidden rounded-2xl border border-white/10 shadow-lg bg-entropy-surface-light/30 flex flex-col w-full max-w-[280px] sm:max-w-[400px] min-h-[150px]"
+                class="relative group/media overflow-hidden rounded-[0.9rem] border border-white/10 shadow-xl bg-entropy-surface flex flex-col w-full sm:w-[320px] transition-all hover:shadow-2xl active:scale-[0.98]"
                 oncontextmenu={openContextMenu}
                 onclick={triggerFullView}
             >
-                {#if isImage}
-                    <div class="relative w-full aspect-auto min-h-[150px] max-h-[500px] flex items-center justify-center bg-black/5 overflow-hidden">
+                <div class="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden cursor-pointer">
+                    {#if isImage}
                         <img 
                             src={msg.attachment.thumbnail || blobUrl} 
                             alt={msg.attachment.fileName} 
-                            class="w-full h-full object-cover cursor-pointer hover:scale-105 transition-all duration-500 {msg.attachment.thumbnail && !blobUrl ? 'blur-[2px] scale-105' : ''}"
+                            class="w-full h-full object-cover transition-all duration-700 hover:scale-105 {msg.attachment.thumbnail && !blobUrl ? 'blur-[4px] scale-110 opacity-100' : 'opacity-100'}"
                         />
-                    </div>
-                {:else if isVideo}
-                    <div class="relative w-full aspect-video bg-black flex items-center justify-center group/vid overflow-hidden cursor-pointer">
+                    {:else if isVideo}
                         <img 
                             src={msg.attachment.thumbnail} 
-                            class="w-full h-full object-cover opacity-80 blur-[2px] scale-105" 
+                            class="w-full h-full object-cover opacity-100 blur-[4px] scale-110 group-hover/media:scale-100 group-hover/media:blur-0 transition-all duration-700" 
                             alt="Video preview"
                         />
-                        <div class="absolute inset-0 flex items-center justify-center bg-black/20 group-hover/vid:bg-black/40 transition-colors">
-                            <div class="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white border border-white/20 group-hover/vid:scale-110 transition-transform shadow-2xl">
-                                <LucidePlay size={32} fill="currentColor" class="ml-1" />
+                        <div class="absolute inset-0 flex items-center justify-center bg-black/10 group-hover/media:bg-black/30 transition-colors">
+                            <div class="w-14 h-14 rounded-full bg-white/10 backdrop-blur-xl flex items-center justify-center text-white border border-white/20 group-hover/media:scale-110 transition-transform shadow-2xl">
+                                <LucidePlay size={28} fill="currentColor" class="ml-1" />
                             </div>
                         </div>
-                    </div>
-                {/if}
+                    {/if}
+
+                    {#if loading && !msg.attachment.thumbnail}
+                        <div class="absolute inset-0 flex items-center justify-center bg-black backdrop-blur-sm">
+                            <LucideLoader size={24} class="animate-spin text-entropy-primary" />
+                        </div>
+                    {/if}
+                </div>
                 
-                <!-- Bottom Info Bar (Minimalist) -->
-                <div class="p-2.5 bg-entropy-surface/90 backdrop-blur-md flex items-center justify-between border-t border-white/5">
+                <!-- Info Bar -->
+                <div class="p-3 bg-entropy-surface flex items-center justify-between border-t border-white/5">
                     <div class="flex-1 min-w-0">
-                        <div class="text-[11px] font-bold text-entropy-text-primary truncate mb-0.5 leading-none">{msg.attachment.fileName}</div>
-                        <div class="text-[9px] font-bold text-entropy-text-dim uppercase tracking-wider opacity-60 mt-1">
+                        <div class="text-[12px] font-bold text-entropy-text-primary truncate mb-0.5 leading-none">{msg.attachment.fileName}</div>
+                        <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-wider opacity-100 mt-1">
                             {#if activeTransfer}
                                 <span class="text-entropy-primary animate-pulse">{progress}%</span>
                             {:else}
@@ -298,15 +302,15 @@
                 </div>
             </div>
         {:else if loading}
-            <div class="flex flex-col items-center justify-center py-8 px-12 bg-entropy-surface-light rounded-2xl border border-white/10 animate-pulse">
+            <div class="flex flex-col items-center justify-center py-10 px-16 bg-entropy-surface-light rounded-[0.9rem] border border-white/10 animate-pulse w-full sm:w-[320px]">
                 <LucideLoader size={24} class="animate-spin text-entropy-primary mb-2" />
-                <span class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest">Decrypting Media...</span>
+                <span class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest">Decrypting...</span>
             </div>
         {:else}
             <!-- Generic File UI -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
-                class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full"
+                class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-[0.9rem] shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full"
                 oncontextmenu={openContextMenu}
             >
                 <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0 group-hover/file:scale-110 transition-transform">

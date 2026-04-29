@@ -91,7 +91,7 @@
             role="button"
             tabindex="0"
             class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-default active:scale-[0.99] max-w-full
-                {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'pt-1.5 px-4 pb-1.5'}
+                {msg.type === 'voice_note' ? 'p-1.5 px-2' : (msg.type === 'file' ? 'p-1' : 'pt-1.5 px-4 pb-1.5')}
                 {msg.isMine ? (msg.isStarred ? 'bg-entropy-primary ring-1 ring-yellow-400/60 shadow-[0_0_10px_rgba(250,204,21,0.15)]' : 'bg-entropy-primary') : (msg.isStarred ? 'bg-entropy-surface-light ring-1 ring-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'bg-entropy-surface-light')}
                 {msg.isMine ? 'text-white rounded-tr-none' : 'text-entropy-text-primary rounded-tl-none'}
                 {isSelected ? 'ring-4 ring-entropy-accent ring-opacity-50 opacity-100 scale-100' : ''}

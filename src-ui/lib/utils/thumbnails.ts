@@ -12,9 +12,9 @@ export async function generateThumbnail(url: string, type: string): Promise<stri
     return new Promise((resolve) => {
         if (isImage) {
             const img = new Image();
+            img.crossOrigin = 'anonymous';
             img.onload = () => {
                     const canvas = document.createElement('canvas');
-                    // We want a small but recognizable thumbnail
                     const maxDim = 120; 
                     let width = img.width;
                     let height = img.height;
@@ -34,7 +34,6 @@ export async function generateThumbnail(url: string, type: string): Promise<stri
                         ctx.imageSmoothingEnabled = true;
                         ctx.imageSmoothingQuality = 'high';
                         ctx.drawImage(img, 0, 0, width, height);
-                        // Low quality but looks good blurred
                         resolve(canvas.toDataURL('image/webp', 0.6));
                     } else {
                         resolve(null);
@@ -46,41 +45,53 @@ export async function generateThumbnail(url: string, type: string): Promise<stri
             const video = document.createElement('video');
             video.preload = 'metadata';
             video.muted = true;
-            video.src = url;
-            
-            video.onloadedmetadata = () => {
-                video.currentTime = 0.5; // Seek a bit to avoid black frame
-            };
+            video.crossOrigin = 'anonymous';
+            video.playsInline = true;
 
-            video.onseeked = () => {
+            const timeout = setTimeout(() => resolve(null), 8000);
+
+            const captureFrame = () => {
+                clearTimeout(timeout);
                 const canvas = document.createElement('canvas');
                 const maxDim = 120;
-                let width = video.videoWidth;
-                let height = video.videoHeight;
-
-                if (width > height) {
-                    height *= maxDim / width;
-                    width = maxDim;
-                } else {
-                    width *= maxDim / height;
-                    height = maxDim;
-                }
-
-                canvas.width = width;
-                canvas.height = height;
+                const w = video.videoWidth || 320;
+                const h = video.videoHeight || 240;
+                const ratio = Math.min(maxDim / w, maxDim / h);
+                canvas.width = Math.round(w * ratio);
+                canvas.height = Math.round(h * ratio);
                 const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    ctx.drawImage(video, 0, 0, width, height);
-                    const data = canvas.toDataURL('image/webp', 0.6);
-                    resolve(data);
+                if (ctx && canvas.width > 0 && canvas.height > 0) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    try {
+                        resolve(canvas.toDataURL('image/webp', 0.6));
+                    } catch {
+                        resolve(null);
+                    }
                 } else {
                     resolve(null);
+                }
+                video.src = '';
+            };
+
+            video.onloadedmetadata = () => {
+                video.currentTime = Math.min(0.5, (video.duration * 0.1) || 0.5);
+            };
+
+            // Register capture AFTER seek completes, not before
+            video.onseeked = () => {
+                if ('requestVideoFrameCallback' in video) {
+                    (video as any).requestVideoFrameCallback(captureFrame);
+                } else {
+                    captureFrame();
                 }
             };
 
             video.onerror = () => {
+                clearTimeout(timeout);
                 resolve(null);
             };
+
+            video.src = url;
         }
     });
 }

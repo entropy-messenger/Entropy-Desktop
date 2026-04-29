@@ -8,12 +8,13 @@ use chacha20poly1305::{
 };
 use crate::app_state::DbState;
 use crate::commands::vault::media::get_media_dir;
-use warp::http::{HeaderValue, StatusCode, Response};
+use warp::http::{StatusCode, Response};
 use warp::hyper::Body;
 
 pub fn start_media_server(app: tauri::AppHandle) {
     let app_handle = app.clone();
-    
+    let app_handle2 = app.clone();
+
     tauri::async_runtime::spawn(async move {
         let media_route = warp::path!("media" / String)
             .and(warp::header::optional::<String>("range"))
@@ -24,19 +25,99 @@ pub fn start_media_server(app: tauri::AppHandle) {
                 }
             });
 
+        // Streams a raw local file (pre-encryption) for same-origin thumbnail capture
+        let local_route = warp::path!("local")
+            .and(warp::query::<std::collections::HashMap<String, String>>())
+            .and(warp::header::optional::<String>("range"))
+            .and_then(|params: std::collections::HashMap<String, String>, range: Option<String>| async move {
+                let path = params.get("path").cloned().unwrap_or_default();
+                let path = percent_decode(&path);
+                handle_local_file_request(path, range).await
+            });
+
+        let routes = media_route.or(local_route);
+
         // Bind to port 0 to let the OS assign any available port
         let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
-        let (addr, server) = warp::serve(media_route).bind_ephemeral(addr);
-        
+        let (addr, server) = warp::serve(routes).bind_ephemeral(addr);
+
         println!("[MEDIA-PROXY] Server listening on http://{}", addr);
-        
+
         // Save the assigned port to app state
-        if let Ok(mut port_lock) = app.state::<DbState>().media_proxy_port.lock() {
+        if let Ok(mut port_lock) = app_handle2.state::<DbState>().media_proxy_port.lock() {
             *port_lock = Some(addr.port());
         }
 
         server.await;
     });
+}
+
+async fn handle_local_file_request(
+    path: String,
+    range: Option<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let file_path = std::path::PathBuf::from(&path);
+    if !file_path.exists() {
+        return Err(warp::reject());
+    }
+
+    let total_size = std::fs::metadata(&file_path).map_err(|_| warp::reject())?.len();
+
+    let (start, end) = if let Some(r) = range {
+        if r.starts_with("bytes=") {
+            let parts: Vec<&str> = r["bytes=".len()..].split('-').collect();
+            let s = parts[0].parse::<u64>().unwrap_or(0);
+            let e = if parts.len() > 1 && !parts[1].is_empty() {
+                parts[1].parse::<u64>().unwrap_or(total_size - 1)
+            } else {
+                total_size - 1
+            };
+            (s, e)
+        } else {
+            (0, total_size - 1)
+        }
+    } else {
+        (0, total_size - 1)
+    };
+
+    let content_length = end - start + 1;
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let content_type = mime_from_ext(&ext);
+
+    let (mut tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
+
+    tauri::async_runtime::spawn(async move {
+        use std::io::{Read, Seek, SeekFrom};
+        if let Ok(mut file) = std::fs::File::open(&file_path) {
+            let _ = file.seek(SeekFrom::Start(start));
+            let mut remaining = content_length as usize;
+            let mut buf = vec![0u8; 65536];
+            while remaining > 0 {
+                let to_read = remaining.min(buf.len());
+                match file.read(&mut buf[..to_read]) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx.send(Ok(bytes::Bytes::copy_from_slice(&buf[..n]))).await.is_err() { break; }
+                        remaining -= n;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let status = if start > 0 || end < total_size - 1 { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK };
+    let mut resp = Response::builder()
+        .status(status)
+        .header("Content-Type", content_type)
+        .header("Accept-Ranges", "bytes")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Content-Length", content_length);
+    if start > 0 || end < total_size - 1 {
+        resp = resp.header("Content-Range", format!("bytes {}-{}/{}", start, end, total_size));
+    }
+    Ok(resp.body(Body::wrap_stream(stream)).unwrap())
 }
 
 async fn handle_media_request(
@@ -143,7 +224,7 @@ async fn handle_media_request(
     
     let mut response = Response::builder()
         .status(if start > 0 || end < total_plain_size - 1 { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK })
-        .header("Content-Type", "video/mp4") // TODO: Detect from metadata if possible
+        .header("Content-Type", mime_from_ext(std::path::Path::new(&id).extension().and_then(|e| e.to_str()).unwrap_or("")))
         .header("Accept-Ranges", "bytes")
         .header("Access-Control-Allow-Origin", "*");
 
@@ -154,4 +235,40 @@ async fn handle_media_request(
     response = response.header("Content-Length", content_length);
 
     Ok(response.body(Body::wrap_stream(stream)).unwrap())
+}
+
+fn mime_from_ext(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "mp4"  => "video/mp4",
+        "webm" => "video/webm",
+        "mov"  => "video/quicktime",
+        "ogg"  => "video/ogg",
+        "mkv"  => "video/x-matroska",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png"  => "image/png",
+        "gif"  => "image/gif",
+        "webp" => "image/webp",
+        "pdf"  => "application/pdf",
+        _      => "application/octet-stream",
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i+1..i+3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }

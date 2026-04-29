@@ -66,13 +66,13 @@
         if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
         if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
 
-        // Use Tauri's asset protocol to stream the file natively
-        // instead of loading massive files into the JS heap.
-        const { convertFileSrc } = await import('@tauri-apps/api/core');
-        const assetUrl = convertFileSrc(path);
-        
         const { generateThumbnail } = await import('../lib/utils/thumbnails');
-        const thumbnail = await generateThumbnail(assetUrl, mimeType);
+        const { get } = await import('svelte/store');
+        const { mediaProxyPort } = await import('../lib/stores/ui');
+        const port = get(mediaProxyPort);
+        const encodedPath = encodeURIComponent(path);
+        const localUrl = port ? `http://127.0.0.1:${port}/local?path=${encodedPath}` : null;
+        const thumbnail = localUrl ? await generateThumbnail(localUrl, mimeType) : null;
 
         const { sendFile } = await import('../lib/actions/chat');
         sendFile(activeChat.peerHash, { name: fileName, type: mimeType, path }, 'file', 0, thumbnail || undefined);
