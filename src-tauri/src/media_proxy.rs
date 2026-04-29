@@ -1,7 +1,6 @@
 use tauri::Manager;
 use warp::Filter;
 use std::net::SocketAddr;
-use std::io::{Read, Seek, SeekFrom};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, Key, XNonce,
@@ -18,10 +17,11 @@ pub fn start_media_server(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let media_route = warp::path!("media" / String)
             .and(warp::header::optional::<String>("range"))
-            .and_then(move |id, range| {
+            .and(warp::query::<std::collections::HashMap<String, String>>())
+            .and_then(move |id, range, query| {
                 let app = app_handle.clone();
                 async move {
-                    handle_media_request(app, id, range).await
+                    handle_media_request(app, id, range, query).await
                 }
             });
 
@@ -84,7 +84,7 @@ async fn handle_local_file_request(
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let content_type = mime_from_ext(&ext);
 
-    let (mut tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
 
     tauri::async_runtime::spawn(async move {
         use std::io::{Read, Seek, SeekFrom};
@@ -123,8 +123,17 @@ async fn handle_local_file_request(
 async fn handle_media_request(
     app: tauri::AppHandle,
     id: String,
-    range: Option<String>
+    range: Option<String>,
+    query: std::collections::HashMap<String, String>
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    let mime_type = query.get("type").cloned().unwrap_or_default();
+    let mime_type = percent_decode(&mime_type);
+    let mime_type = if mime_type.is_empty() {
+        mime_from_ext(std::path::Path::new(&id).extension().and_then(|e| e.to_str()).unwrap_or(""))
+    } else {
+        &mime_type
+    };
+
     let state = app.state::<DbState>();
     
     // 1. Get the media key
@@ -142,8 +151,9 @@ async fn handle_media_request(
         return Err(warp::reject());
     }
 
-    let mut file = std::fs::File::open(&file_path).map_err(|_| warp::reject())?;
-    let total_vault_size = file.metadata().map_err(|_| warp::reject())?.len();
+    let mut file = tokio::fs::File::open(&file_path).await.map_err(|_| warp::reject())?;
+    let metadata = file.metadata().await.map_err(|_| warp::reject())?;
+    let total_vault_size = metadata.len();
     
     // Each block is 1319 bytes (24B Nonce + 1279B Data + 16B Tag)
     let num_blocks = total_vault_size / 1319;
@@ -156,7 +166,7 @@ async fn handle_media_request(
     }
 
     // 3. Handle Range Header
-    let (start, end) = if let Some(r) = range {
+    let (start, end) = if let Some(ref r) = range {
         if r.starts_with("bytes=") {
             let parts: Vec<&str> = r["bytes=".len()..].split('-').collect();
             let start = parts[0].parse::<u64>().unwrap_or(0);
@@ -184,37 +194,60 @@ async fn handle_media_request(
     let cipher = XChaCha20Poly1305::new(key);
 
     // 4. Create the streaming body
-    let (mut tx, rx) = tokio::sync::mpsc::channel(10);
+    let (tx, rx) = tokio::sync::mpsc::channel(128);
     
     tauri::async_runtime::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let mut current_offset = start;
-        let mut buffer = vec![0u8; 1319];
+        let block_size_enc = 1319;
+        let block_size_plain = 1279;
+        
+        let mut first_run = true;
         
         while current_offset <= end {
-            let block_index = current_offset / 1279;
-            let offset_in_block = (current_offset % 1279) as usize;
+            let block_index = current_offset / block_size_plain as u64;
+            let vault_pos = block_index * block_size_enc as u64;
+            let offset_in_block = (current_offset % block_size_plain as u64) as usize;
+
+            if first_run {
+                if let Err(_) = file.seek(std::io::SeekFrom::Start(vault_pos)).await { break; }
+                first_run = false;
+            }
             
-            let vault_pos = block_index * 1319;
-            if let Err(_) = file.seek(SeekFrom::Start(vault_pos)) { break; }
+            let remaining_file = total_vault_size.saturating_sub(vault_pos);
+            if remaining_file == 0 { break; }
             
-            let n = match file.read(&mut buffer) {
-                Ok(n) if n > 40 => n,
-                _ => break,
+            let to_read = if remaining_file >= block_size_enc as u64 {
+                block_size_enc
+            } else {
+                remaining_file as usize
             };
 
-            let nonce = XNonce::from_slice(&buffer[..24]);
-            let ciphertext = &buffer[24..n];
+            let mut block_data = vec![0u8; to_read];
+            if let Err(_) = file.read_exact(&mut block_data).await { break; }
+            
+            if block_data.len() < 40 { break; } 
+
+            let nonce = XNonce::from_slice(&block_data[..24]);
+            let ciphertext = &block_data[24..];
             
             if let Ok(ptext) = cipher.decrypt(nonce, ciphertext) {
-                let to_send = &ptext[offset_in_block..];
-                let remaining_in_range = (end - current_offset + 1) as usize;
-                let actual_send = std::cmp::min(to_send.len(), remaining_in_range);
-                
-                if tx.send(Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(&to_send[..actual_send]))).await.is_err() {
+                if offset_in_block < ptext.len() {
+                    let to_send = &ptext[offset_in_block..];
+                    let remaining_in_range = (end - current_offset + 1) as usize;
+                    let actual_send = std::cmp::min(to_send.len(), remaining_in_range);
+                    
+                    if tx.send(Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(&to_send[..actual_send]))).await.is_err() {
+                        return;
+                    }
+                    current_offset += actual_send as u64;
+                } else {
+                    // Safety break to prevent infinite loops if logic desyncs
                     break;
                 }
-                current_offset += actual_send as u64;
             } else {
+                // Decryption failed - could be a corrupted block. 
+                // We break to avoid sending garbage to the browser.
                 break;
             }
         }
@@ -222,13 +255,15 @@ async fn handle_media_request(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     
+    let is_range = range.is_some();
     let mut response = Response::builder()
-        .status(if start > 0 || end < total_plain_size - 1 { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK })
-        .header("Content-Type", mime_from_ext(std::path::Path::new(&id).extension().and_then(|e| e.to_str()).unwrap_or("")))
+        .status(if is_range { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK })
+        .header("Content-Type", mime_type.to_string())
         .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Allow-Origin", "*");
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
 
-    if start > 0 || end < total_plain_size - 1 {
+    if is_range {
         response = response.header("Content-Range", format!("bytes {}-{}/{}", start, end, total_plain_size));
     }
     

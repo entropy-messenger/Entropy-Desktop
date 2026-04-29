@@ -12,7 +12,6 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use std::collections::VecDeque;
-use std::fs::File;
 
 pub struct DbState {
     pub conn: Mutex<Option<Connection>>,
@@ -33,6 +32,7 @@ pub struct MediaTransferState {
     pub received_count: u32,
 }
 
+#[derive(Clone)]
 pub struct PendingMediaMetadata {
     pub id: String,
     pub key: String,
@@ -43,7 +43,7 @@ pub struct NetworkState {
     pub url: Mutex<Option<String>>,
     pub proxy_url: Mutex<Option<String>>,
     pub queue: Mutex<VecDeque<PacedMessage>>,
-    pub sender: Mutex<Option<mpsc::UnboundedSender<PacedMessage>>>,
+    pub sender: Mutex<Option<mpsc::Sender<PacedMessage>>>,
     pub cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
     pub response_channels:
         Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<serde_json::Value>>>,

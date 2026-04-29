@@ -112,16 +112,12 @@ pub async fn vault_load_media(
     while offset + 24 < buffer.len() {
         let nonce = XNonce::from_slice(&buffer[offset..offset+24]);
         offset += 24;
-        
-        // We need to know the chunk size. 
-        // In our outbox, each chunk was 1279 bytes -> ciphertext was 1279 + 16 = 1295 bytes.
         // Total block size = 24 + 1295 = 1319 bytes.
         let chunk_cipher_len = 1295; 
         let end = std::cmp::min(offset + chunk_cipher_len, buffer.len());
         let ciphertext = &buffer[offset..end];
         offset = end;
 
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
         let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| {
             let err = format!("Vault chunk decryption failed: {}", e);
             println!("[VAULT-ERROR] {}", err);

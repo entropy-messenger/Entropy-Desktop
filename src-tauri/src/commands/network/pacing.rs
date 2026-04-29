@@ -10,11 +10,13 @@ pub async fn send_paced_json(app: &tauri::AppHandle, val: serde_json::Value) -> 
     let raw_len = json_str.len();
 
     let net_state = app.state::<NetworkState>();
-    let tx_lock = net_state
-        .sender
-        .lock()
-        .map_err(|_| "Network state poisoned")?;
-    let tx = tx_lock.as_ref().ok_or("Network not connected")?;
+    let tx = {
+        let tx_lock = net_state
+            .sender
+            .lock()
+            .map_err(|_| "Network state poisoned")?;
+        tx_lock.clone().ok_or("Network not connected")?
+    };
 
     if raw_len > 1200 {
         let data_bytes = json_str.into_bytes();
@@ -37,12 +39,14 @@ pub async fn send_paced_json(app: &tauri::AppHandle, val: serde_json::Value) -> 
             tx.send(PacedMessage {
                 msg: Message::Binary(envelope.into()),
             })
+            .await
             .map_err(|e| e.to_string())?;
         }
     } else {
         tx.send(PacedMessage {
             msg: Message::Text(Utf8Bytes::from(json_str)),
         })
+        .await
         .map_err(|e| e.to_string())?;
     }
     Ok(())

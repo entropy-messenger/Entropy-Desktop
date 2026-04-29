@@ -14,17 +14,14 @@ use crate::commands::{
     get_media_dir, internal_db_save_message, internal_send_to_network,
     internal_signal_encrypt, internal_dispatch_fragment, DbMessage,
 };
-// use crate::commands::vault::crypto_decrypt_media; // Removed unused
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     XChaCha20Poly1305, Key as ChaKey,
 };
-// use aes_gcm::{Aes256Gcm, Key}; 
 use base64::Engine;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::io::Write;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -411,11 +408,29 @@ pub fn process_outgoing_media(
                 ).await;
             }
 
+            let final_attachment_obj = serde_json::json!({
+                "fileName": payload.file_name,
+                "fileType": payload.file_type,
+                "size": file_size,
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "transferId": transfer_id,
+                "vaultPath": vault_path.to_string_lossy().to_string()
+            });
+
             let lock = db_state.conn.lock().unwrap();
             if let Some(conn) = lock.as_ref() {
-                let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", rusqlite::params![msg_id]);
+                let _ = conn.execute(
+                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
+                    rusqlite::params![msg_id, final_attachment_obj.to_string()]
+                );
             }
-            let _ = app.emit("msg://status", serde_json::json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }));
+            let _ = app.emit("msg://status", serde_json::json!({ 
+                "id": msg_id, 
+                "status": "sent", 
+                "chatAddress": payload.recipient,
+                "attachment": final_attachment_obj
+            }));
         });
     });
 
@@ -940,11 +955,29 @@ pub fn process_outgoing_group_media(
                 }
             }
 
+            let final_attachment_obj = serde_json::json!({
+                "fileName": payload.file_name,
+                "fileType": payload.file_type,
+                "size": file_size,
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "transferId": transfer_id,
+                "vaultPath": vault_path.to_string_lossy().to_string()
+            });
+
             let lock = db_state.conn.lock().unwrap();
             if let Some(conn) = lock.as_ref() {
-                let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", rusqlite::params![msg_id]);
+                let _ = conn.execute(
+                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
+                    rusqlite::params![msg_id, final_attachment_obj.to_string()]
+                );
             }
-            let _ = app.emit("msg://status", serde_json::json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }));
+            let _ = app.emit("msg://status", serde_json::json!({ 
+                "id": msg_id, 
+                "status": "sent", 
+                "chatAddress": payload.recipient,
+                "attachment": final_attachment_obj
+            }));
         });
     });
 

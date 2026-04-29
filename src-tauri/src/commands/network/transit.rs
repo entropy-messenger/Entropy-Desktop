@@ -124,10 +124,13 @@ pub async fn internal_send_to_network(
 
     if is_connected {
         if is_binary {
-            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-            if let Some(tx) = sender_lock.as_ref() {
+            let tx = {
+                let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+                sender_lock.clone()
+            };
+            if let Some(tx) = tx {
                 for pm in paced_messages {
-                    tx.send(pm).map_err(|e| e.to_string())?;
+                    tx.send(pm).await.map_err(|e| e.to_string())?;
                 }
             }
         } else {
@@ -246,9 +249,12 @@ pub async fn internal_dispatch_fragment(
         .is_some();
 
     if is_connected {
-        let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-        if let Some(tx) = sender_lock.as_ref() {
-            tx.send(paced_msg).map_err(|e| e.to_string())?;
+        let tx = {
+            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+            sender_lock.clone()
+        };
+        if let Some(tx) = tx {
+            tx.send(paced_msg).await.map_err(|e| e.to_string())?;
         }
         
         // Progress emission
@@ -288,8 +294,11 @@ pub async fn internal_dispatch_fragment(
 }
 
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
-    let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-    if let Some(tx) = &*sender_lock {
+    let tx = {
+        let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+        sender_lock.clone()
+    };
+    if let Some(tx) = tx {
         let mut msg_batch = Vec::new();
 
         {
@@ -327,7 +336,7 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
             } else {
                 Message::Binary(content.into())
             };
-            let _ = tx.send(PacedMessage { msg });
+            let _ = tx.send(PacedMessage { msg }).await;
             ids_to_delete.push(id);
         }
         if !ids_to_delete.is_empty() {

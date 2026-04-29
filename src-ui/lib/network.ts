@@ -77,7 +77,7 @@ export class NetworkLayer {
             const payload = event.payload as any;
             const chatAddress = payload.chatAddress || payload.chat_address;
             if (payload.id) {
-                updateSingleMessageStatusUI(payload.id, payload.status, chatAddress);
+                updateSingleMessageStatusUI(payload.id, payload.status, chatAddress, payload.attachment);
             } else if (payload.ids) {
                 updateMessageStatusUI(chatAddress, payload.ids, payload.status);
             }

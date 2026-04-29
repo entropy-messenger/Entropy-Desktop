@@ -23,46 +23,48 @@ pub(crate) async fn internal_request(
         channels.insert(req_id.clone(), tx);
     }
 
-    {
+    let ws_tx = {
         let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-        if let Some(ws_tx) = &*sender_lock {
-            let text = full_payload.to_string();
-            if text.len() > 1200 {
-                let data_bytes = text.into_bytes();
-                let total_len = data_bytes.len();
-                let chunk_capacity = 1319;
-                let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
-                let transfer_id: u32 = rand::random();
-                let zero_hash = vec![0u8; 64];
-                for i in 0..chunks {
-                    let start = i * chunk_capacity;
-                    let end = std::cmp::min(start + chunk_capacity, total_len);
-                    let chunk_data = &data_bytes[start..end];
-                    let mut env = Vec::with_capacity(PACKET_SIZE);
-                    env.extend_from_slice(&zero_hash);
-                    env.push(0x00);
-                    env.extend_from_slice(&transfer_id.to_be_bytes());
-                    env.extend_from_slice(&(i as u32).to_be_bytes());
-                    env.extend_from_slice(&(chunks as u32).to_be_bytes());
-                    env.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
-                    env.extend_from_slice(chunk_data);
-                    let _ = ws_tx.send(PacedMessage {
-                        msg: Message::Binary(env.into()),
-                    });
-                }
-            } else {
+        sender_lock.clone()
+    };
+
+    if let Some(ws_tx) = ws_tx {
+        let text = full_payload.to_string();
+        if text.len() > 1200 {
+            let data_bytes = text.into_bytes();
+            let total_len = data_bytes.len();
+            let chunk_capacity = 1319;
+            let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
+            let transfer_id: u32 = rand::random();
+            let zero_hash = vec![0u8; 64];
+            for i in 0..chunks {
+                let start = i * chunk_capacity;
+                let end = std::cmp::min(start + chunk_capacity, total_len);
+                let chunk_data = &data_bytes[start..end];
+                let mut env = Vec::with_capacity(PACKET_SIZE);
+                env.extend_from_slice(&zero_hash);
+                env.push(0x00);
+                env.extend_from_slice(&transfer_id.to_be_bytes());
+                env.extend_from_slice(&(i as u32).to_be_bytes());
+                env.extend_from_slice(&(chunks as u32).to_be_bytes());
+                env.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
+                env.extend_from_slice(chunk_data);
                 let _ = ws_tx.send(PacedMessage {
-                    msg: Message::Text(Utf8Bytes::from(text)),
-                });
+                    msg: Message::Binary(env.into()),
+                }).await;
             }
         } else {
-            let mut channels = state
-                .response_channels
-                .lock()
-                .map_err(|_| "Response channels poisoned")?;
-            channels.remove(&req_id);
-            return Err("Not connected to network".into());
+            let _ = ws_tx.send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(text)),
+            }).await;
         }
+    } else {
+        let mut channels = state
+            .response_channels
+            .lock()
+            .map_err(|_| "Response channels poisoned")?;
+        channels.remove(&req_id);
+        return Err("Not connected to network".into());
     }
 
     match tokio::time::timeout(Duration::from_secs(10), rx).await {

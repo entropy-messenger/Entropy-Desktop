@@ -87,7 +87,7 @@
                     console.error("[UI] Failed to get media proxy port:", e);
                 }
             }
-            blobUrl = `http://localhost:${port || 51761}/media/${msg.id}`;
+            blobUrl = `http://localhost:${port || 51761}/media/${msg.id}?type=${encodeURIComponent(msg.attachment.fileType || '')}`;
             wasCreatedInternally = false;
             loading = false;
             return;

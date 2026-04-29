@@ -653,14 +653,18 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
     });
 };
 
-export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string) => {
+export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string, attachment?: any) => {
     messageStore.update(mStore => {
         // Direct lookup if chatAddress is known
         if (chatAddress && mStore[chatAddress]) {
             const index = mStore[chatAddress].findIndex(m => m.id === msgId);
             if (index !== -1) {
                 const updatedMessages = [...mStore[chatAddress]];
-                updatedMessages[index] = { ...updatedMessages[index], status };
+                updatedMessages[index] = { 
+                    ...updatedMessages[index], 
+                    status,
+                    ...(attachment ? { attachment: { ...updatedMessages[index].attachment, ...attachment } } : {})
+                };
                 mStore[chatAddress] = updatedMessages;
 
                 userStore.update(s => {
@@ -679,7 +683,11 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
             const index = mStore[peerHash].findIndex(m => m.id === msgId);
             if (index !== -1) {
                 const updatedMessages = [...mStore[peerHash]];
-                updatedMessages[index] = { ...updatedMessages[index], status };
+                updatedMessages[index] = { 
+                    ...updatedMessages[index], 
+                    status,
+                    ...(attachment ? { attachment: { ...updatedMessages[index].attachment, ...attachment } } : {})
+                };
                 mStore[peerHash] = updatedMessages;
 
                 userStore.update(s => {

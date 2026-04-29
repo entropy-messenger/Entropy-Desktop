@@ -30,11 +30,16 @@ const RELAY_URL: &str = "ws://localhost:8080/ws";
 pub async fn revoke_session_token(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
     let id_hash = state.identity_hash.lock().map_err(|_| "State poisoned")?.clone();
     
-    if let (Some(_id), Some(tx)) = (id_hash, state.sender.lock().map_err(|_| "State poisoned")?.as_ref()) {
+    let tx = {
+        let sender_lock = state.sender.lock().map_err(|_| "State poisoned")?;
+        sender_lock.clone()
+    };
+
+    if let (Some(_id), Some(tx)) = (id_hash, tx) {
         let revoke_req = json!({"type": "session_revoke", "req_id": "revoke_op"});
         let _ = tx.send(PacedMessage {
             msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
-        });
+        }).await;
     }
 
     // Always clear local even if server message fails to send
@@ -130,7 +135,7 @@ pub(crate) async fn internal_establish_network(
         )
     };
 
-    let (tx, rx) = mpsc::unbounded_channel::<PacedMessage>();
+    let (tx, rx) = mpsc::channel::<PacedMessage>(100);
     let (bin_tx, mut bin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     let net_state_setup = app.state::<NetworkState>();
@@ -197,25 +202,30 @@ pub(crate) async fn internal_establish_network(
         .map_err(|_| "Network state poisoned")?
         .clone();
 
+    let tx_auth = {
+        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
+            sender_lock.clone()
+        } else {
+            None
+        }
+    };
+
     if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token_lock) {
-        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
-            && let Some(tx) = &*sender_lock
-        {
+        if let Some(tx) = tx_auth {
             let payload = json!({ "identity_hash": id, "session_token": token_val });
             let auth_req = json!({"type": "auth", "payload": payload});
             let _ = tx.send(PacedMessage {
                 msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
-            });
+            }).await;
         }
-    } else if let Some(id) = id_hash
-        && let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
-        && let Some(tx) = &*sender_lock
-    {
-        let challenge_req =
-            json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
-        let _ = tx.send(PacedMessage {
-            msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
-        });
+    } else if let Some(id) = id_hash {
+        if let Some(tx) = tx_auth {
+            let challenge_req =
+                json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
+            let _ = tx.send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
+            }).await;
+        }
     }
 
     loop {
