@@ -4,7 +4,7 @@
 //! Payloads are processed through an asynchronous media assembler that enforces:
 //! - Transfer ID (TID) isolation.
 //! - Strict index-to-total validation to prevent buffer overflows.
-//! - Resource limits (max 80000 fragments per transfer) to mitigate memory exhaustion.
+//! - Resource limits (max 10,000,000 fragments per transfer) to mitigate memory exhaustion.
 //!
 //! Once reassembled, payloads are passed to the Signal decryption pipeline where session
 //! state is updated and messages are persisted to the encrypted local vault.
@@ -189,8 +189,8 @@ pub async fn process_incoming_binary(
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
         ) as usize;
 
-        // security: cap maximum fragments per transfer (approx 100MB)
-        if total > 80000 {
+        // security: cap maximum fragments per transfer (approx 10GB)
+        if total > 10_000_000 {
             return Err("Payload exceeds limit".into());
         }
 
@@ -799,7 +799,7 @@ pub async fn process_incoming_binary(
                                     as u32;
 
                                 let size = decrypted_json["size"].as_u64().ok_or("Missing size")?;
-                                if size > 100 * 1024 * 1024 {
+                                if size > 10 * 1024 * 1024 * 1024u64 {
                                     // Rejected oversized file metadata
                                     return Err("File metadata exceeds size limit".into());
                                 }

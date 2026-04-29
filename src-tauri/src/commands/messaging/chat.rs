@@ -560,8 +560,12 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
     .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT OR IGNORE INTO messages (id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_group, is_starred, reply_to_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO messages (id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_group, is_starred, reply_to_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(id) DO UPDATE SET 
+            status = excluded.status,
+            attachment_json = excluded.attachment_json,
+            content = excluded.content",
         params![
             msg.id,
             msg.chat_address,

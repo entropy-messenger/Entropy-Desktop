@@ -12,7 +12,7 @@
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
     get_media_dir, internal_db_save_message, internal_send_to_network,
-    internal_signal_encrypt, DbMessage,
+    internal_signal_encrypt, internal_dispatch_fragment, DbMessage,
 };
 // use crate::commands::vault::crypto_decrypt_media; // Removed unused
 use chacha20poly1305::{
@@ -37,7 +37,7 @@ pub struct ReplyTo {
     pub r#type: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OutgoingText {
     pub recipient: String,
@@ -49,7 +49,7 @@ pub struct OutgoingText {
     pub group_members: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OutgoingMedia {
     pub recipient: String,
@@ -206,317 +206,220 @@ pub fn process_outgoing_media(
     app: AppHandle,
     payload: OutgoingMedia,
 ) -> Result<serde_json::Value, String> {
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Clock error: {}", e))?
+        .as_millis() as i64;
+    let transfer_id: u32 = rand::random();
+
+    // 1. Immediate validation
+    let canonical_path_opt = if let Some(p) = &payload.file_path {
+        let path_buf = std::path::PathBuf::from(p);
+        let canonical_path = std::fs::canonicalize(&path_buf)
+            .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
+        
+        let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+        if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 10GB.".to_string());
+        }
+        Some(canonical_path)
+    } else if let Some(ref d) = payload.file_data {
+        if d.len() as u64 > 10 * 1024 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 10GB.".to_string());
+        }
+        None
+    } else {
+        return Err("No file path or data provided".into());
+    };
+
+    let file_size = if let Some(ref p) = canonical_path_opt {
+        std::fs::metadata(p).map_err(|e| e.to_string())?.len()
+    } else if let Some(ref d) = payload.file_data {
+        d.len() as u64
+    } else { 0 };
+
+    // 2. Optimistic UI: Save to DB and return immediately
+    let db_state = app.state::<DbState>();
+    let net_state = app.state::<NetworkState>();
+    let own_id = net_state.identity_hash.lock().map_err(|_| "State poisoned")?.clone().unwrap_or_default();
+
+    let db_msg = DbMessage {
+        id: msg_id.clone(),
+        chat_address: payload.recipient.clone(),
+        sender_hash: own_id.clone(),
+        content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
+        timestamp,
+        r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+        status: "sending".to_string(),
+        attachment_json: Some(serde_json::json!({
+            "fileName": payload.file_name,
+            "fileType": payload.file_type,
+            "size": file_size,
+            "duration": payload.duration,
+            "thumbnail": payload.thumbnail,
+            "transferId": transfer_id
+        }).to_string()),
+        is_starred: false,
+        is_group: false,
+        reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+    };
+
+    {
+        let db_state = db_state.clone();
+        let db_msg = db_msg.clone();
+        let app = app.clone();
+        tauri::async_runtime::block_on(async move {
+            let _ = crate::commands::messaging::chat::internal_db_save_message(&db_state, db_msg.clone()).await;
+            let _ = app.emit("msg://added", db_msg);
+        });
+    }
+
+    // 3. Background Processing
+    let app_bg = app.clone();
+    let payload_bg = payload.clone();
+    let msg_id_bg = msg_id.clone();
+    let canonical_path_bg = canonical_path_opt.clone();
+
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("Failed to build runtime: {}", e))?;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
+            let app = app_bg;
+            let payload = payload_bg;
+            let msg_id = msg_id_bg;
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            let msg_id = uuid::Uuid::new_v4().to_string();
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| format!("Clock error: {}", e))?
-                .as_millis() as i64;
-
-            // validate path
-            let canonical_path_opt = if let Some(p) = &payload.file_path {
-                let path_buf = std::path::PathBuf::from(p);
-                // security: canonicalize and validate target path
-                let canonical_path = std::fs::canonicalize(&path_buf)
-                    .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
-
-                // security: restrict access to hidden or system directories
-                if canonical_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().starts_with('.'))
-                    .unwrap_or(false)
-                    || canonical_path.components().any(|c| {
-                        c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != "."
-                    })
-                {
-                    return Err(
-                        "Access denied: Cannot send hidden files or system configuration".into(),
-                    );
-                }
-
-                let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
-                if metadata.len() > 100 * 1024 * 1024 {
-                    return Err("File too large. Maximum size is 100MB.".to_string());
-                }
-                Some(canonical_path)
-            } else if let Some(ref d) = payload.file_data {
-                if d.len() > 100 * 1024 * 1024 {
-                    return Err("File too large. Maximum size is 100MB.".to_string());
-                }
-                None
-            } else {
-                return Err("No file path or data provided".into());
-            };
-
-            // 1. Prepare Keys
+            // Keys
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
             let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
             let vault_key_bytes = {
-                let lock = db_state.media_key.lock().map_err(|_| "State poisoned")?;
-                lock.clone().ok_or("Media key not initialized")?
+                let lock = db_state.media_key.lock().unwrap();
+                lock.clone().unwrap()
             };
             let vault_key = ChaKey::from_slice(&vault_key_bytes);
-            
+            let vault_cipher = XChaCha20Poly1305::new(vault_key);
 
-            // 2. Prepare Vault storage
-            let media_dir = get_media_dir(&app, &db_state)?;
+            let media_dir = get_media_dir(&app, &db_state).unwrap();
             let vault_path = media_dir.join(&msg_id);
-            let mut vault_file = std::fs::File::create(&vault_path).map_err(|e| e.to_string())?;
-
-            // 3. Prepare Network routing
-            let mut routing_hash = [0u8; 64];
-            let recipient_bytes = payload.recipient.as_bytes();
-            let r_len = std::cmp::min(recipient_bytes.len(), 64);
-            routing_hash[..r_len].copy_from_slice(&recipient_bytes[..r_len]);
-
-            // 4. Streaming Dispatch (Zero-RAM)
-            let file_size = if let Some(ref p) = canonical_path_opt {
-                std::fs::metadata(p).map_err(|e| e.to_string())?.len()
-            } else if let Some(ref d) = payload.file_data {
-                d.len() as u64
-            } else {
-                return Err("No data source".into());
-            };
-            let net_chunk_capacity = 1279; 
-            let total_fragments = (file_size as f64 / net_chunk_capacity as f64).ceil() as u32;
-            let transfer_id: u32 = rand::random();
-
-            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_opt {
-                Box::new(std::io::BufReader::new(std::fs::File::open(p).map_err(|e| e.to_string())?))
-            } else if let Some(ref d) = payload.file_data {
-                Box::new(std::io::Cursor::new(d.clone()))
-            } else {
-                return Err("No data source".into());
-            };
-            
-            let mut fragment_index = 0;
-            let batch_size = 32;
-            println!("[OUTBOX] Starting media dispatch with Parallel Encryption (Batch size: {}). TID: {}, Total Fragments: {}", batch_size, transfer_id, total_fragments);
-
-            use std::io::Read;
-            loop {
-                let mut batch = Vec::with_capacity(batch_size);
-                
-                // 1. Sequential Read & Hash Batch (Maintains hash integrity)
-                for _ in 0..batch_size {
-                    let mut chunk_buf = vec![0u8; 1279];
-                    let mut n = 0;
-                    while n < 1279 {
-                        match reader.read(&mut chunk_buf[n..]) {
-                            Ok(0) => break,
-                            Ok(read) => n += read,
-                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                            Err(_) => break,
-                        }
-                    }
-                    if n == 0 { break; }
-                    let actual_chunk = if n < 1279 { chunk_buf[..n].to_vec() } else { chunk_buf };
-                    hasher.update(&actual_chunk);
-                    batch.push(actual_chunk);
-                }
-
-                if batch.is_empty() { break; }
-
-                // 2. Parallel Encryption Batch (CPU-bound)
-                let mut tasks = Vec::with_capacity(batch.len());
-                for chunk in batch {
-                    let v_net_key = net_key.clone();
-                    let v_vault_key_bytes = vault_key_bytes.clone();
-                    
-                    tasks.push(tokio::task::spawn_blocking(move || {
-                        use chacha20poly1305::{XChaCha20Poly1305, Key as ChaKey};
-                        use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
-
-                        let vault_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&v_vault_key_bytes));
-                        let net_cipher = XChaCha20Poly1305::new(&v_net_key);
-
-                        let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                        let v_enc = vault_cipher.encrypt(&v_nonce, chunk.as_slice()).map_err(|e| e.to_string())?;
-
-                        let n_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                        let n_enc = net_cipher.encrypt(&n_nonce, chunk.as_slice()).map_err(|e| e.to_string())?;
-
-                        Ok::<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>), String>((
-                            v_nonce.to_vec(), v_enc, n_nonce.to_vec(), n_enc
-                        ))
-                    }));
-                }
-
-                // 3. Await and Sequential Dispatch (Maintains fragment order)
-                let results = futures_util::future::join_all(tasks).await;
-                for res in results {
-                    let (v_nonce, v_enc, n_nonce, n_enc) = res.map_err(|e| e.to_string())??;
-                    
-                    // A. Vault persistence
-                    vault_file.write_all(&v_nonce).map_err(|e| e.to_string())?;
-                    vault_file.write_all(&v_enc).map_err(|e| e.to_string())?;
-
-                    // B. Network Dispatch
-                    let mut packet_data = Vec::with_capacity(n_nonce.len() + n_enc.len());
-                    packet_data.extend_from_slice(&n_nonce);
-                    packet_data.extend_from_slice(&n_enc);
-
-                    if fragment_index % 100 == 0 {
-                        println!("[OUTBOX] Dispatched fragment {}/{}", fragment_index, total_fragments);
-                    }
-
-                    crate::commands::network::transit::internal_dispatch_fragment(
-                        app.clone(),
-                        &net_state,
-                        routing_hash,
-                        Some(msg_id.clone()),
-                        transfer_id,
-                        fragment_index,
-                        total_fragments,
-                        &packet_data,
-                        true,
-                        false,
-                    ).await?;
-
-                    fragment_index += 1;
-                }
-            }
-            println!("[OUTBOX] All binary fragments dispatched for TID: {}", transfer_id);
-            vault_file.sync_all().map_err(|e| e.to_string())?;
+            let mut vault_file = std::fs::File::create(&vault_path).unwrap();
 
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
-            let saved_vault_path = vault_path.to_string_lossy().to_string();
-
-            // 5. Send Control Metadata (0x04)
-            let metadata_json = json!({
+            
+            // Announcement Metadata (0x04)
+            let announcement = serde_json::json!({
                 "type": "file",
                 "id": msg_id.clone(),
                 "transfer_id": transfer_id,
                 "size": file_size,
                 "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
                 "duration": payload.duration,
-                "timestamp": timestamp,
                 "thumbnail": payload.thumbnail,
                 "replyTo": payload.reply_to,
+                "timestamp": timestamp,
                 "bundle": {
                     "key": key_b64,
                     "file_name": payload.file_name,
                     "file_type": payload.file_type,
-                    "sha256": hex::encode(hasher.finalize())
+                    "sha256": ""
                 }
             });
 
-            // commit metadata
-            let own_id = net_state
-                .identity_hash
-                .lock()
-                .map_err(|_| "Network state poisoned")?
-                .clone()
-                .unwrap_or_default();
-            let db_msg = DbMessage {
-                id: msg_id.clone(),
-                chat_address: payload.recipient.clone(),
-                sender_hash: own_id.clone(),
-                content: if payload.msg_type.as_deref() == Some("voice_note") {
-                    "Voice Note".to_string()
-                } else {
-                    format!("File: {}", payload.file_name.as_deref().unwrap_or("Media"))
-                },
-                timestamp,
-                r#type: payload
-                    .msg_type
-                    .clone()
-                    .unwrap_or_else(|| "file".to_string()),
-                status: "sent".to_string(),
-                attachment_json: Some(
-                    serde_json::json!({
-                        "fileName": payload.file_name,
-                        "fileType": payload.file_type,
-                        "size": file_size,
-                        "duration": payload.duration,
-                        "thumbnail": payload.thumbnail,
-                        "transferId": transfer_id,
-                        "vaultPath": saved_vault_path
-                    })
-                    .to_string(),
-                ),
-                is_starred: false,
-                is_group: false,
-                reply_to_json: payload
-                    .reply_to
-                    .as_ref()
-                    .map(|r| serde_json::to_string(&r).unwrap_or_default()),
-            };
-
-            internal_db_save_message(&db_state, db_msg.clone()).await?;
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
-            if let Some(obj) = final_json.as_object_mut() {
-                obj.insert("chatAlias".to_string(), serde_json::json!(null));
+            if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &payload.recipient, announcement.to_string()).await {
+                let _ = crate::commands::network::transit::internal_send_to_network(
+                    app.clone(), &net_state, Some(payload.recipient.clone()), Some(msg_id.clone()), None,
+                    Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
+                ).await;
             }
-            app.emit("msg://added", final_json.clone())
-                .map_err(|e| e.to_string())?;
 
-            // session bridge
-            let encrypted = internal_signal_encrypt(
-                app.clone(),
-                &net_state,
-                &payload.recipient,
-                metadata_json.to_string(),
-            )
-            .await?;
-            let routing_hash = payload
-                .recipient
-                .split('.')
-                .next()
-                .unwrap_or(&payload.recipient);
+            // Fragments
+            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_bg {
+                Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
+            } else if let Some(ref d) = payload.file_data {
+                Box::new(std::io::Cursor::new(d.to_vec()))
+            } else { return; };
 
-            // A. Send Metadata (0x04)
-            let _ = crate::commands::network::transit::internal_send_to_network(
-                app.clone(),
-                &net_state,
-                Some(routing_hash.to_string()),
-                Some(msg_id.clone()),
-                None,
-                Some(encrypted.to_string().into_bytes()),
-                true,
-                false,
-                Some(transfer_id),
-                true,
-            )
-            .await;
+            let mut fragment_index = 0;
+            let mut buffer = vec![0u8; 1279];
+            let total_fragments = (file_size as f64 / 1279.0).ceil() as u32;
 
-            // transition state
-            {
-                let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute(
-                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
-                        params![msg_id],
-                    );
-                    let _ = conn.execute(
-                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-                        params![payload.recipient],
-                    );
+            loop {
+                let mut n = 0;
+                while n < 1279 {
+                    match reader.read(&mut buffer[n..]) {
+                        Ok(0) => break,
+                        Ok(read) => n += read,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
                 }
-            }
-            app.emit(
-                "msg://status",
-                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
-            )
-            .map_err(|e| e.to_string())?;
+                if n == 0 { break; }
+                let chunk = &buffer[..n];
+                hasher.update(chunk);
+                
+                let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
+                use std::io::Write;
+                let _ = vault_file.write_all(&v_nonce);
+                let _ = vault_file.write_all(&v_cipher);
 
-            if let Some(obj) = final_json.as_object_mut() {
-                obj.insert("status".to_string(), json!("sent"));
+                let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
+                let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                let t_cipher = transit_cipher.encrypt(&t_nonce, chunk).unwrap();
+                let mut packet = Vec::with_capacity(t_cipher.len() + 24);
+                packet.extend_from_slice(&t_nonce);
+                packet.extend_from_slice(&t_cipher);
+
+                let mut routing_hash = [0u8; 64];
+                let r_bytes = payload.recipient.as_bytes();
+                let r_len = std::cmp::min(r_bytes.len(), 64);
+                routing_hash[..r_len].copy_from_slice(&r_bytes[..r_len]);
+
+                let _ = internal_dispatch_fragment(
+                    app.clone(), &net_state, routing_hash, Some(msg_id.clone()),
+                    transfer_id, fragment_index,
+                    total_fragments, &packet, true, false
+                ).await;
+                fragment_index += 1;
             }
-            Ok(final_json)
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
+
+            // Final Metadata (0x04)
+            let final_hash = hex::encode(hasher.finalize());
+            let final_meta = serde_json::json!({
+                "type": "file",
+                "id": msg_id.clone(),
+                "transfer_id": transfer_id,
+                "size": file_size,
+                "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "replyTo": payload.reply_to,
+                "timestamp": timestamp,
+                "bundle": {
+                    "key": key_b64,
+                    "file_name": payload.file_name,
+                    "file_type": payload.file_type,
+                    "sha256": final_hash
+                }
+            });
+
+            if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &payload.recipient, final_meta.to_string()).await {
+                let _ = crate::commands::network::transit::internal_send_to_network(
+                    app.clone(), &net_state, Some(payload.recipient.clone()), Some(msg_id.clone()), None,
+                    Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
+                ).await;
+            }
+
+            let lock = db_state.conn.lock().unwrap();
+            if let Some(conn) = lock.as_ref() {
+                let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", rusqlite::params![msg_id]);
+            }
+            let _ = app.emit("msg://status", serde_json::json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }));
+        });
+    });
+
+    Ok(serde_json::to_value(&db_msg).unwrap())
 }
 
 #[tauri::command]
@@ -736,7 +639,7 @@ pub fn process_outgoing_group_text(
                 if member_id == &own_id {
                     continue;
                 }
-                let routing_hash = member_id.split('.').next().unwrap_or(member_id).to_string();
+                let routing_hash = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
                 match internal_signal_encrypt(
                     app.clone(),
                     &net_state,
@@ -814,94 +717,151 @@ pub fn process_outgoing_group_media(
     app: AppHandle,
     payload: OutgoingMedia,
 ) -> Result<serde_json::Value, String> {
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Clock error: {}", e))?
+        .as_millis() as i64;
+    let transfer_id: u32 = rand::random();
+
+    // 1. Immediate validation
+    let canonical_path_opt = if let Some(p) = &payload.file_path {
+        let path_buf = std::path::PathBuf::from(p);
+        let canonical_path = std::fs::canonicalize(&path_buf)
+            .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
+        
+        let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+        if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 10GB.".to_string());
+        }
+        Some(canonical_path)
+    } else if let Some(ref d) = payload.file_data {
+        if d.len() as u64 > 10 * 1024 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 10GB.".to_string());
+        }
+        None
+    } else {
+        return Err("No file path or data provided".into());
+    };
+
+    let file_size = if let Some(ref p) = canonical_path_opt {
+        std::fs::metadata(p).map_err(|e| e.to_string())?.len()
+    } else if let Some(ref d) = payload.file_data {
+        d.len() as u64
+    } else { 0 };
+
+    // 2. Optimistic UI
+    let db_state = app.state::<DbState>();
+    let net_state = app.state::<NetworkState>();
+    let own_id = net_state.identity_hash.lock().map_err(|_| "State poisoned")?.clone().unwrap_or_default();
+
+    let db_msg = DbMessage {
+        id: msg_id.clone(),
+        chat_address: payload.recipient.clone(),
+        sender_hash: own_id.clone(),
+        content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
+        timestamp,
+        r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+        status: "sending".to_string(),
+        attachment_json: Some(serde_json::json!({
+            "fileName": payload.file_name,
+            "fileType": payload.file_type,
+            "size": file_size,
+            "duration": payload.duration,
+            "thumbnail": payload.thumbnail,
+            "transferId": transfer_id
+        }).to_string()),
+        is_starred: false,
+        is_group: true,
+        reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+    };
+
+    {
+        let db_state = db_state.clone();
+        let db_msg = db_msg.clone();
+        let app = app.clone();
+        tauri::async_runtime::block_on(async move {
+            let _ = crate::commands::messaging::chat::internal_db_save_message(&db_state, db_msg.clone()).await;
+            let _ = app.emit("msg://added", db_msg);
+        });
+    }
+
+    // 3. Background Processing
+    let app_bg = app.clone();
+    let payload_bg = payload.clone();
+    let msg_id_bg = msg_id.clone();
+    let canonical_path_bg = canonical_path_opt.clone();
+
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
+            let app = app_bg;
+            let payload = payload_bg;
+            let msg_id = msg_id_bg;
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            let msg_id = uuid::Uuid::new_v4().to_string();
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| format!("Clock error: {}", e))?
-                .as_millis() as i64;
-
-            let canonical_path_opt = if let Some(p) = &payload.file_path {
-                let path_buf = std::path::PathBuf::from(p);
-                let canonical_path = std::fs::canonicalize(&path_buf)
-                    .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
-                
-                if canonical_path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().starts_with('.'))
-                    .unwrap_or(false)
-                    || canonical_path.components().any(|c| {
-                        c.as_os_str().to_string_lossy().starts_with('.') && c.as_os_str() != "."
-                    })
-                {
-                    return Err(
-                        "Access denied: Cannot send hidden files or system configuration".into(),
-                    );
-                }
-
-                let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
-                if metadata.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
-                Some(canonical_path)
-            } else if let Some(ref d) = payload.file_data {
-                if d.len() > 100 * 1024 * 1024 { return Err("File too large. Maximum size is 100MB.".to_string()); }
-                None
-            } else {
-                return Err("No file path or data provided".into());
-            };
-
-            let file_size = if let Some(ref p) = canonical_path_opt {
-                std::fs::metadata(p).map_err(|e| e.to_string())?.len()
-            } else if let Some(ref d) = payload.file_data {
-                d.len() as u64
-            } else {
-                return Err("No data source".into());
-            };
-
-            // 1. Prepare Keys
             use sha2::{Sha256, Digest};
             let mut hasher = Sha256::new();
-
             let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
             let vault_key_bytes = {
-                let lock = db_state.media_key.lock().map_err(|_| "State poisoned")?;
-                lock.clone().ok_or("Media key not initialized")?
+                let lock = db_state.media_key.lock().unwrap();
+                lock.clone().unwrap()
             };
             let vault_key = ChaKey::from_slice(&vault_key_bytes);
-            
-            let net_cipher = XChaCha20Poly1305::new(&net_key);
             let vault_cipher = XChaCha20Poly1305::new(vault_key);
 
-            // 2. Prepare Vault storage
-            let media_dir = get_media_dir(&app, &db_state)?;
+            let media_dir = get_media_dir(&app, &db_state).unwrap();
             let vault_path = media_dir.join(&msg_id);
-            let mut vault_file = std::fs::File::create(&vault_path).map_err(|e| e.to_string())?;
+            let mut vault_file = std::fs::File::create(&vault_path).unwrap();
 
-            // 3. Prepare Member routing
-            let own_id = net_state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().unwrap_or_default();
-            let members = payload.group_members.as_ref().ok_or("No members provided for group media")?;
-            
-            // 4. Streaming Dispatch (Zero-RAM)
-            let net_chunk_capacity = 1279; 
-            let total_fragments = (file_size as f64 / net_chunk_capacity as f64).ceil() as u32;
-            let transfer_id: u32 = rand::random();
+            let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
+            let members = payload.group_members.as_ref().unwrap();
 
-            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_opt {
-                Box::new(std::io::BufReader::new(std::fs::File::open(p).map_err(|e| e.to_string())?))
+            // Announcement
+            let announcement = serde_json::json!({
+                "type": "file",
+                "id": msg_id.clone(),
+                "transfer_id": transfer_id,
+                "size": file_size,
+                "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "replyTo": payload.reply_to,
+                "isGroup": true,
+                "groupId": payload.recipient,
+                "groupName": payload.group_name,
+                "timestamp": timestamp,
+                "bundle": {
+                    "key": key_b64,
+                    "file_name": payload.file_name,
+                    "file_type": payload.file_type,
+                    "sha256": ""
+                }
+            });
+
+            for member_id in members {
+                if member_id == &own_id { continue; }
+                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, member_id, announcement.to_string()).await {
+                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
+                    let _ = crate::commands::network::transit::internal_send_to_network(
+                        app.clone(), &net_state, Some(routing_hash_str), Some(msg_id.clone()), None,
+                        Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
+                    ).await;
+                }
+            }
+
+            // Fragments
+            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_bg {
+                Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
             } else if let Some(ref d) = payload.file_data {
-                Box::new(std::io::Cursor::new(d.clone()))
-            } else {
-                return Err("No data source".into());
-            };
-            let mut buffer = [0u8; 1279]; 
-            let mut fragment_index = 0;
-            println!("[OUTBOX-GROUP] Starting group media dispatch. TID: {}, MsgID: {}, Total Fragments: {}", transfer_id, msg_id, total_fragments);
+                Box::new(std::io::Cursor::new(d.to_vec()))
+            } else { return; };
 
-            use std::io::Read;
+            let mut fragment_index = 0;
+            let mut buffer = vec![0u8; 1279];
+            let total_fragments = (file_size as f64 / 1279.0).ceil() as u32;
+
             loop {
                 let mut n = 0;
                 while n < 1279 {
@@ -915,136 +875,78 @@ pub fn process_outgoing_group_media(
                 if n == 0 { break; }
                 let chunk = &buffer[..n];
                 hasher.update(chunk);
-
-                // A. Vault block
-                let vault_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let vault_chunk_encrypted = vault_cipher.encrypt(&vault_nonce, chunk).map_err(|e| e.to_string())?;
-                vault_file.write_all(&vault_nonce).map_err(|e| e.to_string())?;
-                vault_file.write_all(&vault_chunk_encrypted).map_err(|e| e.to_string())?;
-
-                // B. Network Fragment
-                let net_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let net_chunk_encrypted = net_cipher.encrypt(&net_nonce, chunk).map_err(|e| e.to_string())?;
                 
-                let mut packet_data = Vec::with_capacity(net_nonce.len() + net_chunk_encrypted.len());
-                packet_data.extend_from_slice(&net_nonce);
-                packet_data.extend_from_slice(&net_chunk_encrypted);
+                let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
+                use std::io::Write;
+                let _ = vault_file.write_all(&v_nonce);
+                let _ = vault_file.write_all(&v_cipher);
 
-                if fragment_index % 50 == 0 {
-                    println!("[OUTBOX-GROUP] Fragment {} size: {} bytes (+81B header)", fragment_index, packet_data.len());
-                }
+                let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
+                let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                let t_cipher = transit_cipher.encrypt(&t_nonce, chunk).unwrap();
+                let mut packet = Vec::with_capacity(t_cipher.len() + 24);
+                packet.extend_from_slice(&t_nonce);
+                packet.extend_from_slice(&t_cipher);
 
                 for member_id in members {
                     if member_id == &own_id { continue; }
-                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id).to_string();
+                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
                     let mut routing_hash = [0u8; 64];
                     let r_bytes = routing_hash_str.as_bytes();
                     let r_len = std::cmp::min(r_bytes.len(), 64);
                     routing_hash[..r_len].copy_from_slice(&r_bytes[..r_len]);
 
-                    let _ = crate::commands::network::transit::internal_dispatch_fragment(
-                        app.clone(),
-                        &net_state,
-                        routing_hash,
-                        Some(msg_id.clone()),
-                        transfer_id,
-                        fragment_index,
-                        total_fragments,
-                        &packet_data,
-                        true,
-                        false,
+                    let _ = internal_dispatch_fragment(
+                        app.clone(), &net_state, routing_hash, Some(msg_id.clone()),
+                        transfer_id, fragment_index,
+                        total_fragments, &packet, true, false
                     ).await;
                 }
-
                 fragment_index += 1;
             }
-            println!("[OUTBOX-GROUP] All group binary fragments dispatched. TID: {}", transfer_id);
-            vault_file.sync_all().map_err(|e| e.to_string())?;
 
-            let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
-            let metadata_json = json!({
+            // Final Metadata
+            let final_hash = hex::encode(hasher.finalize());
+            let final_meta = serde_json::json!({
                 "type": "file",
                 "id": msg_id.clone(),
                 "transfer_id": transfer_id,
                 "size": file_size,
                 "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
                 "duration": payload.duration,
-                "timestamp": timestamp,
                 "thumbnail": payload.thumbnail,
+                "replyTo": payload.reply_to,
                 "isGroup": true,
                 "groupId": payload.recipient,
                 "groupName": payload.group_name,
-                "replyTo": payload.reply_to,
+                "timestamp": timestamp,
                 "bundle": {
                     "key": key_b64,
                     "file_name": payload.file_name,
                     "file_type": payload.file_type,
-                    "sha256": hex::encode(hasher.finalize())
+                    "sha256": final_hash
                 }
             });
 
-            // Local DB save
-            let db_msg = DbMessage {
-                id: msg_id.clone(),
-                chat_address: payload.recipient.clone(),
-                sender_hash: own_id.clone(),
-                content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
-                timestamp,
-                r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
-                status: "sent".to_string(),
-                attachment_json: Some(serde_json::json!({
-                    "fileName": payload.file_name,
-                    "fileType": payload.file_type,
-                    "size": file_size,
-                    "duration": payload.duration,
-                    "thumbnail": payload.thumbnail,
-                    "transferId": transfer_id,
-                    "key": key_b64,
-                    "vaultPath": vault_path.to_string_lossy().to_string()
-                }).to_string()),
-                is_starred: false,
-                is_group: true,
-                reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
-            };
-            internal_db_save_message(&db_state, db_msg.clone()).await?;
-
-            // Metadata dispatch to all members
             for member_id in members {
                 if member_id == &own_id { continue; }
-                let routing_hash = member_id.split('.').next().unwrap_or(member_id).to_string();
-
-                if let Ok(encrypted_metadata) = internal_signal_encrypt(app.clone(), &net_state, member_id, metadata_json.to_string()).await {
+                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, member_id, final_meta.to_string()).await {
+                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
                     let _ = crate::commands::network::transit::internal_send_to_network(
-                        app.clone(),
-                        &net_state,
-                        Some(routing_hash.clone()),
-                        Some(msg_id.clone()),
-                        None,
-                        Some(encrypted_metadata.to_string().into_bytes()),
-                        true,
-                        false,
-                        Some(transfer_id),
-                        true
+                        app.clone(), &net_state, Some(routing_hash_str), Some(msg_id.clone()), None,
+                        Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
                     ).await;
-
-                    let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
-                    if let Some(conn) = lock.as_ref() {
-                        let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", params![msg_id]);
-                        let _ = conn.execute("UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)", params![payload.recipient]);
-                    }
                 }
             }
 
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
-            if let Some(obj) = final_json.as_object_mut() {
-                obj.insert("chatAlias".to_string(), serde_json::json!(payload.group_name));
-                obj.insert("chatMembers".to_string(), serde_json::json!(payload.group_members.clone()));
-                obj.insert("status".to_string(), json!("sent"));
+            let lock = db_state.conn.lock().unwrap();
+            if let Some(conn) = lock.as_ref() {
+                let _ = conn.execute("UPDATE messages SET status = 'sent' WHERE id = ?1", rusqlite::params![msg_id]);
             }
-            app.emit("msg://added", final_json.clone()).map_err(|e| e.to_string())?;
-            app.emit("msg://status", json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient })).map_err(|e| e.to_string())?;
+            let _ = app.emit("msg://status", serde_json::json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }));
+        });
+    });
 
-            Ok(final_json)
-        })
-    }).join().map_err(|_| "Thread panicked".to_string())?
+    Ok(serde_json::to_value(&db_msg).unwrap())
 }
