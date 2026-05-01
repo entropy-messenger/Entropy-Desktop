@@ -307,7 +307,7 @@ pub(crate) async fn internal_establish_network(
                                                             if reason == "media_offline" { "offline" } else { "failed" }
                                                         } else { "sent" };
                                                         let db_state = app.state::<DbState>();
-                                                        if let Ok(db_lock) = db_state.conn.lock() && let Some(conn) = db_lock.as_ref() {
+                                                        if let Ok(conn) = db_state.get_conn() {
                                                             let chat_info: Option<(String, String)> = conn.query_row(
                                                                 "SELECT chat_address, status FROM messages WHERE LOWER(id) = LOWER(?1)",
                                                                 [&id],
@@ -354,13 +354,9 @@ pub(crate) async fn internal_establish_network(
                                                                 let _ = app_inner.emit("network-status", "mining");
                                                                 tokio::task::spawn_local(async move {
                                                                     let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                    let app_sig = app_inner.clone();
-                                                                    let sig_res = tauri::async_runtime::spawn_blocking(move || {
-                                                                        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
-                                                                        rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await.map_err(|e: libsignal_protocol::SignalProtocolError| e.to_string()) })
-                                                                    }).await.map_err(|e: tauri::Error| e.to_string());
+                                                                    let sig_res = SqliteSignalStore::new(app_inner.clone()).get_identity_key_pair().await.map_err(|e| e.to_string());
                                                                     let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
-                                                                    if let Ok(Ok(kp)) = sig_res {
+                                                                    if let Ok(kp) = sig_res {
                                                                         let kp: IdentityKeyPair = kp;
                                                                         let mut rng = StdRng::from_os_rng();
                                                                         let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
@@ -501,11 +497,7 @@ pub async fn connect_network(
     let (final_id, final_token) = {
         let identity = if id_hash.is_none() {
             let db_state = app.state::<DbState>();
-            let lock = db_state
-                .conn
-                .lock()
-                .map_err(|_| "Database connection lock poisoned")?;
-            if let Some(conn) = lock.as_ref() {
+            if let Ok(conn) = db_state.get_conn() {
                 let id_res: Option<Vec<u8>> = conn
                     .query_row(
                         "SELECT public_key FROM signal_identity WHERE id = 0",

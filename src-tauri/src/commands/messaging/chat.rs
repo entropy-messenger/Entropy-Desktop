@@ -7,11 +7,7 @@ use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub async fn db_get_contacts(state: State<'_, DbState>) -> Result<Vec<DbContact>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let mut stmt = conn
         .prepare("SELECT hash, alias, is_blocked, trust_level, global_nickname FROM contacts")
@@ -42,11 +38,7 @@ pub async fn db_set_contact_blocked(
     hash: String,
     is_blocked: bool,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "INSERT INTO contacts (hash, is_blocked) VALUES (?1, ?2)
@@ -64,11 +56,7 @@ pub async fn db_set_contact_nickname(
     hash: String,
     alias: Option<String>,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "INSERT INTO contacts (hash, alias) VALUES (?1, ?2)
@@ -91,11 +79,7 @@ pub async fn db_set_contact_global_nickname(
     hash: String,
     nickname: Option<String>,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "INSERT INTO contacts (hash, global_nickname) VALUES (?1, ?2)
@@ -120,11 +104,7 @@ pub async fn db_get_messages(
     offset: u32,
     include_attachments: bool,
 ) -> Result<Vec<DbMessage>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let sql = if include_attachments {
         "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, is_group, reply_to_json
@@ -167,11 +147,7 @@ pub async fn db_search_messages(
     state: State<'_, DbState>,
     query: String,
 ) -> Result<Vec<DbMessage>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let mut stmt = conn.prepare(
         "SELECT m.id, m.chat_address, m.sender_hash, m.content, m.timestamp, m.type, m.status, NULL, m.is_starred, m.is_group, m.reply_to_json
@@ -212,11 +188,7 @@ pub async fn db_get_message_offset(
     chat_address: String,
     message_id: String,
 ) -> Result<u32, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let count: u32 = conn
         .query_row(
@@ -238,11 +210,7 @@ pub async fn db_update_messages(
     is_starred: Option<bool>,
     attachment_json: Option<String>,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     for id in ids {
         if let Some(s) = &status {
@@ -294,11 +262,7 @@ pub async fn db_upsert_chat(state: State<'_, DbState>, chat: DbChat) -> Result<(
 
 #[tauri::command]
 pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let mut stmt = conn.prepare(
         "SELECT
@@ -359,11 +323,7 @@ pub async fn db_get_chats(state: State<'_, DbState>) -> Result<Vec<DbChat>, Stri
 
 #[tauri::command]
 pub async fn db_delete_messages(state: State<'_, DbState>, ids: Vec<String>) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let mut affected_chats = HashSet::new();
     for id in &ids {
@@ -416,11 +376,7 @@ pub async fn db_set_chat_archived(
     address: String,
     is_archived: bool,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "UPDATE chats SET is_archived = ?1 WHERE address = ?2",
@@ -436,11 +392,7 @@ pub async fn db_set_chat_pinned(
     address: String,
     is_pinned: bool,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "UPDATE chats SET is_pinned = ?1 WHERE address = ?2",
@@ -455,11 +407,7 @@ pub async fn db_reset_unread_count(
     state: State<'_, DbState>,
     address: String,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "UPDATE chats SET unread_count = 0 WHERE address = ?1",
@@ -475,11 +423,7 @@ pub async fn db_delete_chat(
     state: State<'_, DbState>,
     address: String,
 ) -> Result<(), String> {
-    let mut conn_lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let mut stmt = conn
         .prepare("SELECT id FROM messages WHERE chat_address = ?")
@@ -507,11 +451,7 @@ pub async fn db_delete_chat(
 pub async fn db_get_starred_messages(
     state: tauri::State<'_, DbState>,
 ) -> Result<Vec<Value>, String> {
-    let conn_lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = conn_lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
     let mut stmt = conn.prepare(
         "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json
          FROM messages WHERE is_starred = 1 ORDER BY timestamp ASC"
@@ -542,11 +482,7 @@ pub async fn db_get_starred_messages(
 }
 
 pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "INSERT OR IGNORE INTO chats (address, is_group, alias, unread_count, is_archived)
@@ -612,11 +548,7 @@ pub async fn internal_db_save_message(state: &DbState, msg: DbMessage) -> Result
 }
 
 pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<(), String> {
-    let mut conn_lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     conn.execute(
         "INSERT INTO chats (address, is_group, alias, global_nickname, last_msg, last_timestamp, unread_count, is_archived, is_pinned, trust_level, is_blocked, last_sender_hash, last_status, is_active)

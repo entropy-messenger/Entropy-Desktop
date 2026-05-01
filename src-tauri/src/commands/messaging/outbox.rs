@@ -65,22 +65,15 @@ pub struct OutgoingMedia {
 }
 
 #[tauri::command]
-pub fn process_outgoing_text(
+pub async fn process_outgoing_text(
     app: AppHandle,
+    db_state: State<'_, DbState>,
+    net_state: State<'_, NetworkState>,
     payload: OutgoingText,
 ) -> Result<serde_json::Value, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let net_state = app.state::<NetworkState>();
-
-            if payload.content.chars().count() > 2000 {
-                return Err("Message too long (max 2000 characters)".into());
-            }
+    if payload.content.chars().count() > 2000 {
+        return Err("Message too long (max 2000 characters)".into());
+    }
 
             let msg_id = uuid::Uuid::new_v4().to_string();
             let timestamp = std::time::SystemTime::now()
@@ -115,19 +108,19 @@ pub fn process_outgoing_text(
 
             internal_db_save_message(&db_state, db_msg.clone()).await?;
 
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
             if let Some(obj) = final_json.as_object_mut() {
-                obj.insert(
+                let _ = obj.insert(
                     "chatAlias".to_string(),
                     serde_json::json!(payload.group_name),
                 );
-                obj.insert(
+                let _ = obj.insert(
                     "chatMembers".to_string(),
                     serde_json::json!(payload.group_members.clone()),
                 );
             }
             app.emit("msg://added", final_json.clone())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e: tauri::Error| e.to_string())?;
 
             let signal_payload = serde_json::json!({
                 "type": "text_msg",
@@ -170,32 +163,26 @@ pub fn process_outgoing_text(
 
             // transition state
             {
-                let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute(
-                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
-                        params![msg_id],
-                    );
-                    let _ = conn.execute(
-                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-                        params![payload.recipient],
-                    );
-                }
+                let conn = db_state.get_conn()?;
+                let _ = conn.execute(
+                    "UPDATE messages SET status = 'sent' WHERE id = ?1",
+                    params![msg_id],
+                );
+                let _ = conn.execute(
+                    "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+                    params![payload.recipient],
+                );
             }
             app.emit(
                 "msg://status",
                 json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e: tauri::Error| e.to_string())?;
 
             if let Some(obj) = final_json.as_object_mut() {
-                obj.insert("status".to_string(), json!("sent"));
+                let _ = obj.insert("status".to_string(), json!("sent"));
             }
             Ok(final_json)
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
@@ -216,7 +203,7 @@ pub fn process_outgoing_media(
         let canonical_path = std::fs::canonicalize(&path_buf)
             .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
         
-        let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+        let metadata = std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
         if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
             return Err("File too large. Maximum size is 10GB.".to_string());
         }
@@ -231,7 +218,7 @@ pub fn process_outgoing_media(
     };
 
     let file_size = if let Some(ref p) = canonical_path_opt {
-        std::fs::metadata(p).map_err(|e| e.to_string())?.len()
+        std::fs::metadata(p).map_err(|e: std::io::Error| e.to_string())?.len()
     } else if let Some(ref d) = payload.file_data {
         d.len() as u64
     } else { 0 };
@@ -418,8 +405,7 @@ pub fn process_outgoing_media(
                 "vaultPath": vault_path.to_string_lossy().to_string()
             });
 
-            let lock = db_state.conn.lock().unwrap();
-            if let Some(conn) = lock.as_ref() {
+            if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute(
                     "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
                     rusqlite::params![msg_id, final_attachment_obj.to_string()]
@@ -438,7 +424,7 @@ pub fn process_outgoing_media(
 }
 
 #[tauri::command]
-pub fn send_typing_status(
+pub async fn send_typing_status(
     app: AppHandle,
     db_state: State<'_, DbState>,
     net_state: State<'_, NetworkState>,
@@ -447,16 +433,12 @@ pub fn send_typing_status(
 ) -> Result<(), String> {
     // restrict to 1:1
     {
-        let lock = db_state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
+        if let Ok(conn) = db_state.get_conn() {
             let is_group = conn
                 .query_row(
                     "SELECT is_group FROM chats WHERE address = ?1",
                     [&peer_hash],
-                    |r| r.get::<_, i32>(0),
+                    |r: &rusqlite::Row| r.get::<_, i32>(0),
                 )
                 .unwrap_or(0)
                 != 0;
@@ -466,36 +448,34 @@ pub fn send_typing_status(
         }
     }
 
-    tauri::async_runtime::block_on(async move {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let message =
-            json!({ "type": "typing", "isTyping": is_typing, "timestamp": timestamp }).to_string();
-        if let Ok(encrypted) =
-            internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
-        {
-            let _ = internal_send_to_network(
-                app.clone(),
-                &net_state,
-                Some(peer_hash.clone()),
-                None,
-                None,
-                Some(encrypted.to_string().into_bytes()),
-                true,
-                false,
-                None,
-                true,
-            )
-            .await;
-        }
-        Ok(())
-    })
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let message =
+        json!({ "type": "typing", "isTyping": is_typing, "timestamp": timestamp }).to_string();
+    if let Ok(encrypted) =
+        internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
+    {
+        let _ = internal_send_to_network(
+            app.clone(),
+            &net_state,
+            Some(peer_hash.clone()),
+            None,
+            None,
+            Some(encrypted.to_string().into_bytes()),
+            true,
+            false,
+            None,
+            true,
+        )
+        .await;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn send_receipt(
+pub async fn send_receipt(
     app: AppHandle,
     db_state: State<'_, DbState>,
     net_state: State<'_, NetworkState>,
@@ -504,101 +484,85 @@ pub fn send_receipt(
     status: String,
 ) -> Result<(), String> {
     // enforce 1:1 delivery receipts
-    {
-        let lock = db_state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
-            let is_group = conn
-                .query_row(
-                    "SELECT is_group FROM chats WHERE address = ?1",
-                    [&peer_hash],
-                    |r| r.get::<_, i32>(0),
-                )
-                .unwrap_or(0)
-                != 0;
-            if is_group {
-                return Ok(());
-            }
+    if let Ok(conn) = db_state.get_conn() {
+        let is_group = conn
+            .query_row(
+                "SELECT is_group FROM chats WHERE address = ?1",
+                [&peer_hash],
+                |r: &rusqlite::Row| r.get::<_, i32>(0),
+            )
+            .unwrap_or(0)
+            != 0;
+        if is_group {
+            return Ok(());
         }
     }
 
-    tauri::async_runtime::block_on(async move {
-        let message = json!({ "type": "receipt", "msgIds": msg_ids, "status": status }).to_string();
-        if let Ok(encrypted) =
-            internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
-        {
-            // Flag as is_binary=true, is_media=false
-            let _ = internal_send_to_network(
-                app.clone(),
-                &net_state,
-                Some(peer_hash.clone()),
-                None,
-                None,
-                Some(encrypted.to_string().into_bytes()),
-                true,
-                false,
-                None,
-                true,
-            )
-            .await;
-        }
-        Ok(())
-    })
+    let message = json!({ "type": "receipt", "msgIds": msg_ids, "status": status }).to_string();
+    if let Ok(encrypted) =
+        internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
+    {
+        // Flag as is_binary=true, is_media=false
+        let _ = internal_send_to_network(
+            app.clone(),
+            &net_state,
+            Some(peer_hash.clone()),
+            None,
+            None,
+            Some(encrypted.to_string().into_bytes()),
+            true,
+            false,
+            None,
+            true,
+        )
+        .await;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn send_profile_update(
+pub async fn send_profile_update(
     app: AppHandle,
     _db_state: State<'_, DbState>,
     net_state: State<'_, NetworkState>,
     peer_hash: String,
     alias: Option<String>,
 ) -> Result<(), String> {
-    tauri::async_runtime::block_on(async move {
-        let message = json!({
-            "type": "profile_update",
-            "alias": alias,
-            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-        }).to_string();
+    let message = json!({
+        "type": "profile_update",
+        "alias": alias,
+        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    }).to_string();
 
-        if let Ok(encrypted) =
-            internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
-        {
-            // dispatch persistent update
-            let payload_bytes = encrypted.to_string().into_bytes();
-            let _ = internal_send_to_network(
-                app.clone(),
-                &net_state,
-                Some(peer_hash.clone()),
-                None,
-                None,
-                Some(payload_bytes),
-                true,  // is_binary
-                false, // is_media
-                None,  // transfer_id_override
-                false, // is_volatile
-            )
-            .await;
-        }
-        Ok(())
-    })
+    if let Ok(encrypted) =
+        internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
+    {
+        // dispatch persistent update
+        let payload_bytes = encrypted.to_string().into_bytes();
+        let _ = internal_send_to_network(
+            app.clone(),
+            &net_state,
+            Some(peer_hash.clone()),
+            None,
+            None,
+            Some(payload_bytes),
+            true,  // is_binary
+            false, // is_media
+            None,  // transfer_id_override
+            false, // is_volatile
+        )
+        .await;
+    }
+    Ok(())
 }
 
 #[tauri::command]
-pub fn process_outgoing_group_text(
+pub async fn process_outgoing_group_text(
     app: AppHandle,
     payload: OutgoingText,
 ) -> Result<serde_json::Value, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let net_state = app.state::<NetworkState>();
+    let db_state = app.state::<DbState>();
+    let net_state = app.state::<NetworkState>();
 
             if payload.content.chars().count() > 2000 {
                 return Err("Message too long (max 2000 characters)".into());
@@ -685,21 +649,18 @@ pub fn process_outgoing_group_text(
                 }
             }
 
-            {
-                let lock = db_state.conn.lock().map_err(|_| "DB lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute(
-                        "UPDATE messages SET status = 'sent' WHERE id = ?1",
-                        params![msg_id],
-                    );
-                    let _ = conn.execute(
-                        "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-                        params![payload.recipient],
-                    );
-                }
+            if let Ok(conn) = db_state.get_conn() {
+                let _ = conn.execute(
+                    "UPDATE messages SET status = 'sent' WHERE id = ?1",
+                    params![msg_id],
+                );
+                let _ = conn.execute(
+                    "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+                    params![payload.recipient],
+                );
             }
 
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+            let mut final_json = serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
             if let Some(obj) = final_json.as_object_mut() {
                 obj.insert(
                     "chatAlias".to_string(),
@@ -721,14 +682,10 @@ pub fn process_outgoing_group_text(
             .map_err(|e| e.to_string())?;
 
             Ok(final_json)
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
-pub fn process_outgoing_group_media(
+pub async fn process_outgoing_group_media(
     app: AppHandle,
     payload: OutgoingMedia,
 ) -> Result<serde_json::Value, String> {
@@ -745,7 +702,7 @@ pub fn process_outgoing_group_media(
         let canonical_path = std::fs::canonicalize(&path_buf)
             .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
         
-        let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
+        let metadata = std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
         if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
             return Err("File too large. Maximum size is 10GB.".to_string());
         }
@@ -760,7 +717,7 @@ pub fn process_outgoing_group_media(
     };
 
     let file_size = if let Some(ref p) = canonical_path_opt {
-        std::fs::metadata(p).map_err(|e| e.to_string())?.len()
+        std::fs::metadata(p).map_err(|e: std::io::Error| e.to_string())?.len()
     } else if let Some(ref d) = payload.file_data {
         d.len() as u64
     } else { 0 };
@@ -791,15 +748,8 @@ pub fn process_outgoing_group_media(
         reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
     };
 
-    {
-        let db_state = db_state.clone();
-        let db_msg = db_msg.clone();
-        let app = app.clone();
-        tauri::async_runtime::block_on(async move {
-            let _ = crate::commands::messaging::chat::internal_db_save_message(&db_state, db_msg.clone()).await;
-            let _ = app.emit("msg://added", db_msg);
-        });
-    }
+    internal_db_save_message(&db_state, db_msg.clone()).await?;
+    let _ = app.emit("msg://added", db_msg.clone());
 
     // 3. Background Processing
     let app_bg = app.clone();
@@ -807,9 +757,7 @@ pub fn process_outgoing_group_media(
     let msg_id_bg = msg_id.clone();
     let canonical_path_bg = canonical_path_opt.clone();
 
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async move {
+    tokio::spawn(async move {
             let app = app_bg;
             let payload = payload_bg;
             let msg_id = msg_id_bg;
@@ -867,7 +815,7 @@ pub fn process_outgoing_group_media(
             }
 
             // Fragments
-            let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_bg {
+            let mut reader: Box<dyn std::io::Read + Send> = if let Some(ref p) = canonical_path_bg {
                 Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
             } else if let Some(ref d) = payload.file_data {
                 Box::new(std::io::Cursor::new(d.to_vec()))
@@ -965,8 +913,7 @@ pub fn process_outgoing_group_media(
                 "vaultPath": vault_path.to_string_lossy().to_string()
             });
 
-            let lock = db_state.conn.lock().unwrap();
-            if let Some(conn) = lock.as_ref() {
+            if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute(
                     "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
                     rusqlite::params![msg_id, final_attachment_obj.to_string()]
@@ -979,7 +926,6 @@ pub fn process_outgoing_group_media(
                 "attachment": final_attachment_obj
             }));
         });
-    });
 
     Ok(serde_json::to_value(&db_msg).unwrap())
 }

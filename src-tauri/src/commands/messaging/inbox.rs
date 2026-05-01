@@ -91,7 +91,7 @@ async fn internal_signal_decrypt(
     .await
     .map_err(|e: SignalProtocolError| e.to_string())?;
 
-    String::from_utf8(ptext).map_err(|e| e.to_string())
+    String::from_utf8(ptext).map_err(|e: std::string::FromUtf8Error| e.to_string())
 }
 
 pub async fn process_incoming_binary(
@@ -129,16 +129,12 @@ pub async fn process_incoming_binary(
 
     // contact bridge filter
     if !sender.is_empty() {
-        let lock = db_state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
+        if let Ok(conn) = db_state.get_conn() {
             let is_blocked = conn
                 .query_row(
                     "SELECT is_blocked FROM contacts WHERE hash = ?1",
                     params![sender],
-                    |row| row.get::<_, i32>(0),
+                    |row: &rusqlite::Row| row.get::<_, i32>(0),
                 )
                 .unwrap_or(0)
                 != 0;
@@ -214,28 +210,27 @@ pub async fn process_incoming_binary(
                 last_activity: std::time::Instant::now(), file_handle: None, received_count: 0,
             });
 
-            if (index as usize) < assembler.received_chunks.len() {
-                if !assembler.received_chunks[index as usize] {
-                    if assembler.file_handle.is_none() {
-                        let db_state = app.state::<DbState>();
-                        if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
-                            let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
-                            let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
-                            let file_path = media_dir.join(&temp_filename);
-                            if let Ok(f) = std::fs::OpenOptions::new().create(true).write(true).open(&file_path) {
-                                assembler.file_handle = Some(f);
-                            }
+            if (index as usize) < assembler.received_chunks.len() && !assembler.received_chunks[index as usize] {
+                if assembler.file_handle.is_none() {
+                    let db_state = app.state::<DbState>();
+                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                        let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                        let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                        let file_path = media_dir.join(&temp_filename);
+                        if let Ok(f) = std::fs::OpenOptions::new().create(true).write(true).open(&file_path) {
+                            assembler.file_handle = Some(f);
                         }
                     }
-
-                    if let Some(ref mut f) = assembler.file_handle {
-                        use std::io::{Seek, SeekFrom, Write};
-                        let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
-                        let _ = f.write_all(chunk_data);
-                    }
-                    assembler.received_chunks[index as usize] = true; assembler.received_count += 1;
-                    assembler.last_activity = std::time::Instant::now();
                 }
+
+                if let Some(ref mut f) = assembler.file_handle {
+                    use std::io::{Seek, SeekFrom, Write};
+                    let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
+                    let _ = f.write_all(chunk_data);
+                }
+                assembler.received_chunks[index as usize] = true;
+                assembler.received_count += 1;
+                assembler.last_activity = std::time::Instant::now();
             }
 
             let current_count = assembler.received_count;
@@ -256,7 +251,7 @@ pub async fn process_incoming_binary(
                 println!("[INBOX] Reassembly complete for TID: {}. FrameType: {}", transfer_id, frame_type);
                 if frame_type == 0x01 || frame_type == 0x04 {
                     let db_state = app.state::<DbState>();
-                    let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                    let type_suffix = "sig";
                     let temp_filename = format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
                     if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
                         let file_path = media_dir.join(&temp_filename);
@@ -271,8 +266,6 @@ pub async fn process_incoming_binary(
                         (false, None)
                     }
                 } else {
-                    // For media (0x02), we don't read into RAM here.
-                    // The specialized handler will handle the file.
                     assemblers.remove(&transfer_key);
                     (true, None)
                 }
@@ -296,26 +289,25 @@ pub async fn process_incoming_binary(
                 match internal_signal_decrypt(app.clone(), &sender, msg_type, &body_bytes).await {
                     Ok(decrypted_str) => {
                         let decrypted_json: serde_json::Value =
-                            serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
+                            serde_json::from_str(&decrypted_str).map_err(|e: serde_json::Error| e.to_string())?;
 
                         // check group status
                         if let Some(p_type) = decrypted_json["type"].as_str()
                             && p_type != "group_invite"
                             && let Some(gid) = decrypted_json["groupId"].as_str()
                         {
-                            let lock = db_state.conn.lock().map_err(|_| "DB Lock poisoned")?;
-                            if let Some(conn) = lock.as_ref() {
-                                let is_active: i32 = conn
-                                    .query_row(
-                                        "SELECT is_active FROM chats WHERE address = ?1",
-                                        params![gid],
-                                        |r| r.get(0),
-                                    )
-                                    .unwrap_or(1); // Default to 1 (active) if group not found yet
+                            let db_state = app.state::<DbState>();
+                            let conn = db_state.get_conn()?;
+                            let is_active: i32 = conn
+                                .query_row(
+                                    "SELECT is_active FROM chats WHERE address = ?1",
+                                    params![gid],
+                                    |r| r.get(0),
+                                )
+                                .unwrap_or(1);
 
-                                if is_active == 0 {
-                                    return Ok(());
-                                }
+                            if is_active == 0 {
+                                return Ok(());
                             }
                         }
 
@@ -530,11 +522,7 @@ pub async fn process_incoming_binary(
                                     };
 
                                     {
-                                        let lock = db_state
-                                            .conn
-                                            .lock()
-                                            .map_err(|_| "Database connection lock poisoned")?;
-                                        if let Some(conn) = lock.as_ref() {
+                                        if let Ok(conn) = db_state.get_conn() {
                                             // Detection of changes in group membership
                                             if let Some(new_members) =
                                                 decrypted_json["newMembers"].as_array()
@@ -562,11 +550,11 @@ pub async fn process_incoming_binary(
                                             } else if !m_strings.is_empty() {
                                                 // Fallback
                                                 let mut current_m = Vec::new();
-                                                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                                                    && let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0))
-                                                {
-                                                    for m in rows.flatten() {
-                                                        current_m.push(m);
+                                                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1") {
+                                                    if let Ok(rows) = stmt.query_map(params![&gid], |row: &rusqlite::Row| row.get::<_, String>(0)) {
+                                                        for m in rows.flatten() {
+                                                            current_m.push(m);
+                                                        }
                                                     }
                                                 }
                                                 for m in &m_strings {
@@ -680,16 +668,12 @@ pub async fn process_incoming_binary(
 
                                 // If it's a group and we have a name, ensure the chat record exists with the CORRECT name
                                 if is_group {
-                                    let lock = db_state
-                                        .conn
-                                        .lock()
-                                        .map_err(|_| "Database connection lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
+                                    if let Ok(conn) = db_state.get_conn() {
                                         let is_active: i32 = conn
                                             .query_row(
                                                 "SELECT is_active FROM chats WHERE address = ?1",
                                                 params![chat_address],
-                                                |r| r.get(0),
+                                                |r: &rusqlite::Row| r.get(0),
                                             )
                                             .unwrap_or(1);
 
@@ -701,12 +685,12 @@ pub async fn process_incoming_binary(
 
                                 internal_db_save_message(&db_state, db_msg.clone()).await?;
                                 let mut final_json =
-                                    serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                    serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
                                 if is_group && let Some(obj) = final_json.as_object_mut() {
-                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    let _ = obj.insert("chatAlias".to_string(), json!(group_name));
                                     if let Some(members) = decrypted_json["groupMembers"].as_array()
                                     {
-                                        obj.insert("chatMembers".to_string(), json!(members));
+                                        let _ = obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
@@ -976,17 +960,13 @@ pub async fn process_incoming_binary(
 
                                 // Auto-create/rename chat for media too
                                 if is_group {
-                                    let lock = db_state
-                                        .conn
-                                        .lock()
-                                        .map_err(|_| "Database connection lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
+                                    if let Ok(conn) = db_state.get_conn() {
                                         // Always update the alias to the one provided in the message metadata
                                         let _ = conn.execute(
                                             "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
                                              ON CONFLICT(address) DO UPDATE SET 
-                                                alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
-                                                is_group = 1",
+                                                 alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
+                                                 is_group = 1",
                                             params![chat_address, group_name],
                                         );
 
@@ -1011,12 +991,12 @@ pub async fn process_incoming_binary(
                                 internal_db_save_message(&db_state, db_msg.clone()).await?;
 
                                 let mut final_json =
-                                    serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                    serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
                                 if is_group && let Some(obj) = final_json.as_object_mut() {
-                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    let _ = obj.insert("chatAlias".to_string(), json!(group_name));
                                     if let Some(members) = decrypted_json["groupMembers"].as_array()
                                     {
-                                        obj.insert("chatMembers".to_string(), json!(members));
+                                        let _ = obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())

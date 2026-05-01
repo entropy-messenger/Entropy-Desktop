@@ -22,7 +22,6 @@ pub(crate) async fn internal_signal_encrypt(
     remote_hash: &str,
     message: String,
 ) -> Result<serde_json::Value, String> {
-    let mut store = SqliteSignalStore::new(app.clone());
     let address = ProtocolAddress::new(
         remote_hash.to_string(),
         DeviceId::try_from(1u32).expect("valid ID"),
@@ -39,28 +38,34 @@ pub(crate) async fn internal_signal_encrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
-    let res: Result<CiphertextMessage, SignalProtocolError> = {
+    let (app_clone, address_clone, own_address_clone) = (app.clone(), address.clone(), own_address.clone());
+    let msg_clone = message.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
         let mut rng = StdRng::from_os_rng();
-
-        // Strictly require a PQXDH session
-        if let Ok(Some(_)) = store.load_session(&address).await {
-            message_encrypt(
-                message.as_bytes(),
-                &address,
-                &own_address,
-                &mut store.clone(),
-                &mut store,
-                std::time::SystemTime::now(),
-                &mut rng,
-            )
-            .await
-        } else {
-            Err(SignalProtocolError::InvalidState(
-                "SessionStore",
-                "Session not found".into(),
-            ))
-        }
-    };
+        let mut store = SqliteSignalStore::new(app_clone);
+        tauri::async_runtime::block_on(async {
+            // Strictly require a PQXDH session
+            if let Ok(Some(_)) = store.load_session(&address_clone).await {
+                message_encrypt(
+                    msg_clone.as_bytes(),
+                    &address_clone,
+                    &own_address_clone,
+                    &mut store.clone(),
+                    &mut store,
+                    std::time::SystemTime::now(),
+                    &mut rng,
+                )
+                .await
+            } else {
+                Err(SignalProtocolError::InvalidState(
+                    "SessionStore",
+                    "Session not found".into(),
+                ))
+            }
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     match res {
         Ok(ciphertext) => {
@@ -116,18 +121,26 @@ pub(crate) async fn internal_signal_encrypt(
 
             internal_establish_session_logic(app.clone(), remote_hash, bundle).await?;
 
-            let mut store = SqliteSignalStore::new(app.clone());
-            let mut rng = StdRng::from_os_rng();
-            let ciphertext = message_encrypt(
-                message.as_bytes(),
-                &address,
-                &own_address,
-                &mut store.clone(),
-                &mut store,
-                std::time::SystemTime::now(),
-                &mut rng,
-            )
+            let app_clone = app.clone();
+            let (address_clone, own_address_clone) = (address.clone(), own_address.clone());
+            let ciphertext = tauri::async_runtime::spawn_blocking(move || {
+                let mut store = SqliteSignalStore::new(app_clone);
+                let mut rng = StdRng::from_os_rng();
+                tauri::async_runtime::block_on(async {
+                    message_encrypt(
+                        message.as_bytes(),
+                        &address_clone,
+                        &own_address_clone,
+                        &mut store.clone(),
+                        &mut store,
+                        std::time::SystemTime::now(),
+                        &mut rng,
+                    )
+                    .await
+                })
+            })
             .await
+            .map_err(|e| e.to_string())?
             .map_err(|e: SignalProtocolError| e.to_string())?;
 
             let (type_val, body) = match ciphertext {
@@ -149,17 +162,16 @@ pub(crate) async fn internal_signal_encrypt(
     }
 }
 
-pub fn signal_get_bundle(
+pub async fn signal_get_bundle(
     handle: tauri::AppHandle,
     count: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    let key_count = count.unwrap_or(100).min(200);
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let mut store = SqliteSignalStore::new(handle.clone());
-            let mut rng = StdRng::from_os_rng();
+    tauri::async_runtime::spawn_blocking(move || {
+        let key_count = count.unwrap_or(100).min(200);
+        let mut store = SqliteSignalStore::new(handle.clone());
+        let mut rng = StdRng::from_os_rng();
 
+        tauri::async_runtime::block_on(async {
             let identity_key_pair = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
             let registration_id: u32 = store.get_local_registration_id().await.map_err(|e: SignalProtocolError| e.to_string())?;
 
@@ -221,7 +233,7 @@ pub fn signal_get_bundle(
                 }
             }))
         })
-    }).join().map_err(|_| "Thread panicked".to_string())?
+    }).await.map_err(|e| e.to_string())?
 }
 
 fn internal_decode_key(s: &str) -> Result<Vec<u8>, String> {
@@ -242,7 +254,6 @@ pub(crate) async fn internal_establish_session_logic(
     remote_hash: &str,
     bundle: serde_json::Value,
 ) -> Result<(), String> {
-    let mut store = SqliteSignalStore::new(app.clone());
     let address = ProtocolAddress::new(
         remote_hash.to_string(),
         DeviceId::try_from(1u32).expect("valid ID"),
@@ -258,17 +269,15 @@ pub(crate) async fn internal_establish_session_logic(
 
     let mut existing_trust = 1;
     {
-        let state = app.state::<DbState>();
-        let lock = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
-            let res: Result<(Vec<u8>, i32), _> = conn.query_row(
-                "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
-                rusqlite::params![address.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            );
+            let res: Result<(Vec<u8>, i32), _> = {
+                let db_state = app.state::<DbState>();
+                let conn = db_state.get_conn()?;
+                conn.query_row(
+                    "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
+                    rusqlite::params![address.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                ).map_err(|e| e.to_string())
+            };
 
             if let Ok((old_key, old_trust)) = res {
                 let old_key_stripped = if old_key.len() == 33 && old_key[0] == 0x05 {
@@ -280,6 +289,8 @@ pub(crate) async fn internal_establish_session_logic(
 
                 if old_key_stripped != new_key_stripped {
                     existing_trust = 0;
+                    let db_state = app.state::<DbState>();
+                    let conn = db_state.get_conn()?;
                     let _ = conn.execute(
                         "UPDATE contacts SET trust_level = 0 WHERE hash = ?1",
                         rusqlite::params![remote_hash],
@@ -288,7 +299,6 @@ pub(crate) async fn internal_establish_session_logic(
                     existing_trust = old_trust;
                 }
             }
-        }
     }
 
     if identity_key_bytes.len() == 32 {
@@ -398,30 +408,34 @@ pub(crate) async fn internal_establish_session_logic(
         ));
     }
 
-    let mut rng = StdRng::from_os_rng();
-    process_prekey_bundle(
-        &address,
-        &mut store.clone(),
-        &mut store,
-        &prekey_bundle,
-        std::time::SystemTime::now(),
-        &mut rng,
-    )
+    let app_clone = app.clone();
+    let address_sync = address.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut rng = StdRng::from_os_rng();
+        let mut store = SqliteSignalStore::new(app_clone);
+        tauri::async_runtime::block_on(async {
+            process_prekey_bundle(
+                &address_sync,
+                &mut store.clone(),
+                &mut store,
+                &prekey_bundle,
+                std::time::SystemTime::now(),
+                &mut rng,
+            )
+            .await
+        })
+    })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?
+    .map_err(|e: SignalProtocolError| e.to_string())?;
 
     {
-        let state = app.state::<DbState>();
-        let lock = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
-            let _ = conn.execute(
-                "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
-                rusqlite::params![existing_trust, address.to_string()],
-            );
-        }
+        let db_state = app.state::<DbState>();
+        let conn = db_state.get_conn()?;
+        let _ = conn.execute(
+            "UPDATE signal_identities_remote SET trust_level = ?1 WHERE address = ?2",
+            rusqlite::params![existing_trust, address.to_string()],
+        );
     }
 
     Ok(())
@@ -429,41 +443,51 @@ pub(crate) async fn internal_establish_session_logic(
 
 #[tauri::command]
 pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
-    let handle_clone = handle.clone();
-    let result: Result<String, String> = tauri::async_runtime::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let store = SqliteSignalStore::new(handle_clone.clone());
-            if let Ok(kp) = store.get_identity_key_pair().await {
-                let mut pub_key_raw = kp.identity_key().serialize().to_vec();
-                if pub_key_raw.len() == 33 && pub_key_raw[0] == 0x05 { pub_key_raw.remove(0); }
-                return Ok::<String, String>(hex::encode(pub_key_raw));
-            }
-            let mut rng = StdRng::from_os_rng();
-            let identity_key_pair = IdentityKeyPair::generate(&mut rng);
-            let registration_id: u32 = rand::random::<u32>() & 0x3FFF;
-            let mut pub_bytes = identity_key_pair.identity_key().serialize().to_vec();
-            let priv_bytes = identity_key_pair.private_key().serialize();
-
-            let db_state = handle_clone.state::<DbState>();
-            let db_lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
-            let conn = db_lock.as_ref().ok_or("Database not initialized")?;
-
-            conn.execute(
-                "INSERT OR REPLACE INTO signal_identity (id, registration_id, public_key, private_key) VALUES (0, ?1, ?2, ?3)",
-                rusqlite::params![registration_id, &pub_bytes[..], &priv_bytes[..]],
-            ).map_err(|e: rusqlite::Error| e.to_string())?;
-
-            if pub_bytes.len() == 33 && pub_bytes[0] == 0x05 { pub_bytes.remove(0); }
-            Ok::<String, String>(hex::encode(pub_bytes))
+    let store = SqliteSignalStore::new(handle.clone());
+    let store_clone = store.clone();
+    let kp_res = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(async {
+            store_clone.get_identity_key_pair().await
         })
     }).await.map_err(|e| e.to_string())?;
 
-    let pub_key_hex = result?;
+    if let Ok(kp) = kp_res {
+        let mut pub_key_raw = kp.identity_key().serialize().to_vec();
+        if pub_key_raw.len() == 33 && pub_key_raw[0] == 0x05 { pub_key_raw.remove(0); }
+        let pub_key_hex = hex::encode(pub_key_raw);
+        
+        let state = handle.state::<NetworkState>();
+        let pub_bytes = hex::decode(&pub_key_hex).unwrap_or_default();
+        let mut hasher = Sha256::new();
+        hasher.update(&pub_bytes);
+        let id_hash = hex::encode(hasher.finalize());
+        if let Ok(mut hash_lock) = state.identity_hash.lock() {
+            *hash_lock = Some(id_hash);
+        }
+        return Ok(pub_key_hex);
+    }
+    
+    let mut rng = StdRng::from_os_rng();
+    let identity_key_pair = IdentityKeyPair::generate(&mut rng);
+    let registration_id: u32 = rand::random::<u32>() & 0x3FFF;
+    let mut pub_bytes = identity_key_pair.identity_key().serialize().to_vec();
+    let priv_bytes = identity_key_pair.private_key().serialize();
+
+    let db_state = handle.state::<DbState>();
+    let conn = db_state.get_conn()?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO signal_identity (id, registration_id, public_key, private_key) VALUES (0, ?1, ?2, ?3)",
+        rusqlite::params![registration_id, &pub_bytes[..], &priv_bytes[..]],
+    ).map_err(|e: rusqlite::Error| e.to_string())?;
+
+    if pub_bytes.len() == 33 && pub_bytes[0] == 0x05 { pub_bytes.remove(0); }
+    let pub_key_hex = hex::encode(pub_bytes);
+
     let state = handle.state::<NetworkState>();
-    let pub_bytes = hex::decode(&pub_key_hex).unwrap_or_default();
+    let pub_bytes_dec = hex::decode(&pub_key_hex).unwrap_or_default();
     let mut hasher = Sha256::new();
-    hasher.update(&pub_bytes);
+    hasher.update(&pub_bytes_dec);
     let id_hash = hex::encode(hasher.finalize());
     if let Ok(mut hash_lock) = state.identity_hash.lock() {
         *hash_lock = Some(id_hash);
@@ -472,92 +496,76 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn signal_sync_keys(handle: AppHandle, count: Option<u32>) -> Result<(), String> {
-    let handle_clone = handle.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let state = handle_clone.state::<NetworkState>();
-            let raw_bundle = signal_get_bundle(handle_clone.clone(), count).map_err(|e| e.to_string())?;
-            let id_hash = {
-                let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
-                lock.clone().ok_or("No identity hash in network state")?
-            };
-            let mut ik_bytes = hex::decode(raw_bundle["identityKey"].as_str().unwrap_or("")).unwrap_or_default();
-            if ik_bytes.len() == 33 && ik_bytes[0] == 0x05 { ik_bytes.remove(0); }
-            let bundle = json!({
-                "identity_hash": id_hash,
-                "registrationId": raw_bundle["registrationId"],
-                "identityKey": base64::engine::general_purpose::STANDARD.encode(&ik_bytes),
-                "signedPreKey": {
-                    "id": raw_bundle["signedPreKey"]["id"],
-                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()),
-                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default()),
-                },
-                "preKeys": raw_bundle["preKeys"],
-                "kyberPreKey": {
-                    "id": raw_bundle["kyberPreKey"]["id"],
-                    "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()),
-                    "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default())
-                }
-            });
-            let store = SqliteSignalStore::new(handle_clone.clone());
-            let kp = store.get_identity_key_pair().await.map_err(|e: SignalProtocolError| e.to_string())?;
-            let mut rng = rand::rngs::StdRng::from_os_rng();
-            let sig = kp.private_key().calculate_signature(id_hash.as_bytes(), &mut rng).map_err(|e| e.to_string())?;
-            let mut final_upload = bundle;
-            let mut pk_bytes = kp.identity_key().serialize().to_vec();
-            if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 { pk_bytes.remove(0); }
-            final_upload["identityKey"] = json!(hex::encode(&pk_bytes));
-            final_upload["signature"] = json!(hex::encode(&sig));
-            let response = internal_request(&state, "keys_upload", final_upload).await?;
-            if response["status"].as_str() == Some("success") { Ok(()) }
-            else { Err(format!("Key upload failed: {}", response["error"].as_str().unwrap_or("Unknown"))) }
+pub async fn signal_sync_keys(handle: AppHandle, count: Option<u32>) -> Result<(), String> {
+    let state_handle = handle.clone();
+    let state = state_handle.state::<NetworkState>();
+    let raw_bundle = signal_get_bundle(handle.clone(), count).await?;
+    let id_hash = {
+        let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
+        lock.clone().ok_or("No identity hash in network state")?
+    };
+    let mut ik_bytes = hex::decode(raw_bundle["identityKey"].as_str().unwrap_or("")).unwrap_or_default();
+    if ik_bytes.len() == 33 && ik_bytes[0] == 0x05 { ik_bytes.remove(0); }
+    let bundle = json!({
+        "identity_hash": id_hash,
+        "registrationId": raw_bundle["registrationId"],
+        "identityKey": base64::engine::general_purpose::STANDARD.encode(&ik_bytes),
+        "signedPreKey": {
+            "id": raw_bundle["signedPreKey"]["id"],
+            "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()),
+            "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["signedPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default()),
+        },
+        "preKeys": raw_bundle["preKeys"],
+        "kyberPreKey": {
+            "id": raw_bundle["kyberPreKey"]["id"],
+            "publicKey": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["publicKey"].as_str().unwrap_or("")).unwrap_or_default()),
+            "signature": base64::engine::general_purpose::STANDARD.encode(hex::decode(raw_bundle["kyberPreKey"]["signature"].as_str().unwrap_or("")).unwrap_or_default())
+        }
+    });
+    let kp_res = tauri::async_runtime::spawn_blocking(move || {
+        let store = SqliteSignalStore::new(handle);
+        tauri::async_runtime::block_on(async {
+            store.get_identity_key_pair().await
         })
-    }).join().map_err(|_| "Thread panicked".to_string())?
+    }).await.map_err(|e| e.to_string())?;
+
+    let kp = kp_res.map_err(|e: SignalProtocolError| e.to_string())?;
+    let mut rng = rand::rngs::StdRng::from_os_rng();
+    let sig = kp.private_key().calculate_signature(id_hash.as_bytes(), &mut rng).map_err(|e| e.to_string())?;
+    let mut final_upload = bundle;
+    let mut pk_bytes = kp.identity_key().serialize().to_vec();
+    if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 { pk_bytes.remove(0); }
+    final_upload["identityKey"] = json!(hex::encode(&pk_bytes));
+    final_upload["signature"] = json!(hex::encode(&sig));
+    let response = internal_request(&state, "keys_upload", final_upload).await?;
+    if response["status"].as_str() == Some("success") { Ok(()) }
+    else { Err(format!("Key upload failed: {}", response["error"].as_str().unwrap_or("Unknown"))) }
 }
 
 #[tauri::command]
-pub fn signal_encrypt(
+pub async fn signal_encrypt(
     handle: tauri::AppHandle,
     remote_hash: String,
     message: String,
 ) -> Result<serde_json::Value, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let _net_state = handle.state::<NetworkState>();
-            internal_signal_encrypt(handle.clone(), &_net_state, &remote_hash, message).await
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
+    let _net_state = handle.state::<NetworkState>();
+    internal_signal_encrypt(handle.clone(), &_net_state, &remote_hash, message).await
 }
 
 #[tauri::command]
-pub fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<String, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let store = SqliteSignalStore::new(handle.clone());
-            let kp = store
-                .get_identity_key_pair()
-                .await
-                .map_err(|e| e.to_string())?;
-            let mut rng = rand::rngs::StdRng::from_os_rng();
-            let sig = kp
-                .private_key()
-                .calculate_signature(message.as_bytes(), &mut rng)
-                .map_err(|e| e.to_string())?;
-            Ok(base64::engine::general_purpose::STANDARD.encode(sig))
+pub async fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<String, String> {
+    let kp_res = tauri::async_runtime::spawn_blocking(move || {
+        let store = SqliteSignalStore::new(handle);
+        tauri::async_runtime::block_on(async {
+            store.get_identity_key_pair().await
         })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
+    }).await.map_err(|e| e.to_string())?;
+
+    let kp = kp_res.map_err(|e: SignalProtocolError| e.to_string())?;
+    let mut rng = rand::rngs::StdRng::from_os_rng();
+    let sig = kp
+        .private_key()
+        .calculate_signature(message.as_bytes(), &mut rng)
+        .map_err(|e| e.to_string())?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(sig))
 }

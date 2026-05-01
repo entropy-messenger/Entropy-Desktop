@@ -6,18 +6,65 @@
 //! - Active network handles and pacing channels.
 //! - Transient memory buffers for binary reassembly.
 
-use rusqlite::Connection;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use std::collections::VecDeque;
+use r2d2::Pool;
+
+pub struct RusqliteManager {
+    pub path: std::path::PathBuf,
+    pub flags: rusqlite::OpenFlags,
+}
+
+impl r2d2::ManageConnection for RusqliteManager {
+    type Connection = rusqlite::Connection;
+    type Error = rusqlite::Error;
+
+    fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        rusqlite::Connection::open_with_flags(&self.path, self.flags)
+    }
+
+    fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
+        conn.execute_batch("SELECT 1")
+    }
+
+    fn has_broken(&self, _conn: &mut Self::Connection) -> bool {
+        false
+    }
+}
 
 pub struct DbState {
-    pub conn: Mutex<Option<Connection>>,
+    pub pool: Mutex<Option<Pool<RusqliteManager>>>,
     pub media_key: Mutex<Option<Vec<u8>>>,
     pub profile: Mutex<String>,
     pub media_proxy_port: Mutex<Option<u16>>,
+}
+
+#[derive(Debug)]
+pub struct SqlCipherCustomizer {
+    pub key: String,
+}
+
+impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for SqlCipherCustomizer {
+    fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
+        if !self.key.is_empty() {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", self.key))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DbState {
+    pub fn get_conn(&self) -> Result<r2d2::PooledConnection<RusqliteManager>, String> {
+        let lock = self.pool.lock().map_err(|_| "DB Pool lock poisoned")?;
+        let pool = lock.as_ref().ok_or("Database not initialized. Please unlock your vault.")?;
+        pool.get().map_err(|e| format!("Failed to get DB connection from pool: {}", e))
+    }
 }
 
 pub struct PacedMessage {

@@ -7,25 +7,24 @@ use hex;
 use rand;
 use rusqlite::params;
 use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid;
 
 #[tauri::command]
-pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Result<String, String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let group_id = uuid::Uuid::new_v4().to_string();
-            let state = app.state::<NetworkState>();
-            let id_hash = state
-                .identity_hash
-                .lock()
-                .map_err(|_| "Network state poisoned")?
-                .clone()
-                .ok_or("No identity")?;
+pub async fn create_group(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    state: State<'_, NetworkState>,
+    name: String,
+    members: Vec<String>
+) -> Result<String, String> {
+    let group_id = uuid::Uuid::new_v4().to_string();
+    let id_hash = state
+        .identity_hash
+        .lock()
+        .map_err(|_| "Network state poisoned")?
+        .clone()
+        .ok_or("No identity")?;
 
             let mut all_members = members
                 .iter()
@@ -122,35 +121,26 @@ pub fn create_group(app: AppHandle, name: String, members: Vec<String>) -> Resul
             }
 
             Ok(group_id)
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
-pub fn add_to_group(
+pub async fn add_to_group(
     app: AppHandle,
+    db_state: State<'_, DbState>,
+    state: State<'_, NetworkState>,
     group_id: String,
     new_members: Vec<String>,
 ) -> Result<(), String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let state = app.state::<NetworkState>();
-            let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
+    let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
 
             let current_members = {
                 let mut m = Vec::new();
-                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                        .map_err(|e| e.to_string())?;
-                    let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
-                        .map_err(|e| e.to_string())?;
-                    for ma in rows.flatten() { m.push(ma); }
-                }
+                let conn = db_state.get_conn()?;
+                let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for ma in rows.flatten() { m.push(ma); }
                 m
             };
 
@@ -169,8 +159,8 @@ pub fn add_to_group(
             // member distribution
             let dist_msg = hex::encode(rand::random::<[u8; 16]>());
             let group_name = {
-                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
-                lock.as_ref().and_then(|c| c.query_row("SELECT alias FROM chats WHERE address = ?1", params![group_id], |r| r.get::<_, Option<String>>(0)).ok().flatten())
+                let conn = db_state.get_conn()?;
+                conn.query_row("SELECT alias FROM chats WHERE address = ?1", params![group_id], |r| r.get::<_, Option<String>>(0)).ok().flatten()
             }.unwrap_or_else(|| "Group".to_string());
 
             let invite = json!({ "type": "group_invite", "groupId": group_id, "name": group_name, "members": &all_members, "newMembers": &new_members, "distribution": dist_msg });
@@ -221,30 +211,27 @@ pub fn add_to_group(
             let _ = app.emit("msg://group_update", json!({ "groupId": group_id, "members": all_members, "name": group_name }));
 
             Ok(())
-        })
-    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
-pub fn update_group_name(app: AppHandle, group_id: String, new_name: String) -> Result<(), String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let state = app.state::<NetworkState>();
-            let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
+pub async fn update_group_name(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    state: State<'_, NetworkState>,
+    group_id: String,
+    new_name: String
+) -> Result<(), String> {
+    let id_hash = state.identity_hash.lock().map_err(|_| "Network state poisoned")?.clone().ok_or("No identity")?;
 
             let members = {
                 let mut m = Vec::new();
-                let lock = db_state.conn.lock().map_err(|_| "Database connection lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let _ = conn.execute("UPDATE chats SET alias = ?1 WHERE address = ?2", params![new_name, group_id]);
-                    let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                        .map_err(|e| e.to_string())?;
-                    let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
-                        .map_err(|e| e.to_string())?;
-                    for ma in rows.flatten() { m.push(ma); }
-                }
+                let conn = db_state.get_conn()?;
+                let _ = conn.execute("UPDATE chats SET alias = ?1 WHERE address = ?2", params![new_name, group_id]);
+                let mut stmt = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt.query_map([&group_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for ma in rows.flatten() { m.push(ma); }
                 m
             };
 
@@ -264,43 +251,33 @@ pub fn update_group_name(app: AppHandle, group_id: String, new_name: String) -> 
             let _ = app.emit("msg://group_update", json!({ "groupId": group_id, "name": new_name, "members": members }));
 
             Ok(())
-        })
-    }).join().map_err(|_| "Thread panicked".to_string())?
 }
 
 #[tauri::command]
-pub fn leave_group(app: AppHandle, group_id: String) -> Result<(), String> {
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        rt.block_on(async move {
-            let db_state = app.state::<DbState>();
-            let state = app.state::<NetworkState>();
-            let id_hash = state
-                .identity_hash
-                .lock()
-                .map_err(|_| "Network state poisoned")?
-                .clone()
-                .ok_or("No identity")?;
+pub async fn leave_group(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    state: State<'_, NetworkState>,
+    group_id: String
+) -> Result<(), String> {
+    let id_hash = state
+        .identity_hash
+        .lock()
+        .map_err(|_| "Network state poisoned")?
+        .clone()
+        .ok_or("No identity")?;
 
             let members = {
                 let mut m = Vec::new();
-                let lock = db_state
-                    .conn
-                    .lock()
-                    .map_err(|_| "Database connection lock poisoned")?;
-                if let Some(conn) = lock.as_ref() {
-                    let mut stmt = conn
-                        .prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                        .map_err(|e| e.to_string())?;
-                    let rows = stmt
-                        .query_map([&group_id], |row| row.get::<_, String>(0))
-                        .map_err(|e| e.to_string())?;
-                    for ma in rows.flatten() {
-                        m.push(ma);
-                    }
+                let conn = db_state.get_conn()?;
+                let mut stmt = conn
+                    .prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([&group_id], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                for ma in rows.flatten() {
+                    m.push(ma);
                 }
                 m
             };
@@ -332,11 +309,8 @@ pub fn leave_group(app: AppHandle, group_id: String) -> Result<(), String> {
             }
 
             // local cleanup
-            let lock = db_state
-                .conn
-                .lock()
-                .map_err(|_| "Database connection lock poisoned")?;
-            if let Some(conn) = lock.as_ref() {
+            {
+                let conn = db_state.get_conn()?;
                 let _ = conn.execute(
                     "UPDATE chats SET is_active = 0 WHERE address = ?1",
                     [&group_id],
@@ -349,10 +323,6 @@ pub fn leave_group(app: AppHandle, group_id: String) -> Result<(), String> {
             }
 
             Ok(())
-        })
-    })
-    .join()
-    .map_err(|_| "Thread panicked".to_string())?
 }
 
 pub async fn internal_db_save_members(
@@ -360,11 +330,7 @@ pub async fn internal_db_save_members(
     chat_address: &str,
     members: Vec<String>,
 ) -> Result<(), String> {
-    let mut conn_lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = conn_lock.as_mut().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
 
     let _ = conn.execute(
         "DELETE FROM chat_members WHERE chat_address = ?1",

@@ -8,11 +8,7 @@ pub async fn signal_get_peer_identity(
     state: State<'_, DbState>,
     address: String,
 ) -> Result<Option<(Vec<u8>, i32)>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
     let mut stmt = conn
         .prepare("SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1")
         .map_err(|e| e.to_string())?;
@@ -35,11 +31,7 @@ pub async fn signal_set_peer_trust(
     address: String,
     trust_level: i32,
 ) -> Result<(), String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
     let signal_addr = if !address.contains(':') {
         format!("{}:1", address)
     } else {
@@ -61,15 +53,11 @@ pub async fn signal_set_peer_trust(
 
 #[tauri::command]
 pub async fn signal_get_own_identity(state: State<'_, DbState>) -> Result<Vec<u8>, String> {
-    let lock = state
-        .conn
-        .lock()
-        .map_err(|_| "Database connection lock poisoned")?;
-    let conn = lock.as_ref().ok_or("Database not initialized")?;
+    let conn = state.get_conn()?;
     conn.query_row(
         "SELECT public_key FROM signal_identity LIMIT 1",
         [],
-        |row| row.get(0),
+        |row: &rusqlite::Row| row.get(0),
     )
     .map_err(|e| e.to_string())
 }

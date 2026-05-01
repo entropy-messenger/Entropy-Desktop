@@ -12,11 +12,7 @@ pub async fn export_database(
     target_path: String,
 ) -> Result<(), String> {
     {
-        let conn_guard = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = conn_guard.as_ref() {
+        if let Ok(conn) = state.get_conn() {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
                 .map_err(|e| format!("Failed to checkpoint DB: {}", e))?;
         }
@@ -103,12 +99,8 @@ pub async fn import_database(
     src_path: String,
 ) -> Result<(), String> {
     {
-        let mut conn = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        *conn = None;
-        drop(conn);
+        let mut pool_lock = state.pool.lock().map_err(|_| "Database connection lock poisoned")?;
+        *pool_lock = None;
     }
 
     let backup_path = std::path::Path::new(&src_path);

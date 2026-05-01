@@ -29,7 +29,7 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .manage(DbState {
-            conn: Mutex::new(None),
+            pool: Mutex::new(None),
             media_key: Mutex::new(None),
             profile: Mutex::new(profile),
             media_proxy_port: Mutex::new(None),

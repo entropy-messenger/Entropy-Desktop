@@ -166,7 +166,7 @@ async fn handle_media_request(
     }
 
     // 3. Handle Range Header
-    let (start, end) = if let Some(ref r) = range {
+    let (start, end) = if let Some(r) = range.as_ref() {
         if r.starts_with("bytes=") {
             let parts: Vec<&str> = r["bytes=".len()..].split('-').collect();
             let start = parts[0].parse::<u64>().unwrap_or(0);

@@ -21,8 +21,7 @@ impl SqliteSignalStore {
 
     pub async fn get_session_token(&self) -> Option<String> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().ok()?;
-        let conn = lock.as_ref()?;
+        let conn = db_state.get_conn().ok()?;
 
         conn.query_row(
             "SELECT session_token FROM signal_identity WHERE id = 0",
@@ -35,8 +34,7 @@ impl SqliteSignalStore {
 
     pub async fn set_session_token(&self, token: Option<String>) -> Result<(), String> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| e.to_string())?;
-        let conn = lock.as_ref().ok_or("DB not initialized")?;
+        let conn = db_state.get_conn().map_err(|e| e.to_string())?;
 
         conn.execute(
             "UPDATE signal_identity SET session_token = ?1 WHERE id = 0",
@@ -54,12 +52,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         &self,
     ) -> std::result::Result<IdentityKeyPair, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let mut stmt = conn
             .prepare("SELECT public_key, private_key FROM signal_identity LIMIT 1")
@@ -93,12 +88,9 @@ impl IdentityKeyStore for SqliteSignalStore {
 
     async fn get_local_registration_id(&self) -> std::result::Result<u32, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let mut stmt = conn
             .prepare("SELECT registration_id FROM signal_identity LIMIT 1")
@@ -128,12 +120,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         identity: &IdentityKey,
     ) -> std::result::Result<IdentityChange, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let pub_bytes = identity.serialize();
@@ -189,12 +178,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         _direction: Direction,
     ) -> std::result::Result<bool, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -223,12 +209,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         address: &ProtocolAddress,
     ) -> std::result::Result<Option<IdentityKey>, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -259,12 +242,9 @@ impl SessionStore for SqliteSignalStore {
         address: &ProtocolAddress,
     ) -> std::result::Result<Option<SessionRecord>, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -294,12 +274,9 @@ impl SessionStore for SqliteSignalStore {
         record: &SessionRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let data = record.serialize()?;
@@ -321,12 +298,9 @@ impl PreKeyStore for SqliteSignalStore {
         pre_key_id: PreKeyId,
     ) -> std::result::Result<PreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = pre_key_id.into();
 
@@ -356,12 +330,9 @@ impl PreKeyStore for SqliteSignalStore {
         record: &PreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32 = u32::from(pre_key_id);
         let data = record.serialize()?;
@@ -380,12 +351,9 @@ impl PreKeyStore for SqliteSignalStore {
         pre_key_id: PreKeyId,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = pre_key_id.into();
 
@@ -406,12 +374,9 @@ impl SignedPreKeyStore for SqliteSignalStore {
         signed_pre_key_id: SignedPreKeyId,
     ) -> std::result::Result<SignedPreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = signed_pre_key_id.into();
         let mut stmt = conn
@@ -440,12 +405,9 @@ impl SignedPreKeyStore for SqliteSignalStore {
         record: &SignedPreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = signed_pre_key_id.into();
         let data = record.serialize()?;
@@ -467,12 +429,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         kyber_prekey_id: KyberPreKeyId,
     ) -> std::result::Result<KyberPreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = kyber_prekey_id.into();
 
@@ -502,12 +461,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         record: &KyberPreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let id_u32: u32 = kyber_prekey_id.into();
         let data = record.serialize()?;
@@ -528,12 +484,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         base_key: &PublicKey,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let lock = db_state.conn.lock().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Mutex lock failed: {}", e))
+        let conn = db_state.get_conn().map_err(|e| {
+            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
         })?;
-        let conn = lock.as_ref().ok_or(SignalProtocolError::InvalidArgument(
-            "DB not initialized".into(),
-        ))?;
 
         let kyber_id: u32 = kyber_prekey_id.into();
         let ec_id: u32 = ec_prekey_id.into();

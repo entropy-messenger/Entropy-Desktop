@@ -54,6 +54,8 @@ chacha20poly1305 = "0.10.1"
 warp = "0.3"
 bytes = "1"
 tokio-stream = "0.1"
+r2d2 = "0.8"
+# removed conflicting dep
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0", features = ["v2_10"] }
