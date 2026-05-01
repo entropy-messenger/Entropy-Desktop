@@ -344,53 +344,51 @@ pub(crate) async fn internal_establish_network(
                                                 }
                                                 handled = true;
                                             },
-                                            "pow_challenge_res" => {
-                                                if val.get("req_id").is_none() || val.get("req_id").and_then(|r| r.as_str()) == Some("auto_challenge") {
-                                                    let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
-                                                    let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
-                                                    let id = app.state::<NetworkState>().identity_hash.lock().map(|l| l.clone()).unwrap_or(None);
-                                                    let modulus = val.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
-                                                    if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
-                                                        let app_inner = app.clone();
-                                                        let existing_token = app_inner.state::<NetworkState>().session_token.lock().map(|l| l.clone()).unwrap_or(None);
-                                                        if let Some(token_val) = existing_token {
+                                            "pow_challenge_res" if val.get("req_id").is_none() || val.get("req_id").and_then(|r| r.as_str()) == Some("auto_challenge") => {
+                                                let seed = val.get("seed").and_then(|s| s.as_str()).map(|s| s.to_string());
+                                                let diff = val.get("difficulty").and_then(|d| d.as_u64()).map(|d| d as u32);
+                                                let id = app.state::<NetworkState>().identity_hash.lock().map(|l| l.clone()).unwrap_or(None);
+                                                let modulus = val.get("modulus").and_then(|m| m.as_str()).map(|s| s.to_string());
+                                                if let (Some(s), Some(d), Some(i)) = (seed, diff, id) {
+                                                    let app_inner = app.clone();
+                                                    let existing_token = app_inner.state::<NetworkState>().session_token.lock().map(|l| l.clone()).unwrap_or(None);
+                                                    if let Some(token_val) = existing_token {
+                                                        tokio::task::spawn_local(async move {
+                                                            let payload = json!({ "identity_hash": i, "session_token": token_val });
+                                                            let auth_val = json!({"type": "auth", "payload": payload});
+                                                            let _ = send_paced_json(&app_inner, auth_val).await;
+                                                        });
+                                                    } else {
+                                                        let jailed = if let Ok(l) = app_inner.state::<NetworkState>().jailed_until.lock() {
+                                                            l.as_ref().map(|until| *until > tokio::time::Instant::now()).unwrap_or(false)
+                                                        } else { false };
+
+                                                        if jailed {
+                                                            let _ = app_inner.emit("network-status", "jailed");
+                                                        } else {
+                                                            let _ = app_inner.emit("network-status", "mining");
                                                             tokio::task::spawn_local(async move {
-                                                                let payload = json!({ "identity_hash": i, "session_token": token_val });
-                                                                let auth_val = json!({"type": "auth", "payload": payload});
+                                                                let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
+                                                                let sig_res = SqliteSignalStore::new(app_inner.clone()).get_identity_key_pair().await.map_err(|e| e.to_string());
+                                                                let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
+                                                                if let Ok(kp) = sig_res {
+                                                                    let kp: IdentityKeyPair = kp;
+                                                                    let mut rng = StdRng::from_os_rng();
+                                                                    let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
+                                                                    if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
+                                                                        auth_payload["signature"] = json!(hex::encode(sig));
+                                                                        let mut pk = kp.identity_key().serialize().to_vec();
+                                                                        if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
+                                                                        auth_payload["public_key"] = json!(hex::encode(pk));
+                                                                    }
+                                                                }
+                                                                let auth_val = json!({"type": "auth", "payload": auth_payload});
                                                                 let _ = send_paced_json(&app_inner, auth_val).await;
                                                             });
-                                                        } else {
-                                                            let jailed = if let Ok(l) = app_inner.state::<NetworkState>().jailed_until.lock() {
-                                                                l.as_ref().map(|until| *until > tokio::time::Instant::now()).unwrap_or(false)
-                                                            } else { false };
-
-                                                            if jailed {
-                                                                let _ = app_inner.emit("network-status", "jailed");
-                                                            } else {
-                                                                let _ = app_inner.emit("network-status", "mining");
-                                                                tokio::task::spawn_local(async move {
-                                                                    let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                    let sig_res = SqliteSignalStore::new(app_inner.clone()).get_identity_key_pair().await.map_err(|e| e.to_string());
-                                                                    let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
-                                                                    if let Ok(kp) = sig_res {
-                                                                        let kp: IdentityKeyPair = kp;
-                                                                        let mut rng = StdRng::from_os_rng();
-                                                                        let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
-                                                                        if let Ok(sig) = kp.private_key().calculate_signature(&seed_bytes, &mut rng) {
-                                                                            auth_payload["signature"] = json!(hex::encode(sig));
-                                                                            let mut pk = kp.identity_key().serialize().to_vec();
-                                                                            if pk.len() == 33 && pk[0] == 0x05 { pk.remove(0); }
-                                                                            auth_payload["public_key"] = json!(hex::encode(pk));
-                                                                        }
-                                                                    }
-                                                                    let auth_val = json!({"type": "auth", "payload": auth_payload});
-                                                                    let _ = send_paced_json(&app_inner, auth_val).await;
-                                                                });
-                                                            }
                                                         }
                                                     }
-                                                    handled = true;
                                                 }
+                                                handled = true;
                                             },
                                             "error" => {
                                                 let error_msg = val.get("error").and_then(|e| e.as_str()).unwrap_or("");

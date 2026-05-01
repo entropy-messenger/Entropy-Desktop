@@ -38,7 +38,7 @@ impl InMemorySignalStore {
 #[async_trait(?Send)]
 impl IdentityKeyStore for InMemorySignalStore {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
-        Ok(self.identity_key_pair.clone())
+        Ok(self.identity_key_pair)
     }
     async fn get_local_registration_id(&self) -> Result<u32, SignalProtocolError> {
         Ok(self.registration_id)
@@ -193,7 +193,7 @@ impl KyberPreKeyStore for InMemorySignalStore {
         if lock.contains(&bytes) {
             return Err(SignalProtocolError::InvalidMessage(
                 libsignal_protocol::CiphertextMessageType::PreKey,
-                "reused base key".into(),
+                "reused base key",
             ));
         }
         lock.insert(bytes);
@@ -213,7 +213,7 @@ async fn encryption_handshake() -> Result<(), Box<dyn std::error::Error>> {
 
     let bob_id_pair = IdentityKeyPair::generate(&mut rng);
     let bob_reg_id = 2222;
-    let mut bob_store = InMemorySignalStore::new(bob_id_pair.clone(), bob_reg_id);
+    let mut bob_store = InMemorySignalStore::new(bob_id_pair, bob_reg_id);
     let bob_addr = ProtocolAddress::new("bob".to_string(), DeviceId::try_from(1)?);
 
     let bob_pre_key_id = PreKeyId::from(1);
@@ -259,7 +259,7 @@ async fn encryption_handshake() -> Result<(), Box<dyn std::error::Error>> {
         bob_kyber_pre_key_id,
         bob_kyber_pre_key_record.public_key()?,
         bob_kyber_pre_key_record.signature()?.to_vec(),
-        bob_id_pair.identity_key().clone(),
+        *bob_id_pair.identity_key(),
     )?;
 
     process_prekey_bundle(
@@ -455,16 +455,16 @@ async fn malicious_bundle_rejection() -> Result<(), Box<dyn std::error::Error>> 
         bob_bundle.registration_id()?,
         bob_bundle.device_id()?,
         match (bob_bundle.pre_key_id()?, bob_bundle.pre_key_public()?) {
-            (Some(id), Some(k)) => Some((id, k.clone())),
+            (Some(id), Some(k)) => Some((id, k)),
             _ => None,
         },
         bob_bundle.signed_pre_key_id()?,
-        bob_bundle.signed_pre_key_public()?.clone(),
+        bob_bundle.signed_pre_key_public()?,
         bob_bundle.signed_pre_key_signature()?.to_vec(),
         bob_bundle.kyber_pre_key_id()?,
         bob_bundle.kyber_pre_key_public()?.clone(),
         bob_bundle.kyber_pre_key_signature()?.to_vec(),
-        malicious_id_pair.identity_key().clone(), // Wrong key!
+        *malicious_id_pair.identity_key(), // Wrong key!
     )?;
 
     // Alice should fail to process this bundle because the signature on the signed prekey
@@ -647,7 +647,7 @@ async fn identity_rotation_detection() -> Result<(), Box<dyn std::error::Error>>
     );
 
     let bob_id_pair2 = IdentityKeyPair::generate(&mut rng);
-    let mut bob_store2 = InMemorySignalStore::new(bob_id_pair2.clone(), 3333);
+    let mut bob_store2 = InMemorySignalStore::new(bob_id_pair2, 3333);
     let bob_bundle2 = generate_bundle(&mut bob_store2, 3333, &mut rng).await?;
     // is_trusted_identity should return false because the key has changed.
     let is_trusted = alice_store
@@ -726,6 +726,6 @@ async fn generate_bundle(
         kyber_pre_key_id,
         kyber_pre_key_record.public_key()?,
         kyber_pre_key_record.signature()?.to_vec(),
-        id_pair.identity_key().clone(),
+        *id_pair.identity_key(),
     )?)
 }
