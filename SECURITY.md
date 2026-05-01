@@ -29,7 +29,7 @@ The Entropy Desktop App relies on the following primitives for E2EE:
 *   **SQLCipher**: Local state persistence encrypted with **AES-256** via SQLCipher.
 
 ## Out of Scope
-*   Vulnerabilities in third-party services (e.g., Tor relays) unless they directly impact the Entropy client.
+*   Vulnerabilities in third-party services unless they directly impact the Entropy client.
 *   Physical attacks on the user's device.
 *   Social engineering attacks.
 
