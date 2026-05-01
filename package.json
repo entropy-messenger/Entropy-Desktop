@@ -32,6 +32,7 @@
     "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-shell": "^2.3.4",
     "@tauri-apps/plugin-updater": "^2.10.1",
+    "emoji-picker-element": "^1.29.1",
     "libsodium-wrappers": "^0.8.2",
     "lucide-svelte": "^0.563.0"
   }

@@ -78,9 +78,7 @@ pub async fn export_database(
             if path.is_file() {
                 zip.start_file(name, options).map_err(|e| e.to_string())?;
                 let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-                let mut buffer = Vec::new();
-                f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-                zip.write_all(&buffer).map_err(|e| e.to_string())?;
+                std::io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
             } else if !name.is_empty() {
                 zip.add_directory(name, options)
                     .map_err(|e| e.to_string())?;

@@ -1,9 +1,8 @@
 use crate::app_state::DbState;
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
-    XChaCha20Poly1305, Key, XNonce,
+    XChaCha20Poly1305, Key,
 };
-use base64::Engine;
 use std::io::Write;
 use tauri::{Manager, State};
 
@@ -87,36 +86,6 @@ pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(),
     }
     Ok(())
 }
-
-// Logic for media encryption is handled in process_outgoing_media in outbox.rs
-
-pub fn crypto_decrypt_media(combined: Vec<u8>, key_b64: String) -> Result<Vec<u8>, String> {
-    let key_bytes = base64::engine::general_purpose::STANDARD
-        .decode(key_b64)
-        .map_err(|e| e.to_string())?;
-    let key = Key::from_slice(&key_bytes);
-    let cipher = XChaCha20Poly1305::new(key);
-
-    let mut plaintext = Vec::new();
-    let mut offset = 0;
-    
-    // Decrypt chunked AEAD
-    while offset + 24 < combined.len() {
-        let nonce = XNonce::from_slice(&combined[offset..offset+24]);
-        offset += 24;
-        
-        let chunk_cipher_len = 1295; 
-        let end = std::cmp::min(offset + chunk_cipher_len, combined.len());
-        let ciphertext = &combined[offset..end];
-        offset = end;
-
-        let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| format!("Network chunk decryption failed: {}", e))?;
-        plaintext.extend(chunk_plain);
-    }
-
-    Ok(plaintext)
-}
-
 #[tauri::command]
 pub async fn vault_export_media(
     app: tauri::AppHandle,

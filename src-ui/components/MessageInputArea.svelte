@@ -3,9 +3,10 @@
   import { sendMessage, setReplyingTo, sendFile } from '../lib/actions/chat';
   import { sendTypingStatus, toggleBlock } from '../lib/actions/contacts';
   import { 
-    LucideSend, LucideMic, LucidePaperclip, LucideX, LucideBan
+    LucideSend, LucideMic, LucidePaperclip, LucideX, LucideBan, LucideSmile
   } from 'lucide-svelte';
   import RecordingBar from './RecordingBar.svelte';
+  import EmojiPicker from './EmojiPicker.svelte';
   import { untrack } from 'svelte';
   import { addToast } from '../lib/stores/ui';
   import type { Chat } from '../lib/types';
@@ -14,6 +15,7 @@
 
   let messageInput = $state("");
   let isRecording = $state(false);
+  let showEmojiPicker = $state(false);
   let messageInputEl = $state<HTMLTextAreaElement | null>(null);
 
   const MAX_CHAR_LIMIT = 4000;
@@ -22,6 +24,7 @@
   $effect(() => {
     if (messageInput !== undefined && messageInputEl) {
         messageInputEl.style.height = 'auto';
+
         messageInputEl.style.height = Math.min(messageInputEl.scrollHeight, 200) + 'px';
     }
   });
@@ -138,6 +141,18 @@
       }
   });
 
+  const handleEmojiSelect = (emoji: string) => {
+    const start = messageInputEl?.selectionStart || messageInput.length;
+    const end = messageInputEl?.selectionEnd || messageInput.length;
+    messageInput = messageInput.slice(0, start) + emoji + messageInput.slice(end);
+    
+    // Set focus back to input
+    setTimeout(() => {
+        messageInputEl?.focus();
+        const newPos = start + emoji.length;
+        messageInputEl?.setSelectionRange(newPos, newPos);
+    }, 0);
+  };
 </script>
 
 <div class="flex flex-col w-full z-10">
@@ -179,6 +194,21 @@
                     onCancel={() => isRecording = false}
                 />
             {:else}
+                <div class="relative flex items-center">
+                    <button 
+                        id="emoji-toggle-btn"
+                        onclick={() => showEmojiPicker = !showEmojiPicker} 
+                        class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition {showEmojiPicker ? 'text-entropy-primary bg-entropy-surface-light' : ''}"
+                    >
+                        <LucideSmile size={24} />
+                    </button>
+                    {#if showEmojiPicker}
+                        <EmojiPicker 
+                            onSelect={handleEmojiSelect} 
+                            onClose={() => showEmojiPicker = false} 
+                        />
+                    {/if}
+                </div>
                 <button onclick={onFileSelect} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
                 <div class="flex-1 flex flex-col items-end">
                     <textarea 
