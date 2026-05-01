@@ -38,16 +38,7 @@
         analyser.fftSize = 256;
         
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        const updateVolume = () => {
-             if (analyser) {
-                 analyser.getByteFrequencyData(dataArray);
-                 const avg = dataArray.reduce((p, c) => p + c, 0) / dataArray.length;
-                 currentVolume = avg / 255.0;
-                 drawNativeWaveform();
-                 animationFrame = requestAnimationFrame(updateVolume);
-             }
-        };
-        updateVolume();
+
  
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
             ? 'audio/webm;codecs=opus' 
@@ -84,6 +75,19 @@
         recordingInterval = setInterval(() => { 
             recordingSeconds = Math.floor((performance.now() - startTime) / 1000); 
         }, 200);
+        const updateVolume = () => {
+             if (analyser && visualizerCanvas) {
+                 analyser.getByteFrequencyData(dataArray);
+                 // Focus on mid-range frequencies where human voice is most active
+                 const voiceRange = dataArray.slice(4, 32); 
+                 const max = Math.max(...voiceRange);
+                 currentVolume = max / 255.0;
+                 drawNativeWaveform();
+                 animationFrame = requestAnimationFrame(updateVolume);
+             }
+        };
+        updateVolume();
+
     } catch (e: any) { 
         // Start Error
         recordingState = 'error';
@@ -104,18 +108,20 @@
       
       const width = visualizerCanvas.width;
       const height = visualizerCanvas.height;
-      const bars = 50;
+      const bars = 100;
       const barWidth = width / bars;
 
       const imageData = ctx.getImageData(barWidth, 0, width - barWidth, height);
       ctx.clearRect(0, 0, width, height);
       ctx.putImageData(imageData, 0, 0);
 
-      // Boost gain visually for modern sleek look
-      const barHeight = Math.max(4, currentVolume * height * 1.5);
-      ctx.fillStyle = '#ef4444';
+      // More natural scaling (linear) and slightly smaller max height
+      const barHeight = Math.max(2, currentVolume * height * 0.8);
+      
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+      
       ctx.beginPath();
-      ctx.roundRect(width - barWidth + 1, (height - barHeight) / 2, barWidth - 3, barHeight, 1.5);
+      ctx.roundRect(width - barWidth + 1, (height - barHeight) / 2, barWidth - 1, barHeight, 1);
       ctx.fill();
   };
 

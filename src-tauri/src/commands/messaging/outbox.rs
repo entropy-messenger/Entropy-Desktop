@@ -242,6 +242,7 @@ pub fn process_outgoing_media(
             "size": file_size,
             "duration": payload.duration,
             "thumbnail": payload.thumbnail,
+            "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
             "transferId": transfer_id
         }).to_string()),
         is_starred: false,
@@ -401,6 +402,7 @@ pub fn process_outgoing_media(
                 "size": file_size,
                 "duration": payload.duration,
                 "thumbnail": payload.thumbnail,
+                "originalPath": canonical_path_bg.as_ref().map(|p| p.to_string_lossy().to_string()),
                 "transferId": transfer_id,
                 "vaultPath": vault_path.to_string_lossy().to_string()
             });
@@ -741,6 +743,7 @@ pub async fn process_outgoing_group_media(
             "size": file_size,
             "duration": payload.duration,
             "thumbnail": payload.thumbnail,
+            "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
             "transferId": transfer_id
         }).to_string()),
         is_starred: false,
@@ -909,6 +912,7 @@ pub async fn process_outgoing_group_media(
                 "size": file_size,
                 "duration": payload.duration,
                 "thumbnail": payload.thumbnail,
+                "originalPath": canonical_path_bg.as_ref().map(|p| p.to_string_lossy().to_string()),
                 "transferId": transfer_id,
                 "vaultPath": vault_path.to_string_lossy().to_string()
             });

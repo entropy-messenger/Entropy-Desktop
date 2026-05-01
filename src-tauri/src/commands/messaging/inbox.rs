@@ -19,7 +19,7 @@ use crate::commands::{
     internal_signal_encrypt, internal_db_upsert_chat, db_update_messages,
     db_set_contact_global_nickname, DbMessage, DbChat
 };
-use crate::commands::vault::crypto_decrypt_media;
+// use crate::commands::vault::crypto_decrypt_media;
 use crate::signal_store::SqliteSignalStore;
 use base64::Engine;
 use libsignal_protocol::{
@@ -31,15 +31,6 @@ use rand::rngs::StdRng;
 use rusqlite::params;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
-
-#[tauri::command]
-pub fn signal_decrypt_media(data: Vec<u8>, bundle: serde_json::Value) -> Result<Vec<u8>, String> {
-    let key_b64 = bundle
-        .get("key")
-        .and_then(|k| k.as_str())
-        .ok_or("No decryption key in bundle")?;
-    crypto_decrypt_media(data, key_b64.to_string())
-}
 
 async fn internal_signal_decrypt(
     app: AppHandle,

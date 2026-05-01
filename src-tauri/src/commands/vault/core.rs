@@ -259,7 +259,7 @@ pub async fn init_vault(
         .build(manager)
         .map_err(|e| e.to_string())?;
 
-    let derived_key_hex_for_customizer: String;
+    let mut derived_key_hex_for_customizer = String::new();
 
     {
         let conn = pool.get().map_err(|e| e.to_string())?;
@@ -292,23 +292,46 @@ pub async fn init_vault(
                 let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", derived_key_hex));
             }
 
-            let _ = std::fs::remove_file(&attempts_file);
-            let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
-
-            // Migrations
-            let current_version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
-            let target_version = MIGRATIONS.len() as i32;
-            if current_version < target_version {
-                for (idx, sql) in MIGRATIONS.iter().enumerate() {
-                    let ver = (idx + 1) as i32;
-                    if ver > current_version {
-                        conn.execute_batch(sql).map_err(|e| e.to_string())?;
-                        conn.execute(&format!("PRAGMA user_version = {}", ver), []).map_err(|e| e.to_string())?;
-                    }
-                }
+            // Test if key is correct by reading master table
+            if conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(())).is_err() {
+                attempts += 1;
+                let _ = std::fs::write(&attempts_file, attempts.to_string());
+                return Err(format!("Incorrect password. Attempt {}/10", attempts));
             }
-        } else {
-            derived_key_hex_for_customizer = String::new();
+
+            // Success - reset attempts
+            if attempts > 0 {
+                let _ = std::fs::remove_file(&attempts_file);
+            }
+        }
+    }
+
+    let manager = RusqliteManager { path: db_path.clone(), flags };
+    let pool = Pool::builder()
+        .max_size(16)
+        .connection_customizer(Box::new(SqlCipherCustomizer { key: derived_key_hex_for_customizer }))
+        .build(manager)
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut db_conn = state.pool.lock().map_err(|_| "DB Pool lock poisoned")?;
+        *db_conn = Some(pool.clone());
+    }
+
+    // Since customizer runs on acquire, we can now use get_conn safely for migrations
+    let conn = state.get_conn()?;
+    let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
+
+    // Migrations
+    let current_version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| format!("Schema check failed: {}", e))?;
+    let target_version = MIGRATIONS.len() as i32;
+    if current_version < target_version {
+        for (idx, sql) in MIGRATIONS.iter().enumerate() {
+            let ver = (idx + 1) as i32;
+            if ver > current_version {
+                conn.execute_batch(sql).map_err(|e| e.to_string())?;
+                conn.execute(&format!("PRAGMA user_version = {}", ver), []).map_err(|e| e.to_string())?;
+            }
         }
     }
 
@@ -335,19 +358,6 @@ pub async fn init_vault(
             key.to_vec()
         }
     };
-
-    // Re-initialize pool with the customizer for all future connections
-    let manager = RusqliteManager { path: db_path, flags };
-    let final_pool = Pool::builder()
-        .max_size(16)
-        .connection_customizer(Box::new(SqlCipherCustomizer { key: derived_key_hex_for_customizer }))
-        .build(manager)
-        .map_err(|e| e.to_string())?;
-
-    {
-        let mut pool_lock = state.pool.lock().map_err(|_| "Pool lock poisoned")?;
-        *pool_lock = Some(final_pool);
-    }
 
     {
         let mut state_key = state.media_key.lock().map_err(|_| "Media key lock poisoned")?;

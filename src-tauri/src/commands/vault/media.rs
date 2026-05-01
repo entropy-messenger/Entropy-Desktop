@@ -4,7 +4,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, Key, XNonce,
 };
 use base64::Engine;
-use std::io::{Read, Write};
+use std::io::Write;
 use tauri::{Manager, State};
 
 pub fn get_media_dir(
@@ -70,66 +70,6 @@ pub async fn vault_save_media(
 }
 
 #[tauri::command]
-pub async fn vault_load_media(
-    app: tauri::AppHandle,
-    state: State<'_, DbState>,
-    id: String,
-) -> Result<Vec<u8>, String> {
-    let id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>();
-    if id.is_empty() {
-        return Err("Invalid ID".into());
-    }
-    let key_bytes = {
-        let lock = state
-            .media_key
-            .lock()
-            .map_err(|_| "Media key lock poisoned")?;
-        lock.clone().ok_or("Media key not initialized")?
-    };
-
-    let media_dir = get_media_dir(&app, &state)?;
-    let file_path = media_dir.join(&id);
-
-    if !file_path.exists() {
-        return Err("Media file not found".to_string());
-    }
-
-    let mut file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-
-    let key = Key::from_slice(&key_bytes);
-    let cipher = XChaCha20Poly1305::new(key);
-    
-    let mut plaintext = Vec::new();
-    let mut offset = 0;
-    
-    // Decrypt chunked AEAD
-    println!("[VAULT] Loading media ID: {}. Key fingerprint: {}", id, hex::encode(&key_bytes[..4]));
-    while offset + 24 < buffer.len() {
-        let nonce = XNonce::from_slice(&buffer[offset..offset+24]);
-        offset += 24;
-        // Total block size = 24 + 1295 = 1319 bytes.
-        let chunk_cipher_len = 1295; 
-        let end = std::cmp::min(offset + chunk_cipher_len, buffer.len());
-        let ciphertext = &buffer[offset..end];
-        offset = end;
-
-        let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| {
-            let err = format!("Vault chunk decryption failed: {}", e);
-            println!("[VAULT-ERROR] {}", err);
-            err
-        })?;
-        plaintext.extend(chunk_plain);
-    }
-
-    Ok(plaintext)
-}
-
-#[tauri::command]
 pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<DbState>();
     let media_dir = get_media_dir(&app, &state)?;
@@ -145,59 +85,6 @@ pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(),
     if file_path.exists() {
         std::fs::remove_file(file_path).map_err(|e| e.to_string())?;
     }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn db_export_media(
-    app: tauri::AppHandle,
-    state: State<'_, DbState>,
-    src_path: String,
-    target_path: String,
-) -> Result<(), String> {
-    let _media_dir = get_media_dir(&app, &state)?;
-    let src_path_abs = std::path::PathBuf::from(&src_path);
-
-    if src_path_abs.exists() {
-        let key_bytes = {
-            let lock = state
-                .media_key
-                .lock()
-                .map_err(|_| "Media key lock poisoned")?;
-            lock.clone().ok_or("Media key not initialized")?
-        };
-        let key = Key::from_slice(&key_bytes);
-        let cipher = XChaCha20Poly1305::new(key);
-
-        let mut file = std::fs::File::open(&src_path_abs)
-            .map_err(|e| format!("Failed to open source file: {}", e))?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read source file: {}", e))?;
-
-        let mut plaintext = Vec::new();
-        let mut offset = 0;
-        
-        while offset + 24 < buffer.len() {
-            let nonce = XNonce::from_slice(&buffer[offset..offset+24]);
-            offset += 24;
-            
-            let chunk_cipher_len = 1295; 
-            let end = std::cmp::min(offset + chunk_cipher_len, buffer.len());
-            let ciphertext = &buffer[offset..end];
-            offset = end;
-
-            let chunk_plain = cipher.decrypt(nonce, ciphertext).map_err(|e| format!("Vault export chunk decryption failed: {}", e))?;
-            plaintext.extend(chunk_plain);
-        }
-
-        let target_path_abs = std::path::PathBuf::from(&target_path);
-        std::fs::write(target_path_abs, plaintext).map_err(|e| e.to_string())?;
-    } else {
-        // Refuse to copy files from outside the media vault
-        return Err("Export denied: Source path is outside the allowed media vault".into());
-    }
-
     Ok(())
 }
 
@@ -229,3 +116,56 @@ pub fn crypto_decrypt_media(combined: Vec<u8>, key_b64: String) -> Result<Vec<u8
 
     Ok(plaintext)
 }
+
+#[tauri::command]
+pub async fn vault_export_media(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+    id: String,
+    target_path: String,
+) -> Result<(), String> {
+    use chacha20poly1305::{aead::{Aead, KeyInit}, XChaCha20Poly1305, Key, XNonce};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // 1. Get the media key
+    let key_bytes = {
+        let lock = state.media_key.lock().map_err(|_| "Vault not open")?;
+        lock.clone().ok_or_else(|| "Vault not open")?
+    };
+    let key = Key::from_slice(&key_bytes);
+    let cipher = XChaCha20Poly1305::new(key);
+
+    // 2. Locate the source file
+    let media_dir = get_media_dir(&app, &state)?;
+    let src_path = media_dir.join(&id);
+    if !src_path.exists() {
+        return Err("Source file not found".to_string());
+    }
+
+    let mut src_file = tokio::fs::File::open(&src_path).await.map_err(|e| e.to_string())?;
+    let mut dst_file = tokio::fs::File::create(&target_path).await.map_err(|e| e.to_string())?;
+
+    // 3. Streaming Decryption (Zero-RAM Pipeline)
+    let block_size_enc = 1319;
+    let mut buf = vec![0u8; block_size_enc];
+
+    while let Ok(n) = src_file.read(&mut buf).await {
+        if n == 0 { break; }
+        if n < 40 { return Err("Corrupted media block".to_string()); }
+
+        let nonce = XNonce::from_slice(&buf[..24]);
+        let ciphertext = &buf[24..n];
+
+        match cipher.decrypt(nonce, ciphertext) {
+            Ok(ptext) => {
+                dst_file.write_all(&ptext).await.map_err(|e| e.to_string())?;
+            }
+            Err(_) => return Err("Decryption failed - possibly wrong key or corruption".to_string()),
+        }
+    }
+
+    dst_file.flush().await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+

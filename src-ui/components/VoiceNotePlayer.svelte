@@ -2,7 +2,7 @@
   import { LucidePlay, LucidePause, LucideMic, LucideLoader } from 'lucide-svelte';
   import { onMount } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
-  import { invoke } from '@tauri-apps/api/core';
+  import { getMediaUrl } from '../lib/actions/chat';
 
   let { src, id, isMine = false, initialDuration = 0 } = $props();
   const hasAuthoritativeDuration = $derived(initialDuration > 0);
@@ -18,22 +18,21 @@
   });
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
-  let blobUrl = $state<string | null>(null);
+  let proxyUrl = $state<string | null>(null);
   const speeds = [1, 1.5, 2];
 
   let lastGeneratedId = $state<string | null>(null);
 
-  async function loadAudioBytes() {
+  async function loadAudioProxy() {
       if (!id || id === 'preview') return;
       try {
           isLoading = true;
-          const bytes = await invoke<number[]>('vault_load_media', { id });
-          const arrayBuffer = new Uint8Array(bytes).buffer;
+          const url = await getMediaUrl(id, 'audio/wav');
+          proxyUrl = url;
           
-          if (blobUrl) URL.revokeObjectURL(blobUrl);
-          blobUrl = URL.createObjectURL(new Blob([arrayBuffer]));
-          
-          // Generate real waveform
+          // Generate real waveform by fetching from proxy
+          const response = await fetch(url);
+          const arrayBuffer = await response.arrayBuffer();
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           
@@ -56,7 +55,7 @@
           lastGeneratedId = id;
           drawWaveform();
       } catch (e) {
-          console.error("Failed to load audio bytes:", e);
+          console.error("Failed to load audio proxy:", e);
       } finally {
           isLoading = false;
       }
@@ -65,7 +64,7 @@
   async function generatePreviewWaveform() {
       if (!src) return;
       try {
-          blobUrl = src;
+          proxyUrl = src;
           const response = await fetch(src);
           const arrayBuffer = await response.arrayBuffer();
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -130,10 +129,10 @@
     if (!audioEl) return;
 
     // JIT Loading Logic
-    if (!blobUrl && !src && !isLoading) {
-        await loadAudioBytes();
+    if (!proxyUrl && !src && !isLoading) {
+        await loadAudioProxy();
         
-        // Wait a micro-tick for Svelte to bind the new blobUrl to audioEl.src
+        // Wait a micro-tick for Svelte to bind the new proxyUrl to audioEl.src
         setTimeout(() => {
             if (!audioEl) return;
             audioEl.play().catch(err => {
@@ -198,8 +197,8 @@
     if (!canvasEl || !audioEl) return;
     
     // Auto-load if attempting to seek an unloaded audio
-    if (!blobUrl && !src && !isLoading) {
-        loadAudioBytes().then(() => {
+    if (!proxyUrl && !src && !isLoading) {
+        loadAudioProxy().then(() => {
             setTimeout(() => {
                 executeSeek(e);
             }, 50);
@@ -250,13 +249,12 @@
     
     return () => {
       if (audioEl) audioEl.pause();
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   });
 
 </script>
 
-<div class="flex items-center space-x-3 py-1 px-1.5 min-w-[240px] select-none rounded-[1rem] transition-all {isPlaying ? 'bg-black/5' : ''}">
+<div class="flex items-center space-x-3 py-1 px-1.5 min-w-[210px] select-none rounded-[1.2rem] transition-all {isPlaying ? 'bg-black/5' : ''}">
   <button 
     onclick={togglePlay}
     class="w-10 h-10 shrink-0 rounded-full flex items-center justify-center transition-all {isMine ? 'bg-white text-entropy-primary hover:bg-white/90' : 'bg-entropy-primary text-white hover:bg-entropy-primary-dim'}"
@@ -286,25 +284,26 @@
             style="image-rendering: pixelated; image-rendering: -moz-crisp-edges; image-rendering: crisp-edges;"
           ></canvas>
       </div>
-      <div class="flex justify-between items-center px-0.5">
-           <span class="text-[10px] font-bold {isMine ? 'text-white/80' : 'text-entropy-primary/80'} tabular-nums">
+      <div class="flex items-center px-2">
+           <span class="text-[9px] font-bold {isMine ? 'text-white/70' : 'text-entropy-primary/70'} tabular-nums">
                {formatTime(isPlaying ? currentTime : duration)}
            </span>
-           <div class="flex items-center space-x-2">
-               <button 
-                   onclick={toggleSpeed}
-                   class="text-[9px] font-black uppercase tracking-widest {isMine ? 'text-white/60' : 'text-entropy-primary/60'} hover:opacity-100 transition-opacity"
-               >
-                   {playbackSpeed}x
-               </button>
-               <LucideMic size={11} class={isMine ? 'text-white/40' : 'text-entropy-primary/40'} />
-           </div>
+           <div class="flex-1"></div>
+           <button 
+               onclick={toggleSpeed}
+               class="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded transition-all active:scale-90 mr-11
+               {isMine 
+                   ? (playbackSpeed > 1 ? 'bg-white text-entropy-primary shadow-sm' : 'bg-white/10 text-white/80 hover:bg-white/20') 
+                   : (playbackSpeed > 1 ? 'bg-entropy-primary text-white shadow-sm' : 'bg-entropy-primary/10 text-entropy-primary hover:bg-entropy-primary/20')}"
+           >
+               {playbackSpeed}x
+           </button>
       </div>
   </div>
 
   <audio 
     bind:this={audioEl} 
-    src={blobUrl} 
+    src={src || proxyUrl} 
     ontimeupdate={handleTimeUpdate} 
     onloadedmetadata={handleMetadata}
     onended={() => { isPlaying = false; currentTime = 0; playingVoiceNoteId.set(null); drawWaveform(); }}

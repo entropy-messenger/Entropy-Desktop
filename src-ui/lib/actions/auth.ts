@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import { userStore } from '../stores/user';
 import { invoke } from '@tauri-apps/api/core';
 import { signalManager } from '../signal_manager';
-import { addToast, showConfirm } from '../stores/ui';
+import { addToast, showConfirm, mediaProxyPort } from '../stores/ui';
 import { network } from '../network';
 import { broadcastProfile } from './contacts';
 import { initVault, vaultLoad } from '../persistence';
@@ -15,6 +15,10 @@ export const initApp = async (password: string) => {
     userStore.update(s => ({ ...s, authError: null }));
     try {
         await initVault(password);
+        
+        // Fetch and set the media proxy port immediately after vault init
+        const port = await invoke<number>('get_media_proxy_port');
+        mediaProxyPort.set(port);
     } catch (e: any) {
         userStore.update(s => ({ ...s, authError: e.toString() || "Failed to open vault." }));
         return;

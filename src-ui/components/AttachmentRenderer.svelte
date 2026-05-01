@@ -5,7 +5,7 @@
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-    import { getAttachment, markAsDownloaded } from '../lib/actions/chat';
+    import { getMediaUrl, markAsDownloaded } from '../lib/actions/chat';
     import { fromBase64 } from '../lib/crypto';
     import { addToast, lightbox, contextMenu, mediaProxyPort } from '../lib/stores/ui';
     import { get } from 'svelte/store';
@@ -15,7 +15,7 @@
 
     let { msg, chatId, isMobile = false } = $props<{ msg: any, chatId: string, isMobile?: boolean }>();
 
-    let blobUrl = $state<string | null>(null);
+    let mediaUrl = $state<string | null>(null);
     let loading = $state(false);
     let failed = $state(false);
     let error = $state(false);
@@ -28,20 +28,18 @@
         exportedPath = msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null);
     });
 
-    // Cleanup Blob URLs on unmount to prevent memory leaks
+    // Cleanup on unmount
     $effect(() => {
         return () => {
-            if (blobUrl && wasCreatedInternally) {
-                URL.revokeObjectURL(blobUrl);
-            }
+            mediaUrl = null;
         };
     });
 
-    // Automatically trigger load for images/videos once available.
-    // Small images use In-Memory decryption, while videos/large files use the Zero-RAM Proxy.
+    // Thumbnails are used in the bubble; proxy is used for lightbox/export.
+    // We strictly do NOT pre-load the full media in the bubble to prevent background decryption.
     $effect(() => {
-        if ((isImage || isVideo) && msg.attachment?.vaultPath && !blobUrl && !loading && !failed) {
-            loadAttachment();
+        if ((isImage || isVideo) && msg.attachment?.vaultPath && !mediaUrl && !loading && !failed) {
+            // No auto-load. We only load on explicit user interaction (Lightbox/Export).
         }
     });
 
@@ -54,8 +52,6 @@
         return (bytes / 1024).toFixed(1) + ' KB';
     });
 
-    let wasCreatedInternally = $state(false);
-
     let activeTransfer = $derived.by(() => {
         const t_id = msg.attachment?.transferId;
         if (!t_id) return null;
@@ -65,56 +61,15 @@
     let progress = $derived(activeTransfer ? Math.round((activeTransfer.current / activeTransfer.total) * 100) : 0);
 
     async function loadAttachment() {
-        if (!msg.attachment || blobUrl || loading || failed) return;
+        // loadAttachment is now only used for getting a URL for specific interactions if needed.
+        if (!msg.attachment || mediaUrl || loading || failed) return;
         
-        // Step 1: High Performance Native Path (Only for unencrypted local files)
-        const path = msg.attachment.originalPath;
-        if (path && !msg.attachment.vaultPath) {
-            blobUrl = convertFileSrc(path);
-            wasCreatedInternally = false;
-            loading = false;
-            return;
-        }
-
-        // Step 1.5: Local Proxy Path (Zero-RAM for large media)
-        if (msg.attachment.vaultPath && (isVideo || (isImage && (msg.attachment.size || 0) > 5 * 1024 * 1024))) {
-            let port = get(mediaProxyPort);
-            if (!port) {
-                try {
-                    port = await invoke('get_media_proxy_port');
-                    mediaProxyPort.set(port);
-                } catch (e) {
-                    console.error("[UI] Failed to get media proxy port:", e);
-                }
-            }
-            blobUrl = `http://localhost:${port || 51761}/media/${msg.id}?type=${encodeURIComponent(msg.attachment.fileType || '')}`;
-            wasCreatedInternally = false;
-            loading = false;
-            return;
-        }
-
-        // Step 2: In-memory Fallback
-        if (msg.attachment.data) {
-            let bytes = msg.attachment.data;
-            if (typeof bytes === 'string') bytes = fromBase64(bytes);
-            blobUrl = URL.createObjectURL(new Blob([bytes as any], {type: msg.attachment.fileType}));
-            wasCreatedInternally = true;
-            return;
-        }
-
-        // Step 3: Vault Retrieval
         loading = true;
-        failed = false;
         try {
-            const data = await getAttachment(msg.id);
-            if (data) {
-                blobUrl = URL.createObjectURL(new Blob([data as any], {type: msg.attachment.fileType}));
-                wasCreatedInternally = true;
-            } else {
-                failed = true;
-            }
+            const url = await getMediaUrl(msg.id, msg.attachment.fileType || 'application/octet-stream');
+            mediaUrl = url;
         } catch (e) {
-            console.error("[UI] Decryption failed:", e);
+            console.error("[UI] Failed to get media URL:", e);
             failed = true;
         } finally {
             loading = false;
@@ -122,9 +77,10 @@
     }
 
     async function openSavedFile() {
-        if (!exportedPath) return;
+        const path = exportedPath || (isMine ? (msg.attachment?.originalPath || msg.attachment?.path) : null);
+        if (!path) return;
         try {
-            await invoke('open_file', { path: exportedPath });
+            await invoke('open_file', { path });
         } catch (e) {
             addToast("Failed to open file", 'error');
         }
@@ -145,55 +101,26 @@
     }
 
     async function doExport() {
-        if (exportedPath && !(isMobile && !isImage && !isVideo)) {
+        if ((exportedPath || isMine) && !(isMobile && !isImage && !isVideo)) {
             openSavedFile();
             return;
         }
 
         if (!msg.attachment || isExporting) return;
-        const srcPath = msg.attachment.vaultPath || msg.attachment.originalPath;
-        if (!srcPath) {
-            addToast("Attachment source not found.", 'warning');
-            return;
-        }
 
         try {
             isExporting = true;
             let targetPath: string | null = null;
 
-            if (isMobile) {
+            if (isMobile || true) { 
                 const { save } = await import('@tauri-apps/plugin-dialog');
                 targetPath = await save({ defaultPath: msg.attachment.fileName });
                 
                 if (targetPath) {
-                    const { writeFile } = await import('@tauri-apps/plugin-fs');
-                    let dataToSave: Uint8Array;
-                    
-                    if (msg.attachment.data) {
-                        let bytes = msg.attachment.data;
-                        if (typeof bytes === 'string') bytes = fromBase64(bytes);
-                        dataToSave = new Uint8Array(bytes as any);
-                    } else {
-                        const data = await getAttachment(msg.id);
-                        if (!data) throw new Error("Could not fetch decrypted file data.");
-                        dataToSave = new Uint8Array(data as any);
-                    }
-                    
-                    await writeFile(targetPath, dataToSave);
+                    await invoke('vault_export_media', { id: msg.id, targetPath });
                     exportedPath = targetPath;
                     if (chatId) markAsDownloaded(chatId, msg.id, targetPath);
                     addToast("Saved successfully", 'success');
-                }
-            } else {
-                const { save } = await import('@tauri-apps/plugin-dialog');
-                targetPath = await save({ defaultPath: msg.attachment.fileName });
-
-                if (targetPath) {
-                    await invoke('db_export_media', { srcPath, targetPath });
-                    exportedPath = targetPath;
-                    if (chatId) markAsDownloaded(chatId, msg.id, targetPath);
-                    addToast(isMine ? "Opening file..." : "Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
-                    openSavedFile();
                 }
             }
         } catch (e: any) {
@@ -218,7 +145,7 @@
         e.stopPropagation();
         lightbox.set({
             id: msg.id,
-            src: blobUrl,
+            src: mediaUrl,
             alt: msg.attachment.fileName,
             fileName: msg.attachment.fileName,
             fileType: msg.attachment.fileType,
@@ -248,7 +175,7 @@
             {/if}
         </div>
     {:else}
-        <VoiceNotePlayer src={blobUrl} id={msg.id} isMine={msg.isMine} initialDuration={msg.attachment.duration || 0} />
+        <VoiceNotePlayer src={mediaUrl} id={msg.id} isMine={msg.isMine} initialDuration={msg.attachment.duration || 0} />
     {/if}
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2 max-w-full">
@@ -263,9 +190,9 @@
                 <div class="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden cursor-pointer">
                     {#if isImage}
                         <img 
-                            src={msg.attachment.thumbnail || blobUrl} 
+                            src={msg.attachment.thumbnail || mediaUrl} 
                             alt={msg.attachment.fileName} 
-                            class="w-full h-full object-cover transition-all duration-700 hover:scale-105 {msg.attachment.thumbnail && !blobUrl ? 'blur-[4px] scale-110 opacity-100' : 'opacity-100'}"
+                            class="w-full h-full object-cover transition-all duration-700 hover:scale-105 {msg.attachment.thumbnail && !mediaUrl ? 'blur-[4px] scale-110 opacity-100' : 'opacity-100'}"
                         />
                     {:else if isVideo}
                         <img 
@@ -310,8 +237,12 @@
             <!-- Generic File UI -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
-                class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-[0.9rem] shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full"
+                role="button"
+                tabindex="0"
+                class="flex items-center space-x-3 bg-entropy-surface/60 backdrop-blur-md p-3 rounded-[0.9rem] shadow-sm border border-white/5 group/file hover:bg-entropy-surface/80 transition-all max-w-full cursor-pointer active:scale-[0.98]"
                 oncontextmenu={openContextMenu}
+                onclick={openSavedFile}
+                onkeydown={(e) => e.key === 'Enter' && openSavedFile()}
             >
                 <div class="w-10 h-10 rounded-xl bg-entropy-primary/10 flex items-center justify-center text-entropy-primary shrink-0 group-hover/file:scale-110 transition-transform">
                     {#if isVideo}
@@ -321,15 +252,11 @@
                     {/if}
                 </div>
                 <div class="flex-1 min-w-0 overflow-hidden">
-                    <button 
-                        onclick={openSavedFile}
-                        class="block text-left w-full group/name min-w-0 overflow-hidden"
-                        disabled={!exportedPath && !msg.isMine}
-                    >
-                        <div class="text-[13px] font-bold truncate text-entropy-text-primary tracking-tight leading-none mb-1 {exportedPath || msg.isMine ? 'group-hover/name:text-entropy-primary group-hover/name:underline' : ''}">
+                    <div class="block text-left w-full group/name min-w-0 overflow-hidden">
+                        <div class="text-[13px] font-bold truncate text-entropy-text-primary tracking-tight leading-none mb-1 {exportedPath || isMine ? 'group-hover/name:text-entropy-primary group-hover/name:underline' : ''}">
                             {msg.attachment.fileName}
                         </div>
-                    </button>
+                    </div>
                     <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest opacity-80">
                         {#if activeTransfer}
                             <span class="text-entropy-primary animate-pulse">{activeTransfer.direction === 'upload' ? 'Sending' : 'Receiving'} {progress}%</span>

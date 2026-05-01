@@ -8,23 +8,18 @@ import type { Message, Chat } from '../types';
  * Cache and attachment orchestration:
  * Memory cache for media assets and indexing logic.
  */
-const attachmentCache = new Map<string, Uint8Array>();
+let proxyPort: number | null = null;
 
-export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
-    if (attachmentCache.has(id)) return attachmentCache.get(id)!;
-    try {
-        const bytes = await invoke<number[]>('vault_load_media', { id });
-        const uint8 = new Uint8Array(bytes);
-        
-        // Only cache small files to prevent RAM exhaustion
-        if (uint8.length < 5 * 1024 * 1024) {
-            attachmentCache.set(id, uint8);
+export const getMediaUrl = async (id: string, type: string): Promise<string> => {
+    if (!proxyPort) {
+        try {
+            proxyPort = await invoke<number>('get_media_proxy_port');
+        } catch (e) {
+            console.error("Failed to get proxy port", e);
+            return "";
         }
-        
-        return uint8;
-    } catch (e) {
-        return null;
     }
+    return `http://localhost:${proxyPort}/media/${id}?type=${encodeURIComponent(type)}`;
 };
 
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
@@ -107,11 +102,23 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
     addMessage(destId, optimisticMsg);
 
     const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
+    
+    // Resolve data if path is missing (e.g. for recorded voice notes)
+    let finalData: Uint8Array | null = null;
+    if (!file.path) {
+        if (file instanceof Blob) {
+            const buffer = await file.arrayBuffer();
+            finalData = new Uint8Array(buffer);
+        } else if (file.data) {
+            finalData = file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
+        }
+    }
+
     invoke(command, {
         payload: {
             recipient: destId,
             filePath: file.path || null,
-            fileData: null,
+            fileData: finalData,
             fileName: file.name,
             fileType: file.type,
             msgType: type,
@@ -152,7 +159,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
     if (existingMsgs.some(m => m.id === msg.id)) return;
 
     if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
-        attachmentCache.set(msg.id, msg.attachment.data);
         await invoke('vault_save_media', { id: msg.id, data: msg.attachment.data }).catch(() => { });
     }
 
@@ -214,7 +220,7 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
         // De-duplicate Optimistic messages
         let finalMsgs = msgs;
         if (msg.isMine && !msg.id.startsWith('opt-')) {
-            const incomingFileName = (msg.attachment?.fileName || msg.attachment?.file_name || "").toLowerCase();
+            const incomingFileName = (msg.attachment?.fileName || "").toLowerCase();
             const cleanIncomingContent = (msg.content.startsWith('File: ') ? msg.content.substring(6) : msg.content).toLowerCase();
             
             const ghostIndex = msgs.findIndex(m => {
@@ -531,7 +537,6 @@ export const jumpToPresent = async (peerHash: string) => {
 
 export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
     msgIds.forEach(id => {
-        attachmentCache.delete(id);
         invoke('vault_delete_media', { id }).catch(() => { });
     });
 

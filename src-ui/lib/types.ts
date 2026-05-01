@@ -18,6 +18,9 @@ export interface Message {
         isDownloaded?: boolean;
         exportedPath?: string;
         originalPath?: string;
+        vaultPath?: string;
+        thumbnail?: string;
+        duration?: number;
         bundle?: any;
     };
     groupId?: string;

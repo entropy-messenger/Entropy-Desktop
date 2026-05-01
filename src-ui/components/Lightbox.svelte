@@ -4,47 +4,35 @@
     import { fade, scale, fly } from 'svelte/transition';
     import { invoke } from '@tauri-apps/api/core';
     import VideoPlayer from './VideoPlayer.svelte';
-    import { getAttachment } from '../lib/actions/chat';
+    import { getMediaUrl } from '../lib/actions/chat';
 
     let loading = $state(false);
-    let blobUrl = $state<string | null>(null);
+    let mediaUrl = $state<string | null>(null);
 
     $effect(() => {
         const lb = $lightbox;
         if (lb) {
             if (lb.src) {
-                blobUrl = lb.src;
+                mediaUrl = lb.src;
             } else if (lb.id) {
-                loadFullMedia(lb.id, lb.fileType || 'application/octet-stream');
+                loading = true;
+                getMediaUrl(lb.id, lb.fileType || 'application/octet-stream')
+                    .then(url => {
+                        mediaUrl = url;
+                        loading = false;
+                    })
+                    .catch(() => {
+                        addToast("Failed to connect to media proxy", 'error');
+                        close();
+                    });
             }
         }
         
         return () => {
-            if (blobUrl && blobUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(blobUrl);
-            }
-            blobUrl = null;
+            mediaUrl = null;
             loading = false;
         };
     });
-
-    async function loadFullMedia(id: string, type: string) {
-        loading = true;
-        try {
-            const data = await getAttachment(id);
-            if (data) {
-                blobUrl = URL.createObjectURL(new Blob([data], { type }));
-            } else {
-                addToast("Failed to fetch attachment", 'error');
-                close();
-            }
-        } catch (e) {
-            addToast("Failed to decrypt media", 'error');
-            close();
-        } finally {
-            loading = false;
-        }
-    }
 
     function close() {
         lightbox.set(null);
@@ -55,22 +43,13 @@
     }
 
     async function downloadImage() {
-        if (!$lightbox || !blobUrl) return;
+        if (!$lightbox) return;
         try {
             const { save } = await import('@tauri-apps/plugin-dialog');
             const targetPath = await save({ defaultPath: $lightbox.fileName });
             
             if (targetPath) {
-                // Since we have the blob data here, we could potentially use it,
-                // but the backend command db_export_media expects a path.
-                // However, we can use plugin-fs to write the data if we have it.
-                const { writeFile } = await import('@tauri-apps/plugin-fs');
-                
-                // Fetch the blob data again or use the cached version
-                const response = await fetch(blobUrl);
-                const arrayBuffer = await response.arrayBuffer();
-                await writeFile(targetPath, new Uint8Array(arrayBuffer));
-                
+                await invoke('vault_export_media', { id: $lightbox.id, targetPath });
                 addToast("Saved to: " + targetPath.split(/[/\\]/).pop(), 'success');
             }
         } catch (e) {
@@ -157,14 +136,14 @@
                     </div>
                     <span class="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Decrypting Sovereign Media</span>
                 </div>
-            {:else if blobUrl}
+            {:else if mediaUrl}
                 {#if $lightbox.type === 'video'}
                     <div class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" onclick={(e) => e.stopPropagation()}>
-                        <VideoPlayer src={blobUrl} expanded={true} />
+                        <VideoPlayer src={mediaUrl} expanded={true} />
                     </div>
                 {:else}
                     <img 
-                        src={blobUrl} 
+                        src={mediaUrl} 
                         alt={$lightbox.alt}
                         class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
                         transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
