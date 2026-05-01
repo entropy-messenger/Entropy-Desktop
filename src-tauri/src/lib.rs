@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
 pub fn run() {
@@ -147,14 +147,16 @@ pub fn run() {
                 let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
                 let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-                let tray_builder = TrayIconBuilder::new();
+                let tray_builder = TrayIconBuilder::with_id("entropy-tray");
                 let tray_icon = app.default_window_icon().cloned();
 
                 let builder = if let Some(icon) = tray_icon {
                     tray_builder.icon(icon)
                 } else {
                     tray_builder
-                };
+                }
+                .tooltip("Entropy")
+                .title("Entropy");
 
                 let _tray = builder
                     .menu(&menu)
@@ -170,14 +172,22 @@ pub fn run() {
                         }
                         _ => {}
                     })
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { .. } = event {
+                    .on_tray_icon_event(|tray, event| match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        }
+                        | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => {
                             let app = tray.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
                         }
+                        _ => {}
                     })
                     .build(app)?;
             }
@@ -186,6 +196,12 @@ pub fn run() {
             media_proxy::start_media_server(app.handle().clone());
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
