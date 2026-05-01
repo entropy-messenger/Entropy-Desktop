@@ -25,13 +25,6 @@ pub fn open_file(
         return Err("Access to hidden files is denied".into());
     }
 
-    #[cfg(target_os = "android")]
-    {
-        // External file opening disabled for Android.
-        // In-app previews are used for supported media.
-        return Ok(());
-    }
-    #[cfg(not(target_os = "android"))]
     {
         use tauri_plugin_opener::OpenerExt;
         app.opener()

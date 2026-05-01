@@ -9,19 +9,21 @@
 mod app_state;
 mod commands;
 mod noise;
-mod signal_store;
 mod media_proxy;
+mod signal_store;
+
+#[cfg(test)]
+mod tests;
 
 use app_state::{DbState, NetworkState};
 use std::sync::Mutex;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
 use tauri::Manager;
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+
 pub fn run() {
 
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
@@ -59,10 +61,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init());
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
-    }
+    builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
 
@@ -144,8 +143,7 @@ pub fn run() {
                     });
                 }
             }
-            // Tray and menu configuration (Desktop only)
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            // Tray and menu configuration
             {
                 let quit_i = MenuItem::with_id(app, "quit", "Quit Entropy", true, None::<&str>)?;
                 let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;

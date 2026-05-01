@@ -186,7 +186,7 @@ pub async fn process_incoming_binary(
         }
         let chunk_data = &raw_chunk_data[..chunk_len];
         if frame_type == 0x02 {
-            println!("[INBOX] Received fragment {}/{} ({} bytes) for TID: {} from {}", index + 1, total, chunk_data.len(), transfer_id, sender);
+
         }
 
         let (is_complete, complete_data) = {
@@ -239,7 +239,7 @@ pub async fn process_incoming_binary(
             }
 
             if complete {
-                println!("[INBOX] Reassembly complete for TID: {}. FrameType: {}", transfer_id, frame_type);
+
                 if frame_type == 0x01 || frame_type == 0x04 {
                     let db_state = app.state::<DbState>();
                     let type_suffix = "sig";
@@ -824,11 +824,11 @@ pub async fn process_incoming_binary(
                                             std::fs::File::open(&temp_path),
                                             std::fs::File::create(&vault_path)
                                         ) {
-                                            println!("[BRIDGE] Starting metadata-triggered decryption bridge for TID: {}. Key fingerprint: {}", inner_transfer_id, hex::encode(&vault_key_bytes[..4]));
+
                                             use std::io::{Read, Write};
                                             use sha2::{Sha256, Digest};
                                             let mut file_hasher = Sha256::new();
-                                            let expected_hash = bundle["sha256"].as_str().unwrap_or_default();
+                                            let _expected_hash = bundle["sha256"].as_str().unwrap_or_default();
 
                                             let mut total_blocks = 0;
                                             loop {
@@ -850,7 +850,7 @@ pub async fn process_incoming_binary(
                                                     if let Ok(ptext) = transit_cipher.decrypt(nonce, ciphertext) {
                                                         file_hasher.update(&ptext);
                                                         if total_blocks == 0 {
-                                                            println!("[BRIDGE] First block plaintext peek: {:02x?}", &ptext[..std::cmp::min(ptext.len(), 4)]);
+
                                                         }
                                                         let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
                                                         if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, ptext.as_slice()) {
@@ -859,23 +859,15 @@ pub async fn process_incoming_binary(
                                                             total_blocks += 1;
                                                         }
                                                     } else {
-                                                        println!("[BRIDGE-ERROR] Failed to decrypt chunk in metadata-bridge. Index: {}", total_blocks);
+
                                                     }
                                                 } else {
                                                     break; // Tail too short
                                                 }
                                             }
-                                            let total_bytes = dst.metadata().map(|m| m.len()).unwrap_or(0);
-                                            let actual_hash = hex::encode(file_hasher.finalize());
                                             let _ = dst.sync_all();
-
-                                            if actual_hash == expected_hash {
-                                                println!("[BRIDGE] Integrity verified! Hash: {}", actual_hash);
-                                            } else {
-                                                println!("[BRIDGE-ERROR] HASH MISMATCH! Expected: {}, Got: {}", expected_hash, actual_hash);
-                                            }
                                             
-                                            println!("[BRIDGE] Decryption complete for TID: {}. Saved {} bytes to Vault.", inner_transfer_id, total_bytes);
+
                                             let _ = std::fs::remove_file(&temp_path);
                                             let _ = app.emit("network-bin-complete", serde_json::json!({
                                                 "sender": sender,
@@ -1072,7 +1064,7 @@ pub async fn process_incoming_binary(
                                         std::fs::File::open(&temp_path_clone),
                                         std::fs::File::create(&vault_path)
                                     ) {
-                                        println!("[BRIDGE] Starting binary-triggered decryption bridge for TID: {}. Key fingerprint: {}", transfer_id, hex::encode(&vault_key_bytes[..4]));
+
                                         use std::io::{Read, Write};
                                         use sha2::{Sha256, Digest};
                                         let mut file_hasher = Sha256::new();
@@ -1097,7 +1089,7 @@ pub async fn process_incoming_binary(
                                                 if let Ok(ptext) = transit_cipher.decrypt(nonce, ciphertext) {
                                                     file_hasher.update(&ptext);
                                                     if total_blocks == 0 {
-                                                        println!("[BRIDGE] First block plaintext peek: {:02x?}", &ptext[..std::cmp::min(ptext.len(), 4)]);
+
                                                     }
                                                     // Re-encrypt for vault
                                                     let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -1107,16 +1099,14 @@ pub async fn process_incoming_binary(
                                                         total_blocks += 1;
                                                     }
                                                 } else {
-                                                    println!("[BRIDGE-ERROR] Failed to decrypt chunk in binary-bridge. Index: {}", total_blocks);
+
                                                 }
                                             } else {
                                                 break;
                                             }
                                         }
-                                        let total_bytes = dst.metadata().map(|m| m.len()).unwrap_or(0);
-                                        let actual_hash = hex::encode(file_hasher.finalize());
                                         let _ = dst.sync_all();
-                                        println!("[BRIDGE] Decryption complete for TID: {}. Saved {} bytes to Vault. Actual Hash: {}", transfer_id, total_bytes, actual_hash);
+
                                         let _ = std::fs::remove_file(&temp_path_clone);
 
                                         let _ = app_clone.emit(

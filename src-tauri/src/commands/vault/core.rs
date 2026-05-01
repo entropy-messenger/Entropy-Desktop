@@ -287,7 +287,6 @@ pub async fn init_vault(
             
             derived_key_hex_for_customizer = derived_key_hex.clone();
 
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", derived_key_hex));
             }

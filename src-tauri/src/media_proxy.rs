@@ -41,7 +41,7 @@ pub fn start_media_server(app: tauri::AppHandle) {
         let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
         let (addr, server) = warp::serve(routes).bind_ephemeral(addr);
 
-        println!("[MEDIA-PROXY] Server listening on http://{}", addr);
+
 
         // Save the assigned port to app state
         if let Ok(mut port_lock) = app_handle2.state::<DbState>().media_proxy_port.lock() {

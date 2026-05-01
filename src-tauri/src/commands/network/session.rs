@@ -21,9 +21,6 @@ use crate::signal_store::SqliteSignalStore;
 
 use super::pacing::{PACKET_SIZE, send_paced_json};
 use super::transit::flush_outbox;
-#[cfg(any(target_os = "android", target_os = "ios"))]
-const RELAY_URL: &str = "ws://192.168.240.1:8080/ws";
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]

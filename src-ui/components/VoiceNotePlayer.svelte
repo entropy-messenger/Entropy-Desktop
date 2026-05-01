@@ -55,7 +55,7 @@
           lastGeneratedId = id;
           drawWaveform();
       } catch (e) {
-          console.error("Failed to load audio proxy:", e);
+
       } finally {
           isLoading = false;
       }

@@ -167,24 +167,18 @@ pub async fn internal_send_to_network(
             if let Some(id) = msg_id {
                 let db_state = app.state::<DbState>();
                 if let Ok(conn) = db_state.get_conn() {
-                let mut chat_address: Option<String> = None;
-                chat_address = conn
+                let chat_address: Option<String> = conn
                     .query_row(
                         "SELECT chat_address FROM messages WHERE id = ?",
                         [&id],
-                        |r| r.get(0),
+                        |r| r.get::<_, String>(0),
                     )
                     .ok();
+
                 let _ = conn.execute(
                     "UPDATE messages SET status = 'pending' WHERE id = ?",
                     [id.clone()],
                 );
-                if let Some(ref addr) = chat_address {
-                    let _ = conn.execute(
-                        "UPDATE chats SET last_status = 'pending' WHERE address = ?",
-                        [addr],
-                    );
-                }
                 app.emit(
                     "msg://status",
                     json!({ "id": id, "status": "pending", "chat_address": chat_address }),

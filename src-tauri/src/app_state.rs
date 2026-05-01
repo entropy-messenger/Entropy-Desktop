@@ -50,7 +50,6 @@ pub struct SqlCipherCustomizer {
 impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for SqlCipherCustomizer {
     fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
         if !self.key.is_empty() {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", self.key))?;
             }

@@ -15,7 +15,7 @@ export const getMediaUrl = async (id: string, type: string): Promise<string> => 
         try {
             proxyPort = await invoke<number>('get_media_proxy_port');
         } catch (e) {
-            console.error("Failed to get proxy port", e);
+
             return "";
         }
     }

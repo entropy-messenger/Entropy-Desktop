@@ -69,7 +69,7 @@
             const url = await getMediaUrl(msg.id, msg.attachment.fileType || 'application/octet-stream');
             mediaUrl = url;
         } catch (e) {
-            console.error("[UI] Failed to get media URL:", e);
+
             failed = true;
         } finally {
             loading = false;

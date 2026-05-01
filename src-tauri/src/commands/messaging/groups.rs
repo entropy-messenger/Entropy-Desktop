@@ -7,7 +7,7 @@ use hex;
 use rand;
 use rusqlite::params;
 use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid;
 
 #[tauri::command]
@@ -57,7 +57,6 @@ pub async fn create_group(
                 last_status: None,
                 is_active: true,
             };
-            let db_state = app.state::<DbState>();
             internal_db_upsert_chat(&db_state, chat).await?;
 
             // group seed

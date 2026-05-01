@@ -1,6 +1,5 @@
 use crate::app_state::DbState;
 use crate::commands::{get_db_filename, get_media_dirname};
-use std::io::{Read, Write};
 use tauri::{Manager, State};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
