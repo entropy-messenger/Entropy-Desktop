@@ -12,7 +12,7 @@ pub fn open_file(
     let canonical_path = std::fs::canonicalize(&path_buf)
         .map_err(|e| format!("Invalid or inaccessible path: {}", e))?;
 
-    // No longer strictly enforcing vault boundary for open_file, 
+    // No longer strictly enforcing vault boundary for open_file,
     // as users need to open files they've exported to their local filesystem.
     // The hidden file check below still provides a baseline security layer.
 
@@ -28,7 +28,10 @@ pub fn open_file(
     {
         use tauri_plugin_opener::OpenerExt;
         app.opener()
-            .open_url(format!("file://{}", canonical_path.to_string_lossy()), None::<&str>)
+            .open_url(
+                format!("file://{}", canonical_path.to_string_lossy()),
+                None::<&str>,
+            )
             .map_err(|e: tauri_plugin_opener::Error| e.to_string())?;
     }
     Ok(())

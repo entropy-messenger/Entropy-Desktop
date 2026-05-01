@@ -8,8 +8,8 @@
 //! - Hardened IPC bridge with 50+ registered commands.
 mod app_state;
 mod commands;
-mod noise;
 mod media_proxy;
+mod noise;
 mod signal_store;
 
 #[cfg(test)]
@@ -17,15 +17,13 @@ mod tests;
 
 use app_state::{DbState, NetworkState};
 use std::sync::Mutex;
+use tauri::Manager;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
-use tauri::Manager;
-
 
 pub fn run() {
-
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
     println!("Starting Entropy (Profile: {})", profile);
 
@@ -64,7 +62,6 @@ pub fn run() {
     builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
     builder
-
         .invoke_handler(tauri::generate_handler![
             commands::init_vault,
             commands::vault_save,
@@ -125,21 +122,22 @@ pub fn run() {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK
             #[cfg(target_os = "linux")]
             {
-                use webkit2gtk::{PermissionRequestExt, UserMediaPermissionRequest, WebViewExt};
                 use webkit2gtk::glib::Cast;
+                use webkit2gtk::{PermissionRequestExt, UserMediaPermissionRequest, WebViewExt};
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.with_webview(|w| {
                         let webview = w.inner();
-                        webview.connect_permission_request(
-                            |_webview, request| {
-                                if request.dynamic_cast_ref::<UserMediaPermissionRequest>().is_some() {
-                                    request.allow();
-                                } else {
-                                    request.deny();
-                                }
-                                true
-                            },
-                        );
+                        webview.connect_permission_request(|_webview, request| {
+                            if request
+                                .dynamic_cast_ref::<UserMediaPermissionRequest>()
+                                .is_some()
+                            {
+                                request.allow();
+                            } else {
+                                request.deny();
+                            }
+                            true
+                        });
                     });
                 }
             }

@@ -96,7 +96,10 @@ pub async fn import_database(
     src_path: String,
 ) -> Result<(), String> {
     {
-        let mut pool_lock = state.pool.lock().map_err(|_| "Database connection lock poisoned")?;
+        let mut pool_lock = state
+            .pool
+            .lock()
+            .map_err(|_| "Database connection lock poisoned")?;
         *pool_lock = None;
     }
 
@@ -164,7 +167,7 @@ pub async fn import_database(
 
         // Prevent Path Traversal
         if name.contains("..") || name.starts_with('/') || name.contains(':') {
-            continue; 
+            continue;
         }
 
         // Ensure backups from other profiles map to the ACTIVE profile

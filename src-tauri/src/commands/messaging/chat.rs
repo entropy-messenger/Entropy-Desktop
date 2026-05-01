@@ -1,3 +1,5 @@
+//! Local chat state management and contact coordination.
+
 use crate::app_state::DbState;
 use crate::commands::{DbChat, DbContact, DbMessage, vault_delete_media};
 use rusqlite::params;

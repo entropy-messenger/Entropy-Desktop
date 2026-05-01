@@ -1,24 +1,16 @@
-//! Outbound Message Pipeline and Metadata Processing
-//!
-//! This module orchestrates the processing of outbound communications, including:
-//! - Local shadow persistence (optimistic UI updates).
-//! - Media asset pre-processing (encryption and vaulting).
-//! - Signal session resolution and ciphertext generation (E2EE).
-//! - Handover to the Transit Layer for fragmentation and network dispatch.
-//!
-//! All outgoing payloads are subjected to path canonicalization and vault boundary
-//! checks to prevent unauthorized file system access.
+//! Outbound message pipeline.
+//! Orchestrates encryption, media vaulting, and network dispatch.
 
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
-    get_media_dir, internal_db_save_message, internal_send_to_network,
-    internal_signal_encrypt, internal_dispatch_fragment, DbMessage,
-};
-use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
-    XChaCha20Poly1305, Key as ChaKey,
+    DbMessage, get_media_dir, internal_db_save_message, internal_dispatch_fragment,
+    internal_send_to_network, internal_signal_encrypt,
 };
 use base64::Engine;
+use chacha20poly1305::{
+    Key as ChaKey, XChaCha20Poly1305,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -75,114 +67,113 @@ pub async fn process_outgoing_text(
         return Err("Message too long (max 2000 characters)".into());
     }
 
-            let msg_id = uuid::Uuid::new_v4().to_string();
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
 
-            let own_id = {
-                let id_lock = net_state
-                    .identity_hash
-                    .lock()
-                    .map_err(|_| "Network state poisoned")?;
-                id_lock.clone().ok_or("Not authenticated")?
-            };
+    let own_id = {
+        let id_lock = net_state
+            .identity_hash
+            .lock()
+            .map_err(|_| "Network state poisoned")?;
+        id_lock.clone().ok_or("Not authenticated")?
+    };
 
-            let db_msg = DbMessage {
-                id: msg_id.clone(),
-                chat_address: payload.recipient.clone(),
-                sender_hash: own_id.clone(),
-                content: payload.content.clone(),
-                timestamp,
-                r#type: "text".to_string(),
-                status: "sending".to_string(),
-                attachment_json: None,
-                is_starred: false,
-                is_group: false,
-                reply_to_json: payload
-                    .reply_to
-                    .as_ref()
-                    .map(|r| serde_json::to_string(&r).unwrap_or_default()),
-            };
+    let db_msg = DbMessage {
+        id: msg_id.clone(),
+        chat_address: payload.recipient.clone(),
+        sender_hash: own_id.clone(),
+        content: payload.content.clone(),
+        timestamp,
+        r#type: "text".to_string(),
+        status: "sending".to_string(),
+        attachment_json: None,
+        is_starred: false,
+        is_group: false,
+        reply_to_json: payload
+            .reply_to
+            .as_ref()
+            .map(|r| serde_json::to_string(&r).unwrap_or_default()),
+    };
 
-            internal_db_save_message(&db_state, db_msg.clone()).await?;
+    internal_db_save_message(&db_state, db_msg.clone()).await?;
 
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
-            if let Some(obj) = final_json.as_object_mut() {
-                let _ = obj.insert(
-                    "chatAlias".to_string(),
-                    serde_json::json!(payload.group_name),
-                );
-                let _ = obj.insert(
-                    "chatMembers".to_string(),
-                    serde_json::json!(payload.group_members.clone()),
-                );
-            }
-            app.emit("msg://added", final_json.clone())
-                .map_err(|e: tauri::Error| e.to_string())?;
+    let mut final_json =
+        serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
+    if let Some(obj) = final_json.as_object_mut() {
+        let _ = obj.insert(
+            "chatAlias".to_string(),
+            serde_json::json!(payload.group_name),
+        );
+        let _ = obj.insert(
+            "chatMembers".to_string(),
+            serde_json::json!(payload.group_members.clone()),
+        );
+    }
+    app.emit("msg://added", final_json.clone())
+        .map_err(|e: tauri::Error| e.to_string())?;
 
-            let signal_payload = serde_json::json!({
-                "type": "text_msg",
-                "content": payload.content,
-                "id": msg_id.clone(),
-                "replyTo": payload.reply_to,
-                "timestamp": timestamp,
-                "isGroup": false,
-            });
+    let signal_payload = serde_json::json!({
+        "type": "text_msg",
+        "content": payload.content,
+        "id": msg_id.clone(),
+        "replyTo": payload.reply_to,
+        "timestamp": timestamp,
+        "isGroup": false,
+    });
 
-            // session encryption
-            let ciphertext_obj = internal_signal_encrypt(
-                app.clone(),
-                &net_state,
-                &payload.recipient,
-                signal_payload.to_string(),
-            )
-            .await?;
+    let ciphertext_obj = internal_signal_encrypt(
+        app.clone(),
+        &net_state,
+        &payload.recipient,
+        signal_payload.to_string(),
+    )
+    .await?;
 
-            let routing_hash = payload
-                .recipient
-                .split('.')
-                .next()
-                .unwrap_or(&payload.recipient);
-            let payload_bytes = ciphertext_obj.to_string().into_bytes();
+    let routing_hash = payload
+        .recipient
+        .split('.')
+        .next()
+        .unwrap_or(&payload.recipient);
+    let payload_bytes = ciphertext_obj.to_string().into_bytes();
 
-            let _ = internal_send_to_network(
-                app.clone(),
-                &net_state,
-                Some(routing_hash.to_string()),
-                Some(msg_id.clone()),
-                None,
-                Some(payload_bytes),
-                true,
-                false,
-                None,
-                false,
-            )
-            .await;
+    let _ = internal_send_to_network(
+        app.clone(),
+        &net_state,
+        Some(routing_hash.to_string()),
+        Some(msg_id.clone()),
+        None,
+        Some(payload_bytes),
+        true,
+        false,
+        None,
+        false,
+    )
+    .await;
 
-            // transition state
-            {
-                let conn = db_state.get_conn()?;
-                let _ = conn.execute(
-                    "UPDATE messages SET status = 'sent' WHERE id = ?1",
-                    params![msg_id],
-                );
-                let _ = conn.execute(
-                    "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-                    params![payload.recipient],
-                );
-            }
-            app.emit(
-                "msg://status",
-                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
-            )
-            .map_err(|e: tauri::Error| e.to_string())?;
+    {
+        let conn = db_state.get_conn()?;
+        let _ = conn.execute(
+            "UPDATE messages SET status = 'sent' WHERE id = ?1",
+            params![msg_id],
+        );
+        let _ = conn.execute(
+            "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+            params![payload.recipient],
+        );
+    }
+    app.emit(
+        "msg://status",
+        json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+    )
+    .map_err(|e: tauri::Error| e.to_string())?;
 
-            if let Some(obj) = final_json.as_object_mut() {
-                let _ = obj.insert("status".to_string(), json!("sent"));
-            }
-            Ok(final_json)
+    if let Some(obj) = final_json.as_object_mut() {
+        let _ = obj.insert("status".to_string(), json!("sent"));
+    }
+    Ok(final_json)
 }
 
 #[tauri::command]
@@ -197,13 +188,13 @@ pub fn process_outgoing_media(
         .as_millis() as i64;
     let transfer_id: u32 = rand::random();
 
-    // 1. Immediate validation
     let canonical_path_opt = if let Some(p) = &payload.file_path {
         let path_buf = std::path::PathBuf::from(p);
         let canonical_path = std::fs::canonicalize(&path_buf)
             .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
-        
-        let metadata = std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
+
+        let metadata =
+            std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
         if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
             return Err("File too large. Maximum size is 10GB.".to_string());
         }
@@ -218,36 +209,57 @@ pub fn process_outgoing_media(
     };
 
     let file_size = if let Some(ref p) = canonical_path_opt {
-        std::fs::metadata(p).map_err(|e: std::io::Error| e.to_string())?.len()
+        std::fs::metadata(p)
+            .map_err(|e: std::io::Error| e.to_string())?
+            .len()
     } else if let Some(ref d) = payload.file_data {
         d.len() as u64
-    } else { 0 };
+    } else {
+        0
+    };
 
-    // 2. Optimistic UI: Save to DB and return immediately
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
-    let own_id = net_state.identity_hash.lock().map_err(|_| "State poisoned")?.clone().unwrap_or_default();
+    let own_id = net_state
+        .identity_hash
+        .lock()
+        .map_err(|_| "State poisoned")?
+        .clone()
+        .unwrap_or_default();
 
     let db_msg = DbMessage {
         id: msg_id.clone(),
         chat_address: payload.recipient.clone(),
         sender_hash: own_id.clone(),
-        content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
+        content: if payload.msg_type.as_deref() == Some("voice_note") {
+            "Voice Note".to_string()
+        } else {
+            format!("File: {}", payload.file_name.as_deref().unwrap_or("Media"))
+        },
         timestamp,
-        r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+        r#type: payload
+            .msg_type
+            .clone()
+            .unwrap_or_else(|| "file".to_string()),
         status: "sending".to_string(),
-        attachment_json: Some(serde_json::json!({
-            "fileName": payload.file_name,
-            "fileType": payload.file_type,
-            "size": file_size,
-            "duration": payload.duration,
-            "thumbnail": payload.thumbnail,
-            "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
-            "transferId": transfer_id
-        }).to_string()),
+        attachment_json: Some(
+            serde_json::json!({
+                "fileName": payload.file_name,
+                "fileType": payload.file_type,
+                "size": file_size,
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
+                "transferId": transfer_id
+            })
+            .to_string(),
+        ),
         is_starred: false,
         is_group: false,
-        reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+        reply_to_json: payload
+            .reply_to
+            .as_ref()
+            .map(|r| serde_json::to_string(&r).unwrap_or_default()),
     };
 
     {
@@ -255,7 +267,11 @@ pub fn process_outgoing_media(
         let db_msg = db_msg.clone();
         let app = app.clone();
         tauri::async_runtime::block_on(async move {
-            let _ = crate::commands::messaging::chat::internal_db_save_message(&db_state, db_msg.clone()).await;
+            let _ = crate::commands::messaging::chat::internal_db_save_message(
+                &db_state,
+                db_msg.clone(),
+            )
+            .await;
             let _ = app.emit("msg://added", db_msg);
         });
     }
@@ -267,7 +283,10 @@ pub fn process_outgoing_media(
     let canonical_path_bg = canonical_path_opt.clone();
 
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async move {
             let app = app_bg;
             let payload = payload_bg;
@@ -275,8 +294,7 @@ pub fn process_outgoing_media(
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            // Keys
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
             let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
             let vault_key_bytes = {
@@ -291,8 +309,7 @@ pub fn process_outgoing_media(
             let mut vault_file = std::fs::File::create(&vault_path).unwrap();
 
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
-            
-            // Announcement Metadata (0x04)
+
             let announcement = serde_json::json!({
                 "type": "file",
                 "id": msg_id.clone(),
@@ -311,19 +328,36 @@ pub fn process_outgoing_media(
                 }
             });
 
-            if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &payload.recipient, announcement.to_string()).await {
+            if let Ok(encrypted) = internal_signal_encrypt(
+                app.clone(),
+                &net_state,
+                &payload.recipient,
+                announcement.to_string(),
+            )
+            .await
+            {
                 let _ = crate::commands::network::transit::internal_send_to_network(
-                    app.clone(), &net_state, Some(payload.recipient.clone()), Some(msg_id.clone()), None,
-                    Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
-                ).await;
+                    app.clone(),
+                    &net_state,
+                    Some(payload.recipient.clone()),
+                    Some(msg_id.clone()),
+                    None,
+                    Some(encrypted.to_string().into_bytes()),
+                    true,
+                    false,
+                    Some(transfer_id),
+                    true,
+                )
+                .await;
             }
 
-            // Fragments
             let mut reader: Box<dyn std::io::Read> = if let Some(ref p) = canonical_path_bg {
                 Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
             } else if let Some(ref d) = payload.file_data {
                 Box::new(std::io::Cursor::new(d.to_vec()))
-            } else { return; };
+            } else {
+                return;
+            };
 
             let mut fragment_index = 0;
             let mut buffer = vec![0u8; 1279];
@@ -339,10 +373,12 @@ pub fn process_outgoing_media(
                         Err(_) => break,
                     }
                 }
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let chunk = &buffer[..n];
                 hasher.update(chunk);
-                
+
                 let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
                 let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
                 use std::io::Write;
@@ -362,14 +398,21 @@ pub fn process_outgoing_media(
                 routing_hash[..r_len].copy_from_slice(&r_bytes[..r_len]);
 
                 let _ = internal_dispatch_fragment(
-                    app.clone(), &net_state, routing_hash, Some(msg_id.clone()),
-                    transfer_id, fragment_index,
-                    total_fragments, &packet, true, false
-                ).await;
+                    app.clone(),
+                    &net_state,
+                    routing_hash,
+                    Some(msg_id.clone()),
+                    transfer_id,
+                    fragment_index,
+                    total_fragments,
+                    &packet,
+                    true,
+                    false,
+                )
+                .await;
                 fragment_index += 1;
             }
 
-            // Final Metadata (0x04)
             let final_hash = hex::encode(hasher.finalize());
             let final_meta = serde_json::json!({
                 "type": "file",
@@ -389,11 +432,27 @@ pub fn process_outgoing_media(
                 }
             });
 
-            if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, &payload.recipient, final_meta.to_string()).await {
+            if let Ok(encrypted) = internal_signal_encrypt(
+                app.clone(),
+                &net_state,
+                &payload.recipient,
+                final_meta.to_string(),
+            )
+            .await
+            {
                 let _ = crate::commands::network::transit::internal_send_to_network(
-                    app.clone(), &net_state, Some(payload.recipient.clone()), Some(msg_id.clone()), None,
-                    Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
-                ).await;
+                    app.clone(),
+                    &net_state,
+                    Some(payload.recipient.clone()),
+                    Some(msg_id.clone()),
+                    None,
+                    Some(encrypted.to_string().into_bytes()),
+                    true,
+                    false,
+                    Some(transfer_id),
+                    true,
+                )
+                .await;
             }
 
             let final_attachment_obj = serde_json::json!({
@@ -409,16 +468,19 @@ pub fn process_outgoing_media(
 
             if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute(
-                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
-                    rusqlite::params![msg_id, final_attachment_obj.to_string()]
+                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1",
+                    rusqlite::params![msg_id, final_attachment_obj.to_string()],
                 );
             }
-            let _ = app.emit("msg://status", serde_json::json!({ 
-                "id": msg_id, 
-                "status": "sent", 
-                "chatAddress": payload.recipient,
-                "attachment": final_attachment_obj
-            }));
+            let _ = app.emit(
+                "msg://status",
+                serde_json::json!({
+                    "id": msg_id,
+                    "status": "sent",
+                    "chatAddress": payload.recipient,
+                    "attachment": final_attachment_obj
+                }),
+            );
         });
     });
 
@@ -433,7 +495,6 @@ pub async fn send_typing_status(
     peer_hash: String,
     is_typing: bool,
 ) -> Result<(), String> {
-    // restrict to 1:1
     {
         if let Ok(conn) = db_state.get_conn() {
             let is_group = conn
@@ -485,7 +546,6 @@ pub async fn send_receipt(
     msg_ids: Vec<String>,
     status: String,
 ) -> Result<(), String> {
-    // enforce 1:1 delivery receipts
     if let Ok(conn) = db_state.get_conn() {
         let is_group = conn
             .query_row(
@@ -539,7 +599,6 @@ pub async fn send_profile_update(
     if let Ok(encrypted) =
         internal_signal_encrypt(app.clone(), &net_state, &peer_hash, message).await
     {
-        // dispatch persistent update
         let payload_bytes = encrypted.to_string().into_bytes();
         let _ = internal_send_to_network(
             app.clone(),
@@ -566,124 +625,123 @@ pub async fn process_outgoing_group_text(
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
 
-            if payload.content.chars().count() > 2000 {
-                return Err("Message too long (max 2000 characters)".into());
-            }
+    if payload.content.chars().count() > 2000 {
+        return Err("Message too long (max 2000 characters)".into());
+    }
 
-            let msg_id = uuid::Uuid::new_v4().to_string();
-            let timestamp = chrono::Utc::now().timestamp_millis();
-            let own_id = net_state
-                .identity_hash
-                .lock()
-                .map_err(|_| "State poisoned")?
-                .clone()
-                .ok_or("Not authenticated")?;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let own_id = net_state
+        .identity_hash
+        .lock()
+        .map_err(|_| "State poisoned")?
+        .clone()
+        .ok_or("Not authenticated")?;
 
-            let db_msg = DbMessage {
-                id: msg_id.clone(),
-                chat_address: payload.recipient.clone(),
-                sender_hash: own_id.clone(),
-                content: payload.content.clone(),
-                timestamp,
-                r#type: "text".to_string(),
-                status: "sending".to_string(),
-                attachment_json: None,
-                is_starred: false,
-                is_group: true,
-                reply_to_json: payload
-                    .reply_to
-                    .as_ref()
-                    .map(|r| serde_json::to_string(&r).unwrap_or_default()),
-            };
+    let db_msg = DbMessage {
+        id: msg_id.clone(),
+        chat_address: payload.recipient.clone(),
+        sender_hash: own_id.clone(),
+        content: payload.content.clone(),
+        timestamp,
+        r#type: "text".to_string(),
+        status: "sending".to_string(),
+        attachment_json: None,
+        is_starred: false,
+        is_group: true,
+        reply_to_json: payload
+            .reply_to
+            .as_ref()
+            .map(|r| serde_json::to_string(&r).unwrap_or_default()),
+    };
 
-            internal_db_save_message(&db_state, db_msg.clone()).await?;
+    internal_db_save_message(&db_state, db_msg.clone()).await?;
 
-            let members = payload
-                .group_members
-                .as_ref()
-                .ok_or("Group members missing")?;
+    let members = payload
+        .group_members
+        .as_ref()
+        .ok_or("Group members missing")?;
 
-            let signal_inner_payload = serde_json::json!({
-                "type": "text_msg",
-                "content": payload.content,
-                "id": msg_id.clone(),
-                "replyTo": payload.reply_to,
-                "timestamp": timestamp,
-                "isGroup": true,
-                "groupId": payload.recipient,
-                "groupName": payload.group_name,
-                "groupMembers": payload.group_members.clone(),
-            });
-            let payload_str = signal_inner_payload.to_string();
+    let signal_inner_payload = serde_json::json!({
+        "type": "text_msg",
+        "content": payload.content,
+        "id": msg_id.clone(),
+        "replyTo": payload.reply_to,
+        "timestamp": timestamp,
+        "isGroup": true,
+        "groupId": payload.recipient,
+        "groupName": payload.group_name,
+        "groupMembers": payload.group_members.clone(),
+    });
+    let payload_str = signal_inner_payload.to_string();
 
-            for member_id in members {
-                if member_id == &own_id {
-                    continue;
-                }
-                let routing_hash = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
-                match internal_signal_encrypt(
+    for member_id in members {
+        if member_id == &own_id {
+            continue;
+        }
+        let routing_hash = member_id
+            .split('.')
+            .next()
+            .unwrap_or(member_id.as_str())
+            .to_string();
+        match internal_signal_encrypt(app.clone(), &net_state, member_id, payload_str.clone()).await
+        {
+            Ok(ciphertext_obj) => {
+                let payload_bytes = ciphertext_obj.to_string().into_bytes();
+                let _ = internal_send_to_network(
                     app.clone(),
                     &net_state,
-                    member_id,
-                    payload_str.clone(),
+                    Some(routing_hash),
+                    Some(msg_id.clone()),
+                    None,
+                    Some(payload_bytes),
+                    true,
+                    false,
+                    None,
+                    false,
                 )
-                .await
-                {
-                    Ok(ciphertext_obj) => {
-                        let payload_bytes = ciphertext_obj.to_string().into_bytes();
-                        let _ = internal_send_to_network(
-                            app.clone(),
-                            &net_state,
-                            Some(routing_hash),
-                            Some(msg_id.clone()),
-                            None,
-                            Some(payload_bytes),
-                            true,
-                            false,
-                            None,
-                            false,
-                        )
-                        .await;
-                    }
-                    Err(_e) => {
-                        // Skipping member
-                    }
-                }
+                .await;
             }
-
-            if let Ok(conn) = db_state.get_conn() {
-                let _ = conn.execute(
-                    "UPDATE messages SET status = 'sent' WHERE id = ?1",
-                    params![msg_id],
-                );
-                let _ = conn.execute(
-                    "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-                    params![payload.recipient],
-                );
+            Err(_e) => {
+                // Skipping member
             }
+        }
+    }
 
-            let mut final_json = serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
-            if let Some(obj) = final_json.as_object_mut() {
-                obj.insert(
-                    "chatAlias".to_string(),
-                    serde_json::json!(payload.group_name),
-                );
-                obj.insert(
-                    "chatMembers".to_string(),
-                    serde_json::json!(payload.group_members.clone()),
-                );
-                // Emit with the final resolved status so the frontend never receives 'sending'
-                obj.insert("status".to_string(), json!("sent"));
-            }
-            app.emit("msg://added", final_json.clone())
-                .map_err(|e| e.to_string())?;
-            app.emit(
-                "msg://status",
-                json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
-            )
-            .map_err(|e| e.to_string())?;
+    if let Ok(conn) = db_state.get_conn() {
+        let _ = conn.execute(
+            "UPDATE messages SET status = 'sent' WHERE id = ?1",
+            params![msg_id],
+        );
+        let _ = conn.execute(
+            "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
+            params![payload.recipient],
+        );
+    }
 
-            Ok(final_json)
+    let mut final_json =
+        serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
+    if let Some(obj) = final_json.as_object_mut() {
+        obj.insert(
+            "chatAlias".to_string(),
+            serde_json::json!(payload.group_name),
+        );
+        obj.insert(
+            "chatMembers".to_string(),
+            serde_json::json!(payload.group_members.clone()),
+        );
+        // Emit with the final resolved status so the frontend never receives 'sending'
+        obj.insert("status".to_string(), json!("sent"));
+    }
+    app.emit("msg://added", final_json.clone())
+        .map_err(|e| e.to_string())?;
+    app.emit(
+        "msg://status",
+        json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(final_json)
 }
 
 #[tauri::command]
@@ -698,13 +756,13 @@ pub async fn process_outgoing_group_media(
         .as_millis() as i64;
     let transfer_id: u32 = rand::random();
 
-    // 1. Immediate validation
     let canonical_path_opt = if let Some(p) = &payload.file_path {
         let path_buf = std::path::PathBuf::from(p);
         let canonical_path = std::fs::canonicalize(&path_buf)
             .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
-        
-        let metadata = std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
+
+        let metadata =
+            std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
         if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
             return Err("File too large. Maximum size is 10GB.".to_string());
         }
@@ -719,217 +777,297 @@ pub async fn process_outgoing_group_media(
     };
 
     let file_size = if let Some(ref p) = canonical_path_opt {
-        std::fs::metadata(p).map_err(|e: std::io::Error| e.to_string())?.len()
+        std::fs::metadata(p)
+            .map_err(|e: std::io::Error| e.to_string())?
+            .len()
     } else if let Some(ref d) = payload.file_data {
         d.len() as u64
-    } else { 0 };
+    } else {
+        0
+    };
 
-    // 2. Optimistic UI
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
-    let own_id = net_state.identity_hash.lock().map_err(|_| "State poisoned")?.clone().unwrap_or_default();
+    let own_id = net_state
+        .identity_hash
+        .lock()
+        .map_err(|_| "State poisoned")?
+        .clone()
+        .unwrap_or_default();
 
     let db_msg = DbMessage {
         id: msg_id.clone(),
         chat_address: payload.recipient.clone(),
         sender_hash: own_id.clone(),
-        content: if payload.msg_type.as_deref() == Some("voice_note") { "Voice Note".to_string() } else { format!("File: {}", payload.file_name.as_deref().unwrap_or("Media")) },
+        content: if payload.msg_type.as_deref() == Some("voice_note") {
+            "Voice Note".to_string()
+        } else {
+            format!("File: {}", payload.file_name.as_deref().unwrap_or("Media"))
+        },
         timestamp,
-        r#type: payload.msg_type.clone().unwrap_or_else(|| "file".to_string()),
+        r#type: payload
+            .msg_type
+            .clone()
+            .unwrap_or_else(|| "file".to_string()),
         status: "sending".to_string(),
-        attachment_json: Some(serde_json::json!({
-            "fileName": payload.file_name,
-            "fileType": payload.file_type,
-            "size": file_size,
-            "duration": payload.duration,
-            "thumbnail": payload.thumbnail,
-            "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
-            "transferId": transfer_id
-        }).to_string()),
+        attachment_json: Some(
+            serde_json::json!({
+                "fileName": payload.file_name,
+                "fileType": payload.file_type,
+                "size": file_size,
+                "duration": payload.duration,
+                "thumbnail": payload.thumbnail,
+                "originalPath": canonical_path_opt.clone().map(|p| p.to_string_lossy().to_string()),
+                "transferId": transfer_id
+            })
+            .to_string(),
+        ),
         is_starred: false,
         is_group: true,
-        reply_to_json: payload.reply_to.as_ref().map(|r| serde_json::to_string(&r).unwrap_or_default()),
+        reply_to_json: payload
+            .reply_to
+            .as_ref()
+            .map(|r| serde_json::to_string(&r).unwrap_or_default()),
     };
 
     internal_db_save_message(&db_state, db_msg.clone()).await?;
     let _ = app.emit("msg://added", db_msg.clone());
 
-    // 3. Background Processing
     let app_bg = app.clone();
     let payload_bg = payload.clone();
     let msg_id_bg = msg_id.clone();
     let canonical_path_bg = canonical_path_opt.clone();
 
     tokio::spawn(async move {
-            let app = app_bg;
-            let payload = payload_bg;
-            let msg_id = msg_id_bg;
-            let db_state = app.state::<DbState>();
-            let net_state = app.state::<NetworkState>();
+        let app = app_bg;
+        let payload = payload_bg;
+        let msg_id = msg_id_bg;
+        let db_state = app.state::<DbState>();
+        let net_state = app.state::<NetworkState>();
 
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
-            let vault_key_bytes = {
-                let lock = db_state.media_key.lock().unwrap();
-                lock.clone().unwrap()
-            };
-            let vault_key = ChaKey::from_slice(&vault_key_bytes);
-            let vault_cipher = XChaCha20Poly1305::new(vault_key);
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
+        let vault_key_bytes = {
+            let lock = db_state.media_key.lock().unwrap();
+            lock.clone().unwrap()
+        };
+        let vault_key = ChaKey::from_slice(&vault_key_bytes);
+        let vault_cipher = XChaCha20Poly1305::new(vault_key);
 
-            let media_dir = get_media_dir(&app, &db_state).unwrap();
-            let vault_path = media_dir.join(&msg_id);
-            let mut vault_file = std::fs::File::create(&vault_path).unwrap();
+        let media_dir = get_media_dir(&app, &db_state).unwrap();
+        let vault_path = media_dir.join(&msg_id);
+        let mut vault_file = std::fs::File::create(&vault_path).unwrap();
 
-            let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
-            let members = payload.group_members.as_ref().unwrap();
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
+        let members = payload.group_members.as_ref().unwrap();
 
-            // Announcement
-            let announcement = serde_json::json!({
-                "type": "file",
-                "id": msg_id.clone(),
-                "transfer_id": transfer_id,
-                "size": file_size,
-                "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
-                "duration": payload.duration,
-                "thumbnail": payload.thumbnail,
-                "replyTo": payload.reply_to,
-                "isGroup": true,
-                "groupId": payload.recipient,
-                "groupName": payload.group_name,
-                "timestamp": timestamp,
-                "bundle": {
-                    "key": key_b64,
-                    "file_name": payload.file_name,
-                    "file_type": payload.file_type,
-                    "sha256": ""
+        let announcement = serde_json::json!({
+            "type": "file",
+            "id": msg_id.clone(),
+            "transfer_id": transfer_id,
+            "size": file_size,
+            "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
+            "duration": payload.duration,
+            "thumbnail": payload.thumbnail,
+            "replyTo": payload.reply_to,
+            "isGroup": true,
+            "groupId": payload.recipient,
+            "groupName": payload.group_name,
+            "timestamp": timestamp,
+            "bundle": {
+                "key": key_b64,
+                "file_name": payload.file_name,
+                "file_type": payload.file_type,
+                "sha256": ""
+            }
+        });
+
+        for member_id in members {
+            if member_id == &own_id {
+                continue;
+            }
+            if let Ok(encrypted) = internal_signal_encrypt(
+                app.clone(),
+                &net_state,
+                member_id,
+                announcement.to_string(),
+            )
+            .await
+            {
+                let routing_hash_str = member_id
+                    .split('.')
+                    .next()
+                    .unwrap_or(member_id.as_str())
+                    .to_string();
+                let _ = crate::commands::network::transit::internal_send_to_network(
+                    app.clone(),
+                    &net_state,
+                    Some(routing_hash_str),
+                    Some(msg_id.clone()),
+                    None,
+                    Some(encrypted.to_string().into_bytes()),
+                    true,
+                    false,
+                    Some(transfer_id),
+                    true,
+                )
+                .await;
+            }
+        }
+
+        // Fragments
+        let mut reader: Box<dyn std::io::Read + Send> = if let Some(ref p) = canonical_path_bg {
+            Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
+        } else if let Some(ref d) = payload.file_data {
+            Box::new(std::io::Cursor::new(d.to_vec()))
+        } else {
+            return;
+        };
+
+        let mut fragment_index = 0;
+        let mut buffer = vec![0u8; 1279];
+        let total_fragments = (file_size as f64 / 1279.0).ceil() as u32;
+
+        loop {
+            let mut n = 0;
+            while n < 1279 {
+                match reader.read(&mut buffer[n..]) {
+                    Ok(0) => break,
+                    Ok(read) => n += read,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                 }
-            });
+            }
+            if n == 0 {
+                break;
+            }
+            let chunk = &buffer[..n];
+            hasher.update(chunk);
+
+            let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
+            use std::io::Write;
+            let _ = vault_file.write_all(&v_nonce);
+            let _ = vault_file.write_all(&v_cipher);
+
+            let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
+            let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let t_cipher = transit_cipher.encrypt(&t_nonce, chunk).unwrap();
+            let mut packet = Vec::with_capacity(t_cipher.len() + 24);
+            packet.extend_from_slice(&t_nonce);
+            packet.extend_from_slice(&t_cipher);
 
             for member_id in members {
-                if member_id == &own_id { continue; }
-                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, member_id, announcement.to_string()).await {
-                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
-                    let _ = crate::commands::network::transit::internal_send_to_network(
-                        app.clone(), &net_state, Some(routing_hash_str), Some(msg_id.clone()), None,
-                        Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
-                    ).await;
+                if member_id == &own_id {
+                    continue;
                 }
+                let routing_hash_str = member_id
+                    .split('.')
+                    .next()
+                    .unwrap_or(member_id.as_str())
+                    .to_string();
+                let mut routing_hash = [0u8; 64];
+                let r_bytes = routing_hash_str.as_bytes();
+                let r_len = std::cmp::min(r_bytes.len(), 64);
+                routing_hash[..r_len].copy_from_slice(&r_bytes[..r_len]);
+
+                let _ = internal_dispatch_fragment(
+                    app.clone(),
+                    &net_state,
+                    routing_hash,
+                    Some(msg_id.clone()),
+                    transfer_id,
+                    fragment_index,
+                    total_fragments,
+                    &packet,
+                    true,
+                    false,
+                )
+                .await;
             }
+            fragment_index += 1;
+        }
 
-            // Fragments
-            let mut reader: Box<dyn std::io::Read + Send> = if let Some(ref p) = canonical_path_bg {
-                Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
-            } else if let Some(ref d) = payload.file_data {
-                Box::new(std::io::Cursor::new(d.to_vec()))
-            } else { return; };
-
-            let mut fragment_index = 0;
-            let mut buffer = vec![0u8; 1279];
-            let total_fragments = (file_size as f64 / 1279.0).ceil() as u32;
-
-            loop {
-                let mut n = 0;
-                while n < 1279 {
-                    match reader.read(&mut buffer[n..]) {
-                        Ok(0) => break,
-                        Ok(read) => n += read,
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
-                    }
-                }
-                if n == 0 { break; }
-                let chunk = &buffer[..n];
-                hasher.update(chunk);
-                
-                let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
-                use std::io::Write;
-                let _ = vault_file.write_all(&v_nonce);
-                let _ = vault_file.write_all(&v_cipher);
-
-                let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
-                let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                let t_cipher = transit_cipher.encrypt(&t_nonce, chunk).unwrap();
-                let mut packet = Vec::with_capacity(t_cipher.len() + 24);
-                packet.extend_from_slice(&t_nonce);
-                packet.extend_from_slice(&t_cipher);
-
-                for member_id in members {
-                    if member_id == &own_id { continue; }
-                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
-                    let mut routing_hash = [0u8; 64];
-                    let r_bytes = routing_hash_str.as_bytes();
-                    let r_len = std::cmp::min(r_bytes.len(), 64);
-                    routing_hash[..r_len].copy_from_slice(&r_bytes[..r_len]);
-
-                    let _ = internal_dispatch_fragment(
-                        app.clone(), &net_state, routing_hash, Some(msg_id.clone()),
-                        transfer_id, fragment_index,
-                        total_fragments, &packet, true, false
-                    ).await;
-                }
-                fragment_index += 1;
+        // Final Metadata
+        let final_hash = hex::encode(hasher.finalize());
+        let final_meta = serde_json::json!({
+            "type": "file",
+            "id": msg_id.clone(),
+            "transfer_id": transfer_id,
+            "size": file_size,
+            "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
+            "duration": payload.duration,
+            "thumbnail": payload.thumbnail,
+            "replyTo": payload.reply_to,
+            "isGroup": true,
+            "groupId": payload.recipient,
+            "groupName": payload.group_name,
+            "timestamp": timestamp,
+            "bundle": {
+                "key": key_b64,
+                "file_name": payload.file_name,
+                "file_type": payload.file_type,
+                "sha256": final_hash
             }
+        });
 
-            // Final Metadata
-            let final_hash = hex::encode(hasher.finalize());
-            let final_meta = serde_json::json!({
-                "type": "file",
-                "id": msg_id.clone(),
-                "transfer_id": transfer_id,
-                "size": file_size,
-                "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
-                "duration": payload.duration,
-                "thumbnail": payload.thumbnail,
-                "replyTo": payload.reply_to,
-                "isGroup": true,
-                "groupId": payload.recipient,
-                "groupName": payload.group_name,
-                "timestamp": timestamp,
-                "bundle": {
-                    "key": key_b64,
-                    "file_name": payload.file_name,
-                    "file_type": payload.file_type,
-                    "sha256": final_hash
-                }
-            });
-
-            for member_id in members {
-                if member_id == &own_id { continue; }
-                if let Ok(encrypted) = internal_signal_encrypt(app.clone(), &net_state, member_id, final_meta.to_string()).await {
-                    let routing_hash_str = member_id.split('.').next().unwrap_or(member_id.as_str()).to_string();
-                    let _ = crate::commands::network::transit::internal_send_to_network(
-                        app.clone(), &net_state, Some(routing_hash_str), Some(msg_id.clone()), None,
-                        Some(encrypted.to_string().into_bytes()), true, false, Some(transfer_id), true
-                    ).await;
-                }
+        for member_id in members {
+            if member_id == &own_id {
+                continue;
             }
-
-            let final_attachment_obj = serde_json::json!({
-                "fileName": payload.file_name,
-                "fileType": payload.file_type,
-                "size": file_size,
-                "duration": payload.duration,
-                "thumbnail": payload.thumbnail,
-                "originalPath": canonical_path_bg.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "transferId": transfer_id,
-                "vaultPath": vault_path.to_string_lossy().to_string()
-            });
-
-            if let Ok(conn) = db_state.get_conn() {
-                let _ = conn.execute(
-                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1", 
-                    rusqlite::params![msg_id, final_attachment_obj.to_string()]
-                );
+            if let Ok(encrypted) =
+                internal_signal_encrypt(app.clone(), &net_state, member_id, final_meta.to_string())
+                    .await
+            {
+                let routing_hash_str = member_id
+                    .split('.')
+                    .next()
+                    .unwrap_or(member_id.as_str())
+                    .to_string();
+                let _ = crate::commands::network::transit::internal_send_to_network(
+                    app.clone(),
+                    &net_state,
+                    Some(routing_hash_str),
+                    Some(msg_id.clone()),
+                    None,
+                    Some(encrypted.to_string().into_bytes()),
+                    true,
+                    false,
+                    Some(transfer_id),
+                    true,
+                )
+                .await;
             }
-            let _ = app.emit("msg://status", serde_json::json!({ 
-                "id": msg_id, 
-                "status": "sent", 
+        }
+
+        let final_attachment_obj = serde_json::json!({
+            "fileName": payload.file_name,
+            "fileType": payload.file_type,
+            "size": file_size,
+            "duration": payload.duration,
+            "thumbnail": payload.thumbnail,
+            "originalPath": canonical_path_bg.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "transferId": transfer_id,
+            "vaultPath": vault_path.to_string_lossy().to_string()
+        });
+
+        if let Ok(conn) = db_state.get_conn() {
+            let _ = conn.execute(
+                "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1",
+                rusqlite::params![msg_id, final_attachment_obj.to_string()],
+            );
+        }
+        let _ = app.emit(
+            "msg://status",
+            serde_json::json!({
+                "id": msg_id,
+                "status": "sent",
                 "chatAddress": payload.recipient,
                 "attachment": final_attachment_obj
-            }));
-        });
+            }),
+        );
+    });
 
     Ok(serde_json::to_value(&db_msg).unwrap())
 }

@@ -55,7 +55,6 @@ pub async fn internal_send_to_network(
             };
 
             let total_len = data_bytes.len();
-            // fragmentation: split binary payload into manageable chunks for pacing
             let chunk_capacity = 1319;
             let transfer_id: u32 = transfer_id_override.unwrap_or_else(rand::random);
             let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
@@ -103,16 +102,18 @@ pub async fn internal_send_to_network(
                     msg: Message::Binary(envelope.into()),
                 });
 
-                // Throttled progress emission for the fragmentation loop (every 5% or completion)
                 let progress_step = (chunks / 20).max(1);
                 if i % progress_step == 0 || i == chunks - 1 {
-                    let _ = app.emit("transfer://progress", json!({
-                        "transferId": transfer_id,
-                        "current": i + 1,
-                        "total": chunks,
-                        "direction": "upload",
-                        "msgId": msg_id
-                    }));
+                    let _ = app.emit(
+                        "transfer://progress",
+                        json!({
+                            "transferId": transfer_id,
+                            "current": i + 1,
+                            "total": chunks,
+                            "direction": "upload",
+                            "msgId": msg_id
+                        }),
+                    );
                 }
             }
         }
@@ -143,7 +144,6 @@ pub async fn internal_send_to_network(
         }
         Ok(())
     } else {
-        // offline handling: queue fragments in database for delayed delivery
         if is_binary {
             let db_state = app.state::<DbState>();
             let timestamp = std::time::SystemTime::now()
@@ -167,30 +167,31 @@ pub async fn internal_send_to_network(
             if let Some(id) = msg_id {
                 let db_state = app.state::<DbState>();
                 if let Ok(conn) = db_state.get_conn() {
-                let chat_address: Option<String> = conn
-                    .query_row(
-                        "SELECT chat_address FROM messages WHERE id = ?",
-                        [&id],
-                        |r| r.get::<_, String>(0),
-                    )
-                    .ok();
+                    let chat_address: Option<String> = conn
+                        .query_row(
+                            "SELECT chat_address FROM messages WHERE id = ?",
+                            [&id],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .ok();
 
-                let _ = conn.execute(
-                    "UPDATE messages SET status = 'pending' WHERE id = ?",
-                    [id.clone()],
-                );
-                app.emit(
-                    "msg://status",
-                    json!({ "id": id, "status": "pending", "chat_address": chat_address }),
-                )
-                .map_err(|e| e.to_string())?;
-            }
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'pending' WHERE id = ?",
+                        [id.clone()],
+                    );
+                    app.emit(
+                        "msg://status",
+                        json!({ "id": id, "status": "pending", "chat_address": chat_address }),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
             }
         }
         Err("Network not connected. Message queued in outbox.".to_string())
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn internal_dispatch_fragment(
     app: AppHandle,
     state: &NetworkState,
@@ -244,16 +245,18 @@ pub async fn internal_dispatch_fragment(
         if let Some(tx) = tx {
             tx.send(paced_msg).await.map_err(|e| e.to_string())?;
         }
-        
-        // Progress emission
-        if index % 20 == 0 || index == total - 1 {
-            let _ = app.emit("transfer://progress", json!({
-                "transferId": transfer_id,
-                "current": index + 1,
-                "total": total,
-                "direction": "upload",
-                "msgId": msg_id
-            }));
+
+        if index.is_multiple_of(20) || index == total - 1 {
+            let _ = app.emit(
+                "transfer://progress",
+                json!({
+                    "transferId": transfer_id,
+                    "current": index + 1,
+                    "total": total,
+                    "direction": "upload",
+                    "msgId": msg_id
+                }),
+            );
         }
         Ok(())
     } else {
@@ -287,22 +290,21 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
         {
             // Scope to minimize DB lock duration
             let db_state = app.state::<DbState>();
-            if let Ok(conn) = db_state.get_conn() {
-                if let Ok(mut stmt) = conn.prepare(
+            if let Ok(conn) = db_state.get_conn()
+                && let Ok(mut stmt) = conn.prepare(
                     "SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC",
-                ) {
-                    if let Ok(rows) = stmt.query_map([], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Vec<u8>>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                        ))
-                    }) {
-                        for row in rows.flatten() {
-                            msg_batch.push(row);
-                        }
-                    }
+                )
+                && let Ok(rows) = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                })
+            {
+                for row in rows.flatten() {
+                    msg_batch.push(row);
                 }
             }
         }

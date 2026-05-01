@@ -2,9 +2,9 @@ name: Entropy Desktop CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, optimizations ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, optimizations ]
 
 jobs:
   test:
@@ -38,6 +38,8 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
 
     - name: Rust Cache
       uses: swatinem/rust-cache@v2
@@ -51,8 +53,13 @@ jobs:
       run: npm run check
 
     - name: Prepare Dummy Dist
-      # Tauri macro needs the dist folder to exist even for a cargo check
       run: mkdir -p dist
 
-    - name: Backend Ready Check
-      run: cd src-tauri && cargo check
+    - name: Backend Format Check
+      run: cd src-tauri && cargo fmt -- --check
+
+    - name: Backend Lint
+      run: cd src-tauri && cargo clippy -- -D warnings
+
+    - name: Run Backend Tests
+      run: cd src-tauri && cargo test -- --nocapture

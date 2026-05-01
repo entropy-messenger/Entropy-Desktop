@@ -49,14 +49,18 @@ pub(crate) async fn internal_request(
                 env.extend_from_slice(&(chunks as u32).to_be_bytes());
                 env.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
                 env.extend_from_slice(chunk_data);
-                let _ = ws_tx.send(PacedMessage {
-                    msg: Message::Binary(env.into()),
-                }).await;
+                let _ = ws_tx
+                    .send(PacedMessage {
+                        msg: Message::Binary(env.into()),
+                    })
+                    .await;
             }
         } else {
-            let _ = ws_tx.send(PacedMessage {
-                msg: Message::Text(Utf8Bytes::from(text)),
-            }).await;
+            let _ = ws_tx
+                .send(PacedMessage {
+                    msg: Message::Text(Utf8Bytes::from(text)),
+                })
+                .await;
         }
     } else {
         let mut channels = state

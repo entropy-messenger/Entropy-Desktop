@@ -24,9 +24,16 @@ use super::transit::flush_outbox;
 const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]
-pub async fn revoke_session_token(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
-    let id_hash = state.identity_hash.lock().map_err(|_| "State poisoned")?.clone();
-    
+pub async fn revoke_session_token(
+    app: AppHandle,
+    state: State<'_, NetworkState>,
+) -> Result<(), String> {
+    let id_hash = state
+        .identity_hash
+        .lock()
+        .map_err(|_| "State poisoned")?
+        .clone();
+
     let tx = {
         let sender_lock = state.sender.lock().map_err(|_| "State poisoned")?;
         sender_lock.clone()
@@ -34,20 +41,28 @@ pub async fn revoke_session_token(app: AppHandle, state: State<'_, NetworkState>
 
     if let (Some(_id), Some(tx)) = (id_hash, tx) {
         let revoke_req = json!({"type": "session_revoke", "req_id": "revoke_op"});
-        let _ = tx.send(PacedMessage {
-            msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
-        }).await;
+        let _ = tx
+            .send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
+            })
+            .await;
     }
 
     // Always clear local even if server message fails to send
-    if let Ok(mut l) = state.session_token.lock() { *l = None; }
-    if let Ok(mut l) = state.is_authenticated.lock() { *l = false; }
-    
+    if let Ok(mut l) = state.session_token.lock() {
+        *l = None;
+    }
+    if let Ok(mut l) = state.is_authenticated.lock() {
+        *l = false;
+    }
+
     let app_inner = app.clone();
     tokio::task::spawn_local(async move {
-        let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
+        let _ = SqliteSignalStore::new(app_inner)
+            .set_session_token(None)
+            .await;
     });
-    
+
     let _ = app.emit("network-status", "auth_failed");
     Ok(())
 }
@@ -211,18 +226,22 @@ pub(crate) async fn internal_establish_network(
         if let Some(tx) = tx_auth {
             let payload = json!({ "identity_hash": id, "session_token": token_val });
             let auth_req = json!({"type": "auth", "payload": payload});
-            let _ = tx.send(PacedMessage {
-                msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
-            }).await;
+            let _ = tx
+                .send(PacedMessage {
+                    msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
+                })
+                .await;
         }
-    } else if let Some(id) = id_hash {
-        if let Some(tx) = tx_auth {
-            let challenge_req =
-                json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
-            let _ = tx.send(PacedMessage {
+    } else if let Some(id) = id_hash
+        && let Some(tx) = tx_auth
+    {
+        let challenge_req =
+            json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
+        let _ = tx
+            .send(PacedMessage {
                 msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
-            }).await;
-        }
+            })
+            .await;
     }
 
     loop {
@@ -265,7 +284,7 @@ pub(crate) async fn internal_establish_network(
                                                     if delta > 0 {
                                                         let app_sync = app.clone();
                                                         tokio::task::spawn_local(async move {
-                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta)).await;
                                                             if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                         });
                                                     } else { *refill_lock = false; }
@@ -286,7 +305,7 @@ pub(crate) async fn internal_establish_network(
                                                     if delta > 0 {
                                                         let app_sync = app.clone();
                                                         tokio::task::spawn_local(async move {
-                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta)).await;
                                                             if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                         });
                                                     } else { *refill_lock = false; }

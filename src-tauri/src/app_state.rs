@@ -10,8 +10,8 @@ use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-use std::collections::VecDeque;
 use r2d2::Pool;
+use std::collections::VecDeque;
 
 pub struct RusqliteManager {
     pub path: std::path::PathBuf,
@@ -61,8 +61,11 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for SqlCip
 impl DbState {
     pub fn get_conn(&self) -> Result<r2d2::PooledConnection<RusqliteManager>, String> {
         let lock = self.pool.lock().map_err(|_| "DB Pool lock poisoned")?;
-        let pool = lock.as_ref().ok_or("Database not initialized. Please unlock your vault.")?;
-        pool.get().map_err(|e| format!("Failed to get DB connection from pool: {}", e))
+        let pool = lock
+            .as_ref()
+            .ok_or("Database not initialized. Please unlock your vault.")?;
+        pool.get()
+            .map_err(|e| format!("Failed to get DB connection from pool: {}", e))
     }
 }
 

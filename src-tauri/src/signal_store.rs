@@ -1,3 +1,5 @@
+//! Persistent SQLite backing for Signal protocol state and identity keys.
+
 use crate::app_state::DbState;
 use async_trait::async_trait;
 use libsignal_protocol::{
@@ -52,9 +54,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         &self,
     ) -> std::result::Result<IdentityKeyPair, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let mut stmt = conn
             .prepare("SELECT public_key, private_key FROM signal_identity LIMIT 1")
@@ -88,9 +90,9 @@ impl IdentityKeyStore for SqliteSignalStore {
 
     async fn get_local_registration_id(&self) -> std::result::Result<u32, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let mut stmt = conn
             .prepare("SELECT registration_id FROM signal_identity LIMIT 1")
@@ -120,9 +122,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         identity: &IdentityKey,
     ) -> std::result::Result<IdentityChange, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let pub_bytes = identity.serialize();
@@ -161,7 +163,6 @@ impl IdentityKeyStore for SqliteSignalStore {
             params![address_str, pub_bytes.as_ref(), target_trust],
         ).map_err(|e: rusqlite::Error| SignalProtocolError::InvalidArgument(e.to_string()))?;
 
-        // Sync with contacts table for UI consistency
         let hash = address.name();
         let _ = conn.execute(
             "UPDATE contacts SET trust_level = ?1 WHERE hash = ?2",
@@ -178,9 +179,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         _direction: Direction,
     ) -> std::result::Result<bool, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -199,7 +200,6 @@ impl IdentityKeyStore for SqliteSignalStore {
             })?;
             Ok(stored_pub == identity.serialize().as_ref())
         } else {
-            // First time seeing this identity
             Ok(true)
         }
     }
@@ -209,9 +209,9 @@ impl IdentityKeyStore for SqliteSignalStore {
         address: &ProtocolAddress,
     ) -> std::result::Result<Option<IdentityKey>, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -242,9 +242,9 @@ impl SessionStore for SqliteSignalStore {
         address: &ProtocolAddress,
     ) -> std::result::Result<Option<SessionRecord>, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let mut stmt = conn
@@ -274,9 +274,9 @@ impl SessionStore for SqliteSignalStore {
         record: &SessionRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let address_str = format!("{}:{}", address.name(), address.device_id());
         let data = record.serialize()?;
@@ -298,9 +298,9 @@ impl PreKeyStore for SqliteSignalStore {
         pre_key_id: PreKeyId,
     ) -> std::result::Result<PreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = pre_key_id.into();
 
@@ -330,9 +330,9 @@ impl PreKeyStore for SqliteSignalStore {
         record: &PreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32 = u32::from(pre_key_id);
         let data = record.serialize()?;
@@ -351,9 +351,9 @@ impl PreKeyStore for SqliteSignalStore {
         pre_key_id: PreKeyId,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = pre_key_id.into();
 
@@ -374,9 +374,9 @@ impl SignedPreKeyStore for SqliteSignalStore {
         signed_pre_key_id: SignedPreKeyId,
     ) -> std::result::Result<SignedPreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = signed_pre_key_id.into();
         let mut stmt = conn
@@ -405,9 +405,9 @@ impl SignedPreKeyStore for SqliteSignalStore {
         record: &SignedPreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = signed_pre_key_id.into();
         let data = record.serialize()?;
@@ -429,9 +429,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         kyber_prekey_id: KyberPreKeyId,
     ) -> std::result::Result<KyberPreKeyRecord, SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = kyber_prekey_id.into();
 
@@ -461,9 +461,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         record: &KyberPreKeyRecord,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let id_u32: u32 = kyber_prekey_id.into();
         let data = record.serialize()?;
@@ -484,9 +484,9 @@ impl KyberPreKeyStore for SqliteSignalStore {
         base_key: &PublicKey,
     ) -> std::result::Result<(), SignalProtocolError> {
         let db_state = self.app.state::<DbState>();
-        let conn = db_state.get_conn().map_err(|e| {
-            SignalProtocolError::InvalidArgument(format!("Pool error: {}", e))
-        })?;
+        let conn = db_state
+            .get_conn()
+            .map_err(|e| SignalProtocolError::InvalidArgument(format!("Pool error: {}", e)))?;
 
         let kyber_id: u32 = kyber_prekey_id.into();
         let ec_id: u32 = ec_prekey_id.into();

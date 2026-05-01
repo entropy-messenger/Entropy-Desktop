@@ -1,7 +1,7 @@
 use crate::app_state::DbState;
 use chacha20poly1305::{
+    Key, XChaCha20Poly1305,
     aead::{Aead, AeadCore, KeyInit, OsRng},
-    XChaCha20Poly1305, Key,
 };
 use std::io::Write;
 use tauri::{Manager, State};
@@ -48,9 +48,9 @@ pub async fn vault_save_media(
 
     let key = Key::from_slice(&key_bytes);
     let cipher = XChaCha20Poly1305::new(key);
-    
+
     let mut final_blob = Vec::new();
-    
+
     // Split data into chunks to match the streaming loader
     for chunk in data.chunks(1279) {
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -93,13 +93,16 @@ pub async fn vault_export_media(
     id: String,
     target_path: String,
 ) -> Result<(), String> {
-    use chacha20poly1305::{aead::{Aead, KeyInit}, XChaCha20Poly1305, Key, XNonce};
+    use chacha20poly1305::{
+        Key, XChaCha20Poly1305, XNonce,
+        aead::{Aead, KeyInit},
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // 1. Get the media key
     let key_bytes = {
         let lock = state.media_key.lock().map_err(|_| "Vault not open")?;
-        lock.clone().ok_or_else(|| "Vault not open")?
+        lock.clone().ok_or("Vault not open")?
     };
     let key = Key::from_slice(&key_bytes);
     let cipher = XChaCha20Poly1305::new(key);
@@ -111,25 +114,38 @@ pub async fn vault_export_media(
         return Err("Source file not found".to_string());
     }
 
-    let mut src_file = tokio::fs::File::open(&src_path).await.map_err(|e| e.to_string())?;
-    let mut dst_file = tokio::fs::File::create(&target_path).await.map_err(|e| e.to_string())?;
+    let mut src_file = tokio::fs::File::open(&src_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut dst_file = tokio::fs::File::create(&target_path)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 3. Streaming Decryption (Zero-RAM Pipeline)
     let block_size_enc = 1319;
     let mut buf = vec![0u8; block_size_enc];
 
     while let Ok(n) = src_file.read(&mut buf).await {
-        if n == 0 { break; }
-        if n < 40 { return Err("Corrupted media block".to_string()); }
+        if n == 0 {
+            break;
+        }
+        if n < 40 {
+            return Err("Corrupted media block".to_string());
+        }
 
         let nonce = XNonce::from_slice(&buf[..24]);
         let ciphertext = &buf[24..n];
 
         match cipher.decrypt(nonce, ciphertext) {
             Ok(ptext) => {
-                dst_file.write_all(&ptext).await.map_err(|e| e.to_string())?;
+                dst_file
+                    .write_all(&ptext)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
-            Err(_) => return Err("Decryption failed - possibly wrong key or corruption".to_string()),
+            Err(_) => {
+                return Err("Decryption failed - possibly wrong key or corruption".to_string());
+            }
         }
     }
 
@@ -137,4 +153,3 @@ pub async fn vault_export_media(
 
     Ok(())
 }
-

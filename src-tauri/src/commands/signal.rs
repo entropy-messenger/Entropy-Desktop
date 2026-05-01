@@ -38,7 +38,8 @@ pub(crate) async fn internal_signal_encrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
-    let (app_clone, address_clone, own_address_clone) = (app.clone(), address.clone(), own_address.clone());
+    let (app_clone, address_clone, own_address_clone) =
+        (app.clone(), address.clone(), own_address.clone());
     let msg_clone = message.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let mut rng = StdRng::from_os_rng();
@@ -269,36 +270,37 @@ pub(crate) async fn internal_establish_session_logic(
 
     let mut existing_trust = 1;
     {
-            let res: Result<(Vec<u8>, i32), _> = {
+        let res: Result<(Vec<u8>, i32), _> = {
+            let db_state = app.state::<DbState>();
+            let conn = db_state.get_conn()?;
+            conn.query_row(
+                "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
+                rusqlite::params![address.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| e.to_string())
+        };
+
+        if let Ok((old_key, old_trust)) = res {
+            let old_key_stripped = if old_key.len() == 33 && old_key[0] == 0x05 {
+                &old_key[1..]
+            } else {
+                &old_key
+            };
+            let new_key_stripped = &identity_key_bytes;
+
+            if old_key_stripped != new_key_stripped {
+                existing_trust = 0;
                 let db_state = app.state::<DbState>();
                 let conn = db_state.get_conn()?;
-                conn.query_row(
-                    "SELECT public_key, trust_level FROM signal_identities_remote WHERE address = ?1",
-                    rusqlite::params![address.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                ).map_err(|e| e.to_string())
-            };
-
-            if let Ok((old_key, old_trust)) = res {
-                let old_key_stripped = if old_key.len() == 33 && old_key[0] == 0x05 {
-                    &old_key[1..]
-                } else {
-                    &old_key
-                };
-                let new_key_stripped = &identity_key_bytes;
-
-                if old_key_stripped != new_key_stripped {
-                    existing_trust = 0;
-                    let db_state = app.state::<DbState>();
-                    let conn = db_state.get_conn()?;
-                    let _ = conn.execute(
-                        "UPDATE contacts SET trust_level = 0 WHERE hash = ?1",
-                        rusqlite::params![remote_hash],
-                    );
-                } else {
-                    existing_trust = old_trust;
-                }
+                let _ = conn.execute(
+                    "UPDATE contacts SET trust_level = 0 WHERE hash = ?1",
+                    rusqlite::params![remote_hash],
+                );
+            } else {
+                existing_trust = old_trust;
             }
+        }
     }
 
     if identity_key_bytes.len() == 32 {
@@ -446,16 +448,18 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
     let store = SqliteSignalStore::new(handle.clone());
     let store_clone = store.clone();
     let kp_res = tauri::async_runtime::spawn_blocking(move || {
-        tauri::async_runtime::block_on(async {
-            store_clone.get_identity_key_pair().await
-        })
-    }).await.map_err(|e| e.to_string())?;
+        tauri::async_runtime::block_on(async { store_clone.get_identity_key_pair().await })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     if let Ok(kp) = kp_res {
         let mut pub_key_raw = kp.identity_key().serialize().to_vec();
-        if pub_key_raw.len() == 33 && pub_key_raw[0] == 0x05 { pub_key_raw.remove(0); }
+        if pub_key_raw.len() == 33 && pub_key_raw[0] == 0x05 {
+            pub_key_raw.remove(0);
+        }
         let pub_key_hex = hex::encode(pub_key_raw);
-        
+
         let state = handle.state::<NetworkState>();
         let pub_bytes = hex::decode(&pub_key_hex).unwrap_or_default();
         let mut hasher = Sha256::new();
@@ -466,7 +470,7 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
         }
         return Ok(pub_key_hex);
     }
-    
+
     let mut rng = StdRng::from_os_rng();
     let identity_key_pair = IdentityKeyPair::generate(&mut rng);
     let registration_id: u32 = rand::random::<u32>() & 0x3FFF;
@@ -481,7 +485,9 @@ pub async fn signal_init(handle: tauri::AppHandle) -> Result<String, String> {
         rusqlite::params![registration_id, &pub_bytes[..], &priv_bytes[..]],
     ).map_err(|e: rusqlite::Error| e.to_string())?;
 
-    if pub_bytes.len() == 33 && pub_bytes[0] == 0x05 { pub_bytes.remove(0); }
+    if pub_bytes.len() == 33 && pub_bytes[0] == 0x05 {
+        pub_bytes.remove(0);
+    }
     let pub_key_hex = hex::encode(pub_bytes);
 
     let state = handle.state::<NetworkState>();
@@ -501,11 +507,17 @@ pub async fn signal_sync_keys(handle: AppHandle, count: Option<u32>) -> Result<(
     let state = state_handle.state::<NetworkState>();
     let raw_bundle = signal_get_bundle(handle.clone(), count).await?;
     let id_hash = {
-        let lock = state.identity_hash.lock().map_err(|_| "Network state poisoned")?;
+        let lock = state
+            .identity_hash
+            .lock()
+            .map_err(|_| "Network state poisoned")?;
         lock.clone().ok_or("No identity hash in network state")?
     };
-    let mut ik_bytes = hex::decode(raw_bundle["identityKey"].as_str().unwrap_or("")).unwrap_or_default();
-    if ik_bytes.len() == 33 && ik_bytes[0] == 0x05 { ik_bytes.remove(0); }
+    let mut ik_bytes =
+        hex::decode(raw_bundle["identityKey"].as_str().unwrap_or("")).unwrap_or_default();
+    if ik_bytes.len() == 33 && ik_bytes[0] == 0x05 {
+        ik_bytes.remove(0);
+    }
     let bundle = json!({
         "identity_hash": id_hash,
         "registrationId": raw_bundle["registrationId"],
@@ -524,22 +536,33 @@ pub async fn signal_sync_keys(handle: AppHandle, count: Option<u32>) -> Result<(
     });
     let kp_res = tauri::async_runtime::spawn_blocking(move || {
         let store = SqliteSignalStore::new(handle);
-        tauri::async_runtime::block_on(async {
-            store.get_identity_key_pair().await
-        })
-    }).await.map_err(|e| e.to_string())?;
+        tauri::async_runtime::block_on(async { store.get_identity_key_pair().await })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let kp = kp_res.map_err(|e: SignalProtocolError| e.to_string())?;
     let mut rng = rand::rngs::StdRng::from_os_rng();
-    let sig = kp.private_key().calculate_signature(id_hash.as_bytes(), &mut rng).map_err(|e| e.to_string())?;
+    let sig = kp
+        .private_key()
+        .calculate_signature(id_hash.as_bytes(), &mut rng)
+        .map_err(|e| e.to_string())?;
     let mut final_upload = bundle;
     let mut pk_bytes = kp.identity_key().serialize().to_vec();
-    if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 { pk_bytes.remove(0); }
+    if pk_bytes.len() == 33 && pk_bytes[0] == 0x05 {
+        pk_bytes.remove(0);
+    }
     final_upload["identityKey"] = json!(hex::encode(&pk_bytes));
     final_upload["signature"] = json!(hex::encode(&sig));
     let response = internal_request(&state, "keys_upload", final_upload).await?;
-    if response["status"].as_str() == Some("success") { Ok(()) }
-    else { Err(format!("Key upload failed: {}", response["error"].as_str().unwrap_or("Unknown"))) }
+    if response["status"].as_str() == Some("success") {
+        Ok(())
+    } else {
+        Err(format!(
+            "Key upload failed: {}",
+            response["error"].as_str().unwrap_or("Unknown")
+        ))
+    }
 }
 
 #[tauri::command]
@@ -553,13 +576,16 @@ pub async fn signal_encrypt(
 }
 
 #[tauri::command]
-pub async fn signal_sign_message(handle: tauri::AppHandle, message: String) -> Result<String, String> {
+pub async fn signal_sign_message(
+    handle: tauri::AppHandle,
+    message: String,
+) -> Result<String, String> {
     let kp_res = tauri::async_runtime::spawn_blocking(move || {
         let store = SqliteSignalStore::new(handle);
-        tauri::async_runtime::block_on(async {
-            store.get_identity_key_pair().await
-        })
-    }).await.map_err(|e| e.to_string())?;
+        tauri::async_runtime::block_on(async { store.get_identity_key_pair().await })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let kp = kp_res.map_err(|e: SignalProtocolError| e.to_string())?;
     let mut rng = rand::rngs::StdRng::from_os_rng();
