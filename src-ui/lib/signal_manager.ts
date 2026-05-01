@@ -50,18 +50,6 @@ export class SignalManager {
         return await invoke<string>('signal_sign_message', { message });
     }
 
-    async decryptMedia(data: Uint8Array, bundle: any): Promise<Uint8Array> {
-        try {
-            const result = await invoke<number[]>('signal_decrypt_media', {
-                data: Array.from(data),
-                bundle
-            });
-            return new Uint8Array(result);
-        } catch (e: any) {
-            throw e;
-        }
-    }
-
     async getFingerprint(recipientHash: string): Promise<{ digits: string, trustLevel: number }> {
         try {
             const result = await invoke<any>('signal_get_fingerprint', {

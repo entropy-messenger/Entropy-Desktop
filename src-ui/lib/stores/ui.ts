@@ -18,11 +18,35 @@ export interface ModalOptions {
     onCancel: () => void;
 }
 
+export interface LightboxOptions {
+    id?: string;
+    src: string | null;
+    alt: string;
+    fileName: string;
+    fileType?: string;
+    size: number;
+    type: 'image' | 'video';
+    content?: string;
+    timestamp?: number;
+    senderNickname?: string;
+}
+
+export interface ContextMenuOptions {
+    x: number;
+    y: number;
+    visible: boolean;
+    fileName: string;
+    label: string;
+    onSave: () => void;
+}
+
 import { writable } from 'svelte/store';
 
 export const toasts = writable<Toast[]>([]);
-
 export const modal = writable<ModalOptions | null>(null);
+export const lightbox = writable<LightboxOptions | null>(null);
+export const contextMenu = writable<ContextMenuOptions | null>(null);
+export const mediaProxyPort = writable<number | null>(null);
 
 export const addToast = (message: string, type: ToastType = 'info', duration = 3000) => {
     const id = Math.random().toString(36).substring(2, 9);

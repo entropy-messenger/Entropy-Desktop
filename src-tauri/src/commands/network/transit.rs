@@ -55,20 +55,28 @@ pub async fn internal_send_to_network(
             };
 
             let total_len = data_bytes.len();
-            // fragmentation: split binary payload into manageable chunks for pacing
             let chunk_capacity = 1319;
             let transfer_id: u32 = transfer_id_override.unwrap_or_else(rand::random);
             let chunks = (total_len as f64 / chunk_capacity as f64).ceil() as usize;
 
-            for i in 0..chunks {
-                let target_hash_str = hex::encode(&hash_bytes);
-                if state
-                    .halted_targets
+            if let Some(ref id) = msg_id {
+                state
+                    .pending_transfers
                     .lock()
                     .map_err(|_| "Network state poisoned")?
-                    .contains(&target_hash_str)
+                    .insert(transfer_id, id.clone());
+            }
+
+            for i in 0..chunks {
+                let target_hash_str = hex::encode(&hash_bytes);
                 {
-                    break;
+                    let halted = state
+                        .halted_targets
+                        .lock()
+                        .map_err(|_| "Network state poisoned")?;
+                    if halted.contains(&target_hash_str) {
+                        break;
+                    }
                 }
 
                 let start = i * chunk_capacity;
@@ -90,27 +98,22 @@ pub async fn internal_send_to_network(
                 envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
                 envelope.extend_from_slice(chunk_data);
 
-                if let Some(ref id) = msg_id {
-                    state
-                        .pending_transfers
-                        .lock()
-                        .map_err(|_| "Network state poisoned")?
-                        .insert(transfer_id, id.clone());
-                }
                 paced_messages.push(PacedMessage {
                     msg: Message::Binary(envelope.into()),
                 });
 
-                // Throttled progress emission for the fragmentation loop (every 5% or completion)
                 let progress_step = (chunks / 20).max(1);
                 if i % progress_step == 0 || i == chunks - 1 {
-                    let _ = app.emit("transfer://progress", json!({
-                        "transferId": transfer_id,
-                        "current": i + 1,
-                        "total": chunks,
-                        "direction": "upload",
-                        "msgId": msg_id
-                    }));
+                    let _ = app.emit(
+                        "transfer://progress",
+                        json!({
+                            "transferId": transfer_id,
+                            "current": i + 1,
+                            "total": chunks,
+                            "direction": "upload",
+                            "msgId": msg_id
+                        }),
+                    );
                 }
             }
         }
@@ -124,10 +127,13 @@ pub async fn internal_send_to_network(
 
     if is_connected {
         if is_binary {
-            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-            if let Some(tx) = sender_lock.as_ref() {
+            let tx = {
+                let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+                sender_lock.clone()
+            };
+            if let Some(tx) = tx {
                 for pm in paced_messages {
-                    tx.send(pm).map_err(|e| e.to_string())?;
+                    tx.send(pm).await.map_err(|e| e.to_string())?;
                 }
             }
         } else {
@@ -138,19 +144,14 @@ pub async fn internal_send_to_network(
         }
         Ok(())
     } else {
-        // offline handling: queue fragments in database for delayed delivery
         if is_binary {
-            let db_lock = app.state::<DbState>();
-            let conn_lock = db_lock
-                .conn
-                .lock()
-                .map_err(|_| "Database connection lock poisoned")?;
+            let db_state = app.state::<DbState>();
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
 
-            if let Some(conn) = conn_lock.as_ref() {
+            if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute("BEGIN TRANSACTION", []);
                 if let Ok(mut stmt) = conn.prepare("INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)") {
                     for pm in paced_messages {
@@ -164,55 +165,132 @@ pub async fn internal_send_to_network(
                 let _ = conn.execute("COMMIT", []);
             }
             if let Some(id) = msg_id {
-                let db_lock = app.state::<DbState>();
-                let conn_lock = db_lock
-                    .conn
-                    .lock()
-                    .map_err(|_| "Database connection lock poisoned")?;
-                let mut chat_address: Option<String> = None;
-                if let Some(conn) = conn_lock.as_ref() {
-                    chat_address = conn
+                let db_state = app.state::<DbState>();
+                if let Ok(conn) = db_state.get_conn() {
+                    let chat_address: Option<String> = conn
                         .query_row(
                             "SELECT chat_address FROM messages WHERE id = ?",
                             [&id],
-                            |r| r.get(0),
+                            |r| r.get::<_, String>(0),
                         )
                         .ok();
+
                     let _ = conn.execute(
                         "UPDATE messages SET status = 'pending' WHERE id = ?",
                         [id.clone()],
                     );
-                    if let Some(ref addr) = chat_address {
-                        let _ = conn.execute(
-                            "UPDATE chats SET last_status = 'pending' WHERE address = ?",
-                            [addr],
-                        );
-                    }
+                    app.emit(
+                        "msg://status",
+                        json!({ "id": id, "status": "pending", "chat_address": chat_address }),
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
-                app.emit(
-                    "msg://status",
-                    json!({ "id": id, "status": "pending", "chat_address": chat_address }),
-                )
-                .map_err(|e| e.to_string())?;
             }
         }
         Err("Network not connected. Message queued in outbox.".to_string())
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub async fn internal_dispatch_fragment(
+    app: AppHandle,
+    state: &NetworkState,
+    target_hash_bytes: [u8; 64],
+    msg_id: Option<String>,
+    transfer_id: u32,
+    index: u32,
+    total: u32,
+    chunk_data: &[u8],
+    is_media: bool,
+    is_volatile: bool,
+) -> Result<(), String> {
+    let mut envelope = Vec::with_capacity(PACKET_SIZE);
+    envelope.extend_from_slice(&target_hash_bytes);
+    if is_media {
+        envelope.push(0x02);
+    } else if is_volatile {
+        envelope.push(0x04);
+    } else {
+        envelope.push(0x01);
+    }
+    envelope.extend_from_slice(&transfer_id.to_be_bytes());
+    envelope.extend_from_slice(&index.to_be_bytes());
+    envelope.extend_from_slice(&total.to_be_bytes());
+    envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
+    envelope.extend_from_slice(chunk_data);
+
+    if let Some(ref id) = msg_id {
+        state
+            .pending_transfers
+            .lock()
+            .map_err(|_| "Network state poisoned")?
+            .insert(transfer_id, id.clone());
+    }
+
+    let paced_msg = PacedMessage {
+        msg: Message::Binary(envelope.into()),
+    };
+
+    let is_connected = state
+        .sender
+        .lock()
+        .map_err(|_| "Network state poisoned")?
+        .is_some();
+
+    if is_connected {
+        let tx = {
+            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+            sender_lock.clone()
+        };
+        if let Some(tx) = tx {
+            tx.send(paced_msg).await.map_err(|e| e.to_string())?;
+        }
+
+        if index.is_multiple_of(20) || index == total - 1 {
+            let _ = app.emit(
+                "transfer://progress",
+                json!({
+                    "transferId": transfer_id,
+                    "current": index + 1,
+                    "total": total,
+                    "direction": "upload",
+                    "msgId": msg_id
+                }),
+            );
+        }
+        Ok(())
+    } else {
+        let db_state = app.state::<DbState>();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Ok(conn) = db_state.get_conn() {
+            let content = match &paced_msg.msg {
+                Message::Binary(b) => b.to_vec(),
+                _ => vec![],
+            };
+            let _ = conn.execute(
+                "INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![msg_id, "binary", content, timestamp],
+            );
+        }
+        Ok(())
+    }
+}
+
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
-    let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-    if let Some(tx) = &*sender_lock {
+    let tx = {
+        let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
+        sender_lock.clone()
+    };
+    if let Some(tx) = tx {
         let mut msg_batch = Vec::new();
 
         {
             // Scope to minimize DB lock duration
             let db_state = app.state::<DbState>();
-            let db_lock = db_state
-                .conn
-                .lock()
-                .map_err(|_| "Database connection lock poisoned")?;
-            if let Some(conn) = db_lock.as_ref()
+            if let Ok(conn) = db_state.get_conn()
                 && let Ok(mut stmt) = conn.prepare(
                     "SELECT id, msg_type, content, msg_id FROM pending_outbox ORDER BY rowid ASC",
                 )
@@ -240,16 +318,14 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
             } else {
                 Message::Binary(content.into())
             };
-            let _ = tx.send(PacedMessage { msg });
+            let _ = tx.send(PacedMessage { msg }).await;
             ids_to_delete.push(id);
         }
         if !ids_to_delete.is_empty() {
             let db_state = app.state::<DbState>();
-            if let Ok(lock) = db_state.conn.lock()
-                && let Some(conn) = lock.as_ref()
-            {
+            if let Ok(conn) = db_state.get_conn() {
                 let query = format!(
-                    "DELETE FROM outbox WHERE id IN ({})",
+                    "DELETE FROM pending_outbox WHERE id IN ({})",
                     ids_to_delete
                         .iter()
                         .map(|_| "?")

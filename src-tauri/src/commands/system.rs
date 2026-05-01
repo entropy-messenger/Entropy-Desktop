@@ -4,7 +4,7 @@ use tauri::State;
 #[tauri::command]
 pub fn open_file(
     app: tauri::AppHandle,
-    state: State<'_, DbState>,
+    _state: State<'_, DbState>,
     path: String,
 ) -> Result<(), String> {
     // resolve absolute path and prevent traversal
@@ -12,7 +12,7 @@ pub fn open_file(
     let canonical_path = std::fs::canonicalize(&path_buf)
         .map_err(|e| format!("Invalid or inaccessible path: {}", e))?;
 
-    // No longer strictly enforcing vault boundary for open_file, 
+    // No longer strictly enforcing vault boundary for open_file,
     // as users need to open files they've exported to their local filesystem.
     // The hidden file check below still provides a baseline security layer.
 
@@ -25,26 +25,20 @@ pub fn open_file(
         return Err("Access to hidden files is denied".into());
     }
 
-    #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(&canonical_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&canonical_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&canonical_path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(
+                format!("file://{}", canonical_path.to_string_lossy()),
+                None::<&str>,
+            )
+            .map_err(|e: tauri_plugin_opener::Error| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_media_proxy_port(state: State<'_, DbState>) -> Result<u16, String> {
+    let port = state.media_proxy_port.lock().map_err(|_| "Lock poisoned")?;
+    port.ok_or_else(|| "Media proxy not initialized".to_string())
 }

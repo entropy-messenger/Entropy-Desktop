@@ -4,7 +4,7 @@
   import { fade, fly, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
 
-  let { onComplete } = $props<{ onComplete: () => void }>();
+  let { onComplete, isMobile = false } = $props<{ onComplete: () => void, isMobile?: boolean }>();
 
   let step = $state(0);
   
@@ -46,27 +46,27 @@
         {#each steps as s, i}
             {#if step === i}
                 <div 
-                    class="bg-entropy-surface border border-white/5 rounded-[3rem] p-12 shadow-2xl space-y-10 text-center relative overflow-hidden"
+                    class="bg-entropy-surface border border-white/5 rounded-[2.5rem] lg:rounded-[3rem] p-8 lg:p-12 shadow-2xl space-y-8 lg:space-y-10 text-center relative overflow-hidden"
                     in:fly={{ y: 20, duration: 600, delay: 200, easing: cubicOut }}
                     out:fly={{ y: -20, duration: 400, easing: cubicOut }}
                 >
                     <!-- Background Glow -->
                     <div class="absolute -top-24 -right-24 w-64 h-64 {s.bg} blur-[100px] rounded-full opacity-50"></div>
                     
-                    <div class="relative items-center justify-center flex py-8">
+                    <div class="relative items-center justify-center flex py-6 lg:py-8">
                         <div class="absolute inset-0 {s.bg} blur-3xl rounded-full opacity-30 scale-75"></div>
-                        <div class="w-32 h-32 relative flex items-center justify-center">
-                            <div class="absolute inset-0 bg-white/5 backdrop-blur-md rounded-[2.5rem] border border-white/10 rotate-6 transition-transform group-hover:rotate-0 duration-700"></div>
-                            <div class="absolute inset-0 {s.bg} rounded-[2.5rem] -rotate-6 transition-transform group-hover:rotate-3 duration-1000"></div>
-                            <div class="relative z-10 flex items-center justify-center w-24 h-24 bg-entropy-surface rounded-[2rem] shadow-xl border border-white/5">
-                                 <s.icon size={48} class={s.color} strokeWidth={1.5} />
+                        <div class="w-24 h-24 lg:w-32 lg:h-32 relative flex items-center justify-center">
+                            <div class="absolute inset-0 bg-white/5 backdrop-blur-md rounded-[2rem] lg:rounded-[2.5rem] border border-white/10 rotate-6 transition-transform group-hover:rotate-0 duration-700"></div>
+                            <div class="absolute inset-0 {s.bg} rounded-[2rem] lg:rounded-[2.5rem] -rotate-6 transition-transform group-hover:rotate-3 duration-1000"></div>
+                            <div class="relative z-10 flex items-center justify-center w-20 h-20 lg:w-24 lg:h-24 bg-entropy-surface rounded-[1.5rem] lg:rounded-[2rem] shadow-xl border border-white/5">
+                                 <s.icon size={isMobile ? 36 : 48} class={s.color} strokeWidth={1.5} />
                             </div>
                         </div>
                     </div>
-
-                    <div class="space-y-4 relative">
-                        <h2 class="text-4xl font-black text-entropy-text-primary tracking-tight leading-tight">{s.title}</h2>
-                        <p class="text-entropy-text-secondary text-lg font-medium leading-relaxed opacity-80">
+ 
+                    <div class="space-y-3 lg:space-y-4 relative">
+                        <h2 class="text-3xl lg:text-4xl font-black text-entropy-text-primary tracking-tight leading-tight">{s.title}</h2>
+                        <p class="text-entropy-text-secondary text-base lg:text-lg font-medium leading-relaxed opacity-80">
                             {s.description}
                         </p>
                     </div>

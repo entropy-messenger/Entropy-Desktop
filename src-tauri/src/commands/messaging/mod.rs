@@ -5,5 +5,4 @@ pub mod outbox;
 
 pub use chat::*;
 pub use groups::*;
-pub use inbox::*;
 pub use outbox::*;

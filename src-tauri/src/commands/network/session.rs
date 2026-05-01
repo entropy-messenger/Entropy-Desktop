@@ -24,25 +24,45 @@ use super::transit::flush_outbox;
 const RELAY_URL: &str = "ws://localhost:8080/ws";
 
 #[tauri::command]
-pub async fn revoke_session_token(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
-    let id_hash = state.identity_hash.lock().map_err(|_| "State poisoned")?.clone();
-    
-    if let (Some(_id), Some(tx)) = (id_hash, state.sender.lock().map_err(|_| "State poisoned")?.as_ref()) {
+pub async fn revoke_session_token(
+    app: AppHandle,
+    state: State<'_, NetworkState>,
+) -> Result<(), String> {
+    let id_hash = state
+        .identity_hash
+        .lock()
+        .map_err(|_| "State poisoned")?
+        .clone();
+
+    let tx = {
+        let sender_lock = state.sender.lock().map_err(|_| "State poisoned")?;
+        sender_lock.clone()
+    };
+
+    if let (Some(_id), Some(tx)) = (id_hash, tx) {
         let revoke_req = json!({"type": "session_revoke", "req_id": "revoke_op"});
-        let _ = tx.send(PacedMessage {
-            msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
-        });
+        let _ = tx
+            .send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(revoke_req.to_string())),
+            })
+            .await;
     }
 
     // Always clear local even if server message fails to send
-    if let Ok(mut l) = state.session_token.lock() { *l = None; }
-    if let Ok(mut l) = state.is_authenticated.lock() { *l = false; }
-    
+    if let Ok(mut l) = state.session_token.lock() {
+        *l = None;
+    }
+    if let Ok(mut l) = state.is_authenticated.lock() {
+        *l = false;
+    }
+
     let app_inner = app.clone();
     tokio::task::spawn_local(async move {
-        let _ = SqliteSignalStore::new(app_inner).set_session_token(None).await;
+        let _ = SqliteSignalStore::new(app_inner)
+            .set_session_token(None)
+            .await;
     });
-    
+
     let _ = app.emit("network-status", "auth_failed");
     Ok(())
 }
@@ -127,7 +147,7 @@ pub(crate) async fn internal_establish_network(
         )
     };
 
-    let (tx, rx) = mpsc::unbounded_channel::<PacedMessage>();
+    let (tx, rx) = mpsc::channel::<PacedMessage>(100);
     let (bin_tx, mut bin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     let net_state_setup = app.state::<NetworkState>();
@@ -194,25 +214,34 @@ pub(crate) async fn internal_establish_network(
         .map_err(|_| "Network state poisoned")?
         .clone();
 
+    let tx_auth = {
+        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock() {
+            sender_lock.clone()
+        } else {
+            None
+        }
+    };
+
     if let (Some(id), Some(token_val)) = (id_hash.clone(), session_token_lock) {
-        if let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
-            && let Some(tx) = &*sender_lock
-        {
+        if let Some(tx) = tx_auth {
             let payload = json!({ "identity_hash": id, "session_token": token_val });
             let auth_req = json!({"type": "auth", "payload": payload});
-            let _ = tx.send(PacedMessage {
-                msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
-            });
+            let _ = tx
+                .send(PacedMessage {
+                    msg: Message::Text(Utf8Bytes::from(auth_req.to_string())),
+                })
+                .await;
         }
     } else if let Some(id) = id_hash
-        && let Ok(sender_lock) = app.state::<NetworkState>().sender.lock()
-        && let Some(tx) = &*sender_lock
+        && let Some(tx) = tx_auth
     {
         let challenge_req =
             json!({"type": "pow_challenge", "identity_hash": id, "req_id": "auto_challenge"});
-        let _ = tx.send(PacedMessage {
-            msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
-        });
+        let _ = tx
+            .send(PacedMessage {
+                msg: Message::Text(Utf8Bytes::from(challenge_req.to_string())),
+            })
+            .await;
     }
 
     loop {
@@ -255,7 +284,7 @@ pub(crate) async fn internal_establish_network(
                                                     if delta > 0 {
                                                         let app_sync = app.clone();
                                                         tokio::task::spawn_local(async move {
-                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta)).await;
                                                             if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                         });
                                                     } else { *refill_lock = false; }
@@ -276,7 +305,7 @@ pub(crate) async fn internal_establish_network(
                                                     if delta > 0 {
                                                         let app_sync = app.clone();
                                                         tokio::task::spawn_local(async move {
-                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta));
+                                                            let _ = signal_sync_keys(app_sync.clone(), Some(delta)).await;
                                                             if let Ok(mut l) = app_sync.state::<NetworkState>().is_refilling.lock() { *l = false; }
                                                         });
                                                     } else { *refill_lock = false; }
@@ -294,7 +323,7 @@ pub(crate) async fn internal_establish_network(
                                                             if reason == "media_offline" { "offline" } else { "failed" }
                                                         } else { "sent" };
                                                         let db_state = app.state::<DbState>();
-                                                        if let Ok(db_lock) = db_state.conn.lock() && let Some(conn) = db_lock.as_ref() {
+                                                        if let Ok(conn) = db_state.get_conn() {
                                                             let chat_info: Option<(String, String)> = conn.query_row(
                                                                 "SELECT chat_address, status FROM messages WHERE LOWER(id) = LOWER(?1)",
                                                                 [&id],
@@ -341,13 +370,9 @@ pub(crate) async fn internal_establish_network(
                                                                 let _ = app_inner.emit("network-status", "mining");
                                                                 tokio::task::spawn_local(async move {
                                                                     let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
-                                                                    let app_sig = app_inner.clone();
-                                                                    let sig_res = tauri::async_runtime::spawn_blocking(move || {
-                                                                        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| format!("Failed to build runtime: {}", e))?;
-                                                                        rt.block_on(async move { SqliteSignalStore::new(app_sig).get_identity_key_pair().await.map_err(|e: libsignal_protocol::SignalProtocolError| e.to_string()) })
-                                                                    }).await.map_err(|e: tauri::Error| e.to_string());
+                                                                    let sig_res = SqliteSignalStore::new(app_inner.clone()).get_identity_key_pair().await.map_err(|e| e.to_string());
                                                                     let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
-                                                                    if let Ok(Ok(kp)) = sig_res {
+                                                                    if let Ok(kp) = sig_res {
                                                                         let kp: IdentityKeyPair = kp;
                                                                         let mut rng = StdRng::from_os_rng();
                                                                         let seed_bytes = hex::decode(&s).unwrap_or_else(|_| s.as_bytes().to_vec());
@@ -488,11 +513,7 @@ pub async fn connect_network(
     let (final_id, final_token) = {
         let identity = if id_hash.is_none() {
             let db_state = app.state::<DbState>();
-            let lock = db_state
-                .conn
-                .lock()
-                .map_err(|_| "Database connection lock poisoned")?;
-            if let Some(conn) = lock.as_ref() {
+            if let Ok(conn) = db_state.get_conn() {
                 let id_res: Option<Vec<u8>> = conn
                     .query_row(
                         "SELECT public_key FROM signal_identity WHERE id = 0",

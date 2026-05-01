@@ -14,7 +14,9 @@
   import { signalManager } from './lib/signal_manager';
   import Toast from './components/Toast.svelte';
   import Modal from './components/Modal.svelte';
-  import { addToast, showConfirm } from './lib/stores/ui';
+  import Lightbox from './components/Lightbox.svelte';
+  import { addToast, showConfirm, contextMenu } from './lib/stores/ui';
+  import { LucideDownload } from 'lucide-svelte';
   import { exportVault, importVault, resetDatabase as resetAccountAction } from './lib/actions/vault';
   import { getVersion } from '@tauri-apps/api/app';
 
@@ -22,6 +24,12 @@
 
   let currentUpdate = $state<any>(null);
   let updatePercent = $state(0);
+  let isMobile = $state(false);
+
+  const updateDimensions = () => {
+    isMobile = window.innerWidth < 1024;
+  };
+
   const checkNativeUpdate = async () => {
     if (!(window as any).__TAURI_INTERNALS__) return;
     try {
@@ -102,23 +110,73 @@
     }
   };
 
-  onMount(async () => {
-    if ((window as any).__TAURI_INTERNALS__) {
-        await new Promise(r => setTimeout(r, 100));
-        
-        checkNativeUpdate();
-    }
-    
-    isInitializing = false;
-    hasExistingIdentity = await hasVault();
+    import { lightbox, modal } from './lib/stores/ui';
 
-    if ((window as any).__TAURI_INTERNALS__) {
-      try {
-        await checkNotificationPermission();
-      } catch (e) {
-      }
-    }
-  });
+    onMount(() => {
+      const init = async () => {
+        if ((window as any).__TAURI_INTERNALS__) {
+            await new Promise(r => setTimeout(r, 100));
+            checkNativeUpdate();
+        }
+        
+        isInitializing = false;
+        hasExistingIdentity = await hasVault();
+
+        if ((window as any).__TAURI_INTERNALS__) {
+          try {
+            await checkNotificationPermission();
+          } catch (e) {
+            // Permission failed silently
+          }
+        }
+
+        updateDimensions();
+      };
+
+      init();
+
+      // Handle Android Back Button / Gesture
+      const handlePopState = (e: PopStateEvent) => {
+          // Check Svelte stores to see what we should close
+          if ($lightbox) {
+              lightbox.set(null);
+          } else if ($modal) {
+              modal.set(null);
+          } else if ($userStore.activeChatHash && isMobile) {
+              userStore.update(s => ({ ...s, activeChatHash: null }));
+          }
+      };
+
+      window.addEventListener('popstate', handlePopState);
+      window.addEventListener('resize', updateDimensions);
+      
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+        window.removeEventListener('resize', updateDimensions);
+      };
+    });
+
+    // Track the 'depth' of our UI so we know how many states to push/pop
+    let navDepth = $state(0);
+
+    $effect(() => {
+        // Calculate how many layers are currently 'open'
+        let currentDepth = 0;
+        if (isMobile && $userStore.activeChatHash) currentDepth++;
+        if ($modal) currentDepth++;
+        if ($lightbox) currentDepth++;
+
+        // If we just added a layer, push a new history state
+        if (currentDepth > navDepth) {
+            for (let i = 0; i < (currentDepth - navDepth); i++) {
+                history.pushState({ depth: navDepth + i + 1 }, '');
+            }
+        } 
+        // Note: We don't manually pop history here because the USER 
+        // does that with the back button, which triggers handlePopState.
+        
+        navDepth = currentDepth;
+    });
 
   const handleLogin = async () => {
     if (!password) return;
@@ -172,7 +230,9 @@
         }
 
         if (e.key === 'Escape') {
-            userStore.update(s => ({ ...s, activeChatHash: null }));
+            if (!$lightbox && !$modal) {
+                userStore.update(s => ({ ...s, activeChatHash: null }));
+            }
         }
     }
 
@@ -231,7 +291,9 @@
 <svelte:window oncontextmenu={handleContextMenu} onkeydown={handleKeydown} />
 
 <main class="h-screen w-screen bg-entropy-bg overflow-hidden flex flex-col font-sans antialiased text-entropy-text-primary select-none">
-    <TitleBar />
+    {#if !isMobile}
+        <TitleBar />
+    {/if}
     
     {#if !$userStore.identityHash}
         
@@ -242,23 +304,23 @@
                 <div class="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-entropy-accent/10 blur-[150px] rounded-full animate-pulse" style="animation-delay: 2s;"></div>
             </div>
 
-            <div class="max-w-6xl w-full mx-auto px-12 py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-[600px]">
-                <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
+            <div class="max-w-6xl w-full mx-auto px-6 lg:px-12 py-8 lg:py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-screen lg:min-h-[600px]">
+                <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-24 items-center">
                     <!-- Right/Branding Section -->
-                    <div class="space-y-12 text-center lg:text-left order-2 lg:order-1">
-                        <div class="flex flex-col items-center lg:items-start space-y-8">
-                            <div class="w-24 h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
-                                <img src="/logo.png" alt="Entropy" class="w-16 h-16 object-contain" />
+                    <div class="space-y-8 lg:space-y-12 text-center lg:text-left order-1">
+                        <div class="flex flex-col items-center lg:items-start space-y-6 lg:space-y-8">
+                            <div class="w-20 h-20 lg:w-24 lg:h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
+                                <img src="/logo.png" alt="Entropy" class="w-12 h-12 lg:w-16 lg:h-16 object-contain" />
                             </div>
-                            <div class="space-y-4">
-                                <h1 class="text-7xl font-black text-white tracking-tighter leading-none">Entropy</h1>
-                                <p class="text-entropy-text-secondary text-xl font-medium max-w-md leading-relaxed opacity-80">
+                            <div class="space-y-3 lg:space-y-4">
+                                <h1 class="text-5xl lg:text-7xl font-black text-white tracking-tighter leading-none">Entropy</h1>
+                                <p class="text-entropy-text-secondary text-lg lg:text-xl font-medium max-w-md mx-auto lg:mx-0 leading-relaxed opacity-80">
                                     {hasExistingIdentity ? 'Your secure gateway to sovereign communication.' : 'Ultimate privacy. No accounts. No metadata. Total sovereignty.'}
                                 </p>
                             </div>
                         </div>
 
-                        {#if !hasExistingIdentity}
+                        {#if !hasExistingIdentity && !isMobile}
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 pt-8">
                                 <div class="p-6 bg-white/[0.05] border border-white/10 rounded-2xl space-y-3">
                                      <div class="flex items-center space-x-3 text-entropy-accent">
@@ -284,12 +346,15 @@
                         <div class="hidden lg:block pt-12">
                             <div class="flex items-center space-x-12">
                                 <button onclick={handleImportVault} class="text-[10px] font-black text-white/40 uppercase tracking-[0.3em] hover:text-white transition-colors">Restore Backup</button>
+                                {#if import.meta.env.DEV}
+                                    <button onclick={handleResetAccount} class="text-[10px] font-black text-red-500/40 uppercase tracking-[0.3em] hover:text-red-500 transition-colors">Reset Identity</button>
+                                {/if}
                             </div>
                         </div>
                     </div>
 
                     <!-- Left/Form Section -->
-                    <div class="w-full space-y-8 order-1 lg:order-2">
+                    <div class="w-full space-y-8 order-2">
                         <div class="space-y-6">
                             <div class="flex justify-between items-center px-4">
                                 <label for="vault-password" class="text-[11px] font-black text-white/50 uppercase tracking-[0.3em]">
@@ -306,7 +371,7 @@
 
                             <div class="space-y-4">
                                 <div class="relative group">
-                                    <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                    <div class="absolute left-6 lg:left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-100 lg:scale-110">
                                         <LucideLock size={20} />
                                     </div>
                                     <input 
@@ -314,7 +379,7 @@
                                         type={showPassword ? 'text' : 'password'}
                                         bind:value={password}
                                         placeholder={hasExistingIdentity ? "Enter database password" : "Define database password"} 
-                                        class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm"
+                                        class="w-full pl-14 lg:pl-20 pr-14 lg:pr-20 py-5 lg:py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-lg lg:text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm"
                                         onkeydown={(e) => e.key === 'Enter' && (hasExistingIdentity ? handleLogin() : null)}
                                     />
                                     <button 
@@ -332,7 +397,7 @@
 
                                 {#if !hasExistingIdentity}
                                     <div class="relative group animate-in slide-in-from-top-6 duration-700">
-                                        <div class="absolute left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-110">
+                                        <div class="absolute left-6 lg:left-8 top-1/2 -translate-y-1/2 text-white/40 group-focus-within:text-entropy-primary transition-all scale-100 lg:scale-110">
                                             <LucideLock size={20} />
                                         </div>
                                         <input 
@@ -340,7 +405,7 @@
                                             type={showPassword ? 'text' : 'password'}
                                             bind:value={confirmPassword}
                                             placeholder="Confirm database password" 
-                                            class="w-full pl-20 pr-20 py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm border-white/5"
+                                            class="w-full pl-14 lg:pl-20 pr-14 lg:pr-20 py-5 lg:py-6 bg-white/[0.06] border border-white/10 rounded-2xl focus:bg-white/[0.1] focus:border-entropy-primary/50 transition-all text-lg lg:text-xl font-mono tracking-[0.25em] outline-none text-white placeholder:text-white/20 placeholder:font-sans placeholder:tracking-normal placeholder:text-sm border-white/5"
                                             onkeydown={(e) => e.key === 'Enter' && handleCreate()}
                                         />
                                     </div>
@@ -396,25 +461,65 @@
             </div>
         </div>
     {:else}
-        <div class="flex flex-row flex-1 overflow-hidden bg-entropy-bg">
-            <Sidebar 
-                bind:showStarredMessages
-                onUpdateClick={handleUpdateClick} 
-                {updateAvailable}
-                {isUpdating}
-                {updatePercent}
-            />
-            <div class="flex-1 relative flex flex-col min-w-0">
-                <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} />
-            
-            </div>
+        <div class="flex-1 overflow-hidden bg-entropy-bg {isMobile ? 'relative' : 'flex'}">
+            {#if isMobile}
+                {#if !$userStore.activeChatHash}
+                    <Sidebar 
+                        bind:showStarredMessages
+                        onUpdateClick={handleUpdateClick} 
+                        {updateAvailable}
+                        {isUpdating}
+                        {updatePercent}
+                        {isMobile}
+                    />
+                {:else}
+                    <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} {isMobile} />
+                {/if}
+            {:else}
+                <Sidebar 
+                    bind:showStarredMessages
+                    onUpdateClick={handleUpdateClick} 
+                    {updateAvailable}
+                    {isUpdating}
+                    {updatePercent}
+                    {isMobile}
+                />
+                <div class="flex-1 relative flex flex-col min-w-0">
+                    <ChatWindow bind:showStarredMessages onCloseStarred={() => showStarredMessages = false} {isMobile} />
+                </div>
+            {/if}
         </div>
     {/if}
 
     <Toast />
     <Modal />
+    <Lightbox />
     {#if showOnboarding}
-        <Onboarding onComplete={() => showOnboarding = false} />
+        <Onboarding {isMobile} onComplete={() => showOnboarding = false} />
+    {/if}
+
+    {#if $contextMenu && $contextMenu.visible}
+        <div
+            class="fixed inset-0 z-[9998]"
+            onclick={() => contextMenu.set(null)}
+            oncontextmenu={(e) => { e.preventDefault(); contextMenu.set(null); }}
+        ></div>
+        <div
+            class="fixed z-[9999] min-w-[170px] bg-entropy-surface/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden py-1 animate-in fade-in zoom-in-95 duration-100"
+            style="left: {$contextMenu.x}px; top: {$contextMenu.y}px;"
+            onclick={(e) => e.stopPropagation()}
+        >
+            <div class="px-3 py-1.5 border-b border-white/5 mb-1 bg-white/5">
+                <p class="text-[9px] font-black text-entropy-text-dim uppercase tracking-[0.2em] truncate">File Options</p>
+            </div>
+            <button
+                onclick={() => { $contextMenu?.onSave(); contextMenu.set(null); }}
+                class="w-full flex items-center space-x-3 px-3 py-2.5 text-left text-[12px] font-bold text-entropy-text-primary hover:bg-entropy-primary hover:text-white transition-all group"
+            >
+                <LucideDownload size={15} class="text-entropy-primary group-hover:text-white transition-colors" />
+                <span>{$contextMenu?.label || 'Save to Device'}</span>
+            </button>
+        </div>
     {/if}
 </main>
 

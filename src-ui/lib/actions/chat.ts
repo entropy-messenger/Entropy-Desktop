@@ -8,21 +8,39 @@ import type { Message, Chat } from '../types';
  * Cache and attachment orchestration:
  * Memory cache for media assets and indexing logic.
  */
-const attachmentCache = new Map<string, Uint8Array>();
+let proxyPort: number | null = null;
 
-export const getAttachment = async (id: string): Promise<Uint8Array | null> => {
-    if (attachmentCache.has(id)) return attachmentCache.get(id)!;
-    try {
-        const bytes = await invoke<number[]>('vault_load_media', { id });
-        const uint8 = new Uint8Array(bytes);
-        attachmentCache.set(id, uint8);
-        return uint8;
-    } catch (e) {
-        return null;
+export const getMediaUrl = async (id: string, type: string): Promise<string> => {
+    if (!proxyPort) {
+        try {
+            proxyPort = await invoke<number>('get_media_proxy_port');
+        } catch (e) {
+
+            return "";
+        }
     }
+    return `http://localhost:${proxyPort}/media/${id}?type=${encodeURIComponent(type)}`;
 };
 
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
+
+/**
+ * Force a reactive UI refresh for a specific message.
+ * Used when a background process (like media re-encryption) completes.
+ */
+export const refreshMessageUI = (msgId: string) => {
+    messageStore.update(m => {
+        for (const chatAddress in m) {
+            const list = m[chatAddress];
+            const idx = list.findIndex(x => x.id === msgId);
+            if (idx !== -1) {
+                list[idx] = { ...list[idx] };
+                break;
+            }
+        }
+        return { ...m };
+    });
+};
 
 export const sendMessage = async (destIdRaw: string, content: string) => {
     const destId = destIdRaw.toLowerCase();
@@ -54,54 +72,93 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
     }
 };
 
-export const sendFile = async (destIdRaw: string, file: { name: string, type: string, path?: string, data?: Uint8Array | ArrayBuffer }, type: 'file' | 'voice_note' = 'file', duration?: number) => {
+export const sendFile = async (destIdRaw: string, file: { name: string, type: string, path?: string, data?: Uint8Array | ArrayBuffer }, type: 'file' | 'voice_note' = 'file', duration?: number, thumbnail?: string) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    try {
-        let fileData: Uint8Array | null = null;
-        if (file.data) {
-            fileData = file.data instanceof ArrayBuffer ? new Uint8Array(file.data) : file.data;
-        } else if (file && (file instanceof File || typeof (file as any).arrayBuffer === 'function')) {
-            const source = (file as any)._target || file;
-            const buffer = await (source as any).arrayBuffer();
-            fileData = new Uint8Array(buffer);
+    // 1. Create an Optimistic Message for immediate UI feedback
+    const tempId = 'opt-' + Math.random().toString(36).substring(2, 9);
+    const optimisticMsg: Message = {
+        id: tempId,
+        content: type === 'voice_note' ? 'Voice Note' : file.name,
+        senderHash: state.identityHash,
+        timestamp: Date.now(),
+        isMine: true,
+        status: 'sending',
+        type: type,
+        attachment: {
+            fileName: file.name,
+            fileType: file.type,
+            size: (file as any).size || 0,
+            originalPath: file.path,
+            vaultPath: '', // Will be filled by backend
+            thumbnail: thumbnail
         }
+    };
 
-        const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
-        await invoke(command, {
-            payload: {
-                recipient: destId,
-                filePath: file.path || null,
-                fileData: fileData ? Array.from(fileData) : null,
-                fileName: file.name,
-                fileType: file.type,
-                msgType: type,
-                duration: duration,
-                isGroup: !!chat?.isGroup,
-                groupMembers: chat?.members || null,
-                groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,
-                replyTo: state.replyingTo ? {
-                    id: state.replyingTo.id,
-                    content: state.replyingTo.content,
-                    senderHash: state.replyingTo.senderHash,
-                    senderAlias: state.replyingTo.senderAlias,
-                    type: state.replyingTo.type
-                } : null
-            }
-        });
-        setReplyingTo(null);
-    } catch (e: any) {
-        const { addToast } = await import('../stores/ui');
-        addToast(e.toString(), 'error');
+    // Add to UI immediately
+    addMessage(destId, optimisticMsg);
+
+    const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
+    
+    // Resolve data if path is missing (e.g. for recorded voice notes)
+    let finalData: Uint8Array | null = null;
+    if (!file.path) {
+        if (file instanceof Blob) {
+            const buffer = await file.arrayBuffer();
+            finalData = new Uint8Array(buffer);
+        } else if (file.data) {
+            finalData = file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
+        }
     }
+
+    invoke(command, {
+        payload: {
+            recipient: destId,
+            filePath: file.path || null,
+            fileData: finalData,
+            fileName: file.name,
+            fileType: file.type,
+            msgType: type,
+            duration: duration,
+            thumbnail: thumbnail || null,
+            isGroup: !!chat?.isGroup,
+            groupMembers: chat?.members || null,
+            groupName: chat?.isGroup ? (chat?.peerNickname || null) : null,
+            replyTo: state.replyingTo ? {
+                id: state.replyingTo.id,
+                content: state.replyingTo.content,
+                senderHash: state.replyingTo.senderHash,
+                senderAlias: state.replyingTo.senderAlias,
+                type: state.replyingTo.type
+            } : null
+        }
+    }).catch(async (e: any) => {
+        // Handle failure
+        messageStore.update(mStore => {
+            if (mStore[destId]) {
+                mStore[destId] = mStore[destId].map(m => m.id === tempId ? { ...m, status: 'failed' } : m);
+            }
+            return { ...mStore };
+        });
+        const { addToast } = await import('../stores/ui');
+        addToast("Media failed to send: " + e.toString(), 'error');
+    });
+
+    setReplyingTo(null);
 };
 
-export const addMessage = async (peerHash: string, msg: Message) => {
+export const addMessage = async (peerHashRaw: string, msg: Message) => {
+    const peerHash = peerHashRaw.toLowerCase();
+
+    // Early-exit if this message ID is already known — prevents duplicate events
+    // from retried packets inflating unread counters or adding ghost entries.
+    const existingMsgs = get(messageStore)[peerHash] || [];
+    if (existingMsgs.some(m => m.id === msg.id)) return;
+
     if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
-        attachmentCache.set(msg.id, msg.attachment.data);
         await invoke('vault_save_media', { id: msg.id, data: msg.attachment.data }).catch(() => { });
     }
 
@@ -160,6 +217,31 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         const msgs = mStore[peerHash] || [];
         if (msgs.some(m => m.id === msg.id)) return mStore;
 
+        // De-duplicate Optimistic messages
+        let finalMsgs = msgs;
+        if (msg.isMine && !msg.id.startsWith('opt-')) {
+            const incomingFileName = (msg.attachment?.fileName || "").toLowerCase();
+            const cleanIncomingContent = (msg.content.startsWith('File: ') ? msg.content.substring(6) : msg.content).toLowerCase();
+            
+            const ghostIndex = msgs.findIndex(m => {
+                if (!m.id.startsWith('opt-') || m.status !== 'sending') return false;
+                
+                // Match by attachment filename (case-insensitive)
+                const ghostFileName = (m.attachment?.fileName || "").toLowerCase();
+                if (incomingFileName && ghostFileName === incomingFileName) return true;
+                
+                // Fallback: Match by content string (case-insensitive)
+                const ghostContent = (m.content || "").toLowerCase();
+                return ghostContent === cleanIncomingContent || ghostContent === msg.content.toLowerCase();
+            });
+
+            if (ghostIndex !== -1) {
+                finalMsgs = [...msgs];
+                finalMsgs[ghostIndex] = msg;
+                return { ...mStore, [peerHash]: finalMsgs.sort((a, b) => a.timestamp - b.timestamp) };
+            }
+        }
+
         const chat = get(userStore).chats[peerHash];
 
         if (chat?.hasMoreNewer && !msg.isMine) {
@@ -167,11 +249,10 @@ export const addMessage = async (peerHash: string, msg: Message) => {
         }
         if (chat?.hasMoreNewer && msg.isMine) {
             needsSnapToPresent = true;
-            return mStore; // We will let the snapshot loader handle it
+            return mStore;
         }
 
-        const combined = [...msgs, msg].sort((a, b) => a.timestamp - b.timestamp);
-
+        const combined = [...finalMsgs, msg].sort((a, b) => a.timestamp - b.timestamp);
         let final = combined;
         if (combined.length > 2000) {
             if (chat?.hasMoreNewer) {
@@ -199,7 +280,6 @@ export const addMessage = async (peerHash: string, msg: Message) => {
 };
 
 export const syncChatToDb = async (chat: Chat) => {
-    const state = get(userStore);
     try {
         await invoke('db_upsert_chat', {
             chat: {
@@ -210,7 +290,9 @@ export const syncChatToDb = async (chat: Chat) => {
                 lastTimestamp: chat.lastTimestamp || null,
                 lastSenderHash: chat.lastSenderHash || null,
                 lastStatus: chat.lastStatus || null,
-                unreadCount: chat.unreadCount || 0,
+                // Unread count is managed exclusively by Rust.
+                // Always pass 0 here so the DB count is never overwritten by stale frontend values.
+                unreadCount: 0,
                 isArchived: !!chat.isArchived,
                 isPinned: !!chat.isPinned,
                 isBlocked: !!chat.isBlocked,
@@ -455,7 +537,6 @@ export const jumpToPresent = async (peerHash: string) => {
 
 export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
     msgIds.forEach(id => {
-        attachmentCache.delete(id);
         invoke('vault_delete_media', { id }).catch(() => { });
     });
 
@@ -577,14 +658,18 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
     });
 };
 
-export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string) => {
+export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string, attachment?: any) => {
     messageStore.update(mStore => {
         // Direct lookup if chatAddress is known
         if (chatAddress && mStore[chatAddress]) {
             const index = mStore[chatAddress].findIndex(m => m.id === msgId);
             if (index !== -1) {
                 const updatedMessages = [...mStore[chatAddress]];
-                updatedMessages[index] = { ...updatedMessages[index], status };
+                updatedMessages[index] = { 
+                    ...updatedMessages[index], 
+                    status,
+                    ...(attachment ? { attachment: { ...updatedMessages[index].attachment, ...attachment } } : {})
+                };
                 mStore[chatAddress] = updatedMessages;
 
                 userStore.update(s => {
@@ -603,7 +688,11 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
             const index = mStore[peerHash].findIndex(m => m.id === msgId);
             if (index !== -1) {
                 const updatedMessages = [...mStore[peerHash]];
-                updatedMessages[index] = { ...updatedMessages[index], status };
+                updatedMessages[index] = { 
+                    ...updatedMessages[index], 
+                    status,
+                    ...(attachment ? { attachment: { ...updatedMessages[index].attachment, ...attachment } } : {})
+                };
                 mStore[peerHash] = updatedMessages;
 
                 userStore.update(s => {

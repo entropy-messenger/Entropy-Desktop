@@ -1,42 +1,30 @@
 <script lang="ts">
-    import { getAttachment } from '../lib/actions/chat';
+    import { getMediaUrl } from '../lib/actions/chat';
     import { LucideMic, LucideFile, LucideImage, LucideLoader } from 'lucide-svelte';
-    import { signalManager } from '../lib/signal_manager';
 
     let { msg, onclick } = $props<{ msg: any; onclick: () => void }>();
 
-    let blobUrl = $state<string | null>(null);
+    let thumbUrl = $state<string | null>(null);
     let loading = $state(false);
 
     async function loadThumbnail() {
-        if (!msg.attachment || msg.type !== 'file' || !msg.attachment.fileType?.startsWith('image/')) {
+        if (!msg.attachment) return;
+
+        // 1. Prioritize pre-rendered thumbnail
+        if (msg.attachment.thumbnail) {
+            thumbUrl = msg.attachment.thumbnail;
             return;
         }
 
-        loading = true;
-        try {
-            if (msg.attachment.data) {
-                blobUrl = URL.createObjectURL(new Blob([msg.attachment.data], {type: msg.attachment.fileType}));
-                return;
-            }
-
-            const data = await getAttachment(msg.id);
-            if (data && msg.attachment.bundle) {
-                const decrypted = await signalManager.decryptMedia(data, msg.attachment.bundle);
-                blobUrl = URL.createObjectURL(new Blob([decrypted as any], {type: msg.attachment.fileType}));
-            }
-        } catch (e) {
-            // Load error
-        } finally {
-            loading = false;
+        // 2. If no thumbnail exists, we strictly do NOT use the proxy here.
+        // We show a placeholder until the user choose to VIEW it.
+        if (msg.attachment.fileType?.startsWith('image/')) {
+            // No-op
         }
     }
 
     $effect(() => {
         loadThumbnail();
-        return () => {
-            if (blobUrl) URL.revokeObjectURL(blobUrl);
-        };
     });
 </script>
 
@@ -45,8 +33,8 @@
     class="aspect-square bg-entropy-surface-light rounded-lg flex items-center justify-center text-entropy-primary relative group/file overflow-hidden hover:bg-entropy-surface transition-colors"
 >
     {#if msg.attachment?.fileType?.startsWith('image/')}
-        {#if blobUrl}
-            <img src={blobUrl} alt="" class="w-full h-full object-cover" />
+        {#if thumbUrl}
+            <img src={thumbUrl} alt="" class="w-full h-full object-cover" />
             <div class="absolute inset-0 bg-black/20 opacity-0 group-hover/file:opacity-100 flex items-center justify-center transition-opacity duration-200">
                 <LucideImage size={24} class="text-white drop-shadow-lg" />
             </div>

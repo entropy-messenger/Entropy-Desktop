@@ -5,7 +5,8 @@
   import { toggleBlock, setLocalNickname } from '../lib/actions/contacts';
   import { 
     LucideMoreVertical, LucideSearch, LucideCheckCircle, LucideEdit2, 
-    LucideStar, LucideTrash2, LucideInfo, LucideCheck as LucideCheckIcon, LucideBan, LucideShieldCheck, LucideX
+    LucideStar, LucideTrash2, LucideInfo, LucideCheck as LucideCheckIcon, LucideBan, LucideShieldCheck, LucideX,
+    LucideChevronLeft
   } from 'lucide-svelte';
   import Avatar from './Avatar.svelte';
   import { addToast, showConfirm, showPrompt } from '../lib/stores/ui';
@@ -20,7 +21,8 @@
     onCancelSelection,
     onToggleSearch,
     onShowGallery,
-    onSelectionModeChange
+    onSelectionModeChange,
+    isMobile
   } = $props<{
     activeChat: Chat;
     selectionMode: boolean;
@@ -31,6 +33,7 @@
     onToggleSearch: () => void;
     onShowGallery: () => void;
     onSelectionModeChange: (mode: boolean) => void;
+    isMobile?: boolean;
   }>();
 
   let showOptions = $state(false);
@@ -67,10 +70,18 @@
   const canSeeTyping = $derived(currentTypingStatus !== 'nobody');
 </script>
 
-<div class="bg-entropy-surface/95 backdrop-blur-md p-3 px-4 flex justify-between items-center shadow-sm z-30">
+<div class="bg-entropy-surface/95 backdrop-blur-md p-3 px-4 flex justify-between items-center shadow-sm z-30 pt-[var(--sat,0px)]">
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="flex items-center space-x-3 overflow-hidden cursor-pointer group/header hover:opacity-80 transition-opacity" onclick={onShowGallery}>
+        {#if isMobile}
+            <button 
+                onclick={(e) => { e.stopPropagation(); userStore.update(s => ({ ...s, activeChatHash: null })); }} 
+                class="p-2 -ml-2 text-entropy-text-dim hover:text-entropy-primary"
+            >
+                <LucideChevronLeft size={24} />
+            </button>
+        {/if}
         <Avatar hash={activeChat.peerHash} alias={$userStore.nicknames[activeChat.peerHash]} size="w-10 h-10" textSize="text-md" rounded="rounded-xl" clickable={false} />
         <div class="min-w-0">
             <div class="flex items-center space-x-2">

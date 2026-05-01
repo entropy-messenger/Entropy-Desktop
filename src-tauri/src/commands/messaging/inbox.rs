@@ -1,18 +1,18 @@
-//! Binary Reassembly and Inbound Message Processing
-//!
-//! This module handles the reassembly of fragmented binary payloads received from the network.
-//! Payloads are processed through an asynchronous media assembler that enforces:
-//! - Transfer ID (TID) isolation.
-//! - Strict index-to-total validation to prevent buffer overflows.
-//! - Resource limits (max 80000 fragments per transfer) to mitigate memory exhaustion.
-//!
-//! Once reassembled, payloads are passed to the Signal decryption pipeline where session
-//! state is updated and messages are persisted to the encrypted local vault.
+//! Inbound message reassembly and protocol orchestration.
+//! Handles fragment collection, Signal decryption, and vault persistence.
 
-use crate::app_state::{DbState, NetworkState};
-use crate::commands::*;
+use crate::app_state::{DbState, MediaTransferState, NetworkState};
+use crate::commands::{
+    DbChat, DbMessage, db_set_contact_global_nickname, db_update_messages, get_media_dir,
+    internal_db_save_message, internal_db_upsert_chat, internal_send_to_network,
+    internal_signal_encrypt,
+};
 use crate::signal_store::SqliteSignalStore;
 use base64::Engine;
+use chacha20poly1305::{
+    Key, XChaCha20Poly1305, XNonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+};
 use libsignal_protocol::{
     CiphertextMessage, CiphertextMessageType, DeviceId, ProtocolAddress, SignalProtocolError,
     message_decrypt,
@@ -21,17 +21,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rusqlite::params;
 use serde_json::json;
-use std::io::Write;
 use tauri::{AppHandle, Emitter, Manager};
-
-#[tauri::command]
-pub fn signal_decrypt_media(data: Vec<u8>, bundle: serde_json::Value) -> Result<Vec<u8>, String> {
-    let key_b64 = bundle
-        .get("key")
-        .and_then(|k| k.as_str())
-        .ok_or("No decryption key in bundle")?;
-    crypto_decrypt_media(data, key_b64.to_string())
-}
 
 async fn internal_signal_decrypt(
     app: AppHandle,
@@ -83,7 +73,7 @@ async fn internal_signal_decrypt(
     .await
     .map_err(|e: SignalProtocolError| e.to_string())?;
 
-    String::from_utf8(ptext).map_err(|e| e.to_string())
+    String::from_utf8(ptext).map_err(|e: std::string::FromUtf8Error| e.to_string())
 }
 
 pub async fn process_incoming_binary(
@@ -112,32 +102,26 @@ pub async fn process_incoming_binary(
         return Ok(());
     }
 
-    // extract sender hash
     let header_bytes = &trimmed[0..64];
     let header_str = String::from_utf8_lossy(header_bytes).to_string();
     let sender = override_sender
         .unwrap_or_else(|| header_str.trim().to_string())
         .to_lowercase();
 
-    // contact bridge filter
-    if !sender.is_empty() {
-        let lock = db_state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = lock.as_ref() {
-            let is_blocked = conn
-                .query_row(
-                    "SELECT is_blocked FROM contacts WHERE hash = ?1",
-                    params![sender],
-                    |row| row.get::<_, i32>(0),
-                )
-                .unwrap_or(0)
-                != 0;
+    if !sender.is_empty()
+        && let Ok(conn) = db_state.get_conn()
+    {
+        let is_blocked = conn
+            .query_row(
+                "SELECT is_blocked FROM contacts WHERE hash = ?1",
+                params![sender],
+                |row: &rusqlite::Row| row.get::<_, i32>(0),
+            )
+            .unwrap_or(0)
+            != 0;
 
-            if is_blocked {
-                return Ok(());
-            }
+        if is_blocked {
+            return Ok(());
         }
     }
 
@@ -150,7 +134,6 @@ pub async fn process_incoming_binary(
     let payload_data = &body_data[1..];
 
     if frame_type == 0x01 || frame_type == 0x02 || frame_type == 0x04 {
-        // binary reassembly: header format [TID: 4B][Idx: 4B][Total: 4B][Len: 4B]
         if payload_data.len() < 16 {
             return Err("Invalid binary fragment header (too short)".into());
         }
@@ -181,8 +164,7 @@ pub async fn process_incoming_binary(
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
         ) as usize;
 
-        // security: cap maximum fragments per transfer (approx 100MB)
-        if total > 80000 {
+        if total > 10_000_000 {
             return Err("Payload exceeds limit".into());
         }
 
@@ -190,63 +172,102 @@ pub async fn process_incoming_binary(
             return Err("Fragment data too short".into());
         }
         let chunk_data = &raw_chunk_data[..chunk_len];
-        let _link_key = format!("{}:{}", sender, transfer_id);
-        let assembler_key = format!("{}:{}:{:02x}", sender, transfer_id, frame_type);
 
-        let (is_complete, entry_data, total_actual, current_count) = {
-            let mut assembler = net_state
+        let (is_complete, complete_data) = {
+            let mut assemblers = net_state
                 .media_assembler
                 .lock()
                 .map_err(|_| "Network state poisoned")?;
-            let entry = assembler.entry(assembler_key.clone()).or_insert_with(|| {
-                crate::app_state::FragmentBuffer {
-                    total,
-                    chunks: std::collections::HashMap::new(),
-                    last_activity: std::time::Instant::now(),
-                }
-            });
+            let transfer_key = format!("{}:{}:{}", sender, transfer_id, frame_type);
+            let assembler =
+                assemblers
+                    .entry(transfer_key.clone())
+                    .or_insert_with(|| MediaTransferState {
+                        total,
+                        received_chunks: vec![false; total as usize],
+                        last_activity: std::time::Instant::now(),
+                        file_handle: None,
+                        received_count: 0,
+                    });
 
-            // security: validate index range and cap hashmap entries per assembler
-            if index >= entry.total || entry.chunks.len() >= 76800 {
-                return Err("Index out of range".into());
-            }
-
-            entry.chunks.insert(index, chunk_data.to_vec());
-            entry.last_activity = std::time::Instant::now();
-
-            let complete = entry.chunks.len() >= entry.total as usize;
-            let mut data = Vec::new();
-            let tot = entry.total;
-            let cur = entry.chunks.len() as u32;
-
-            if complete {
-                for i in 0..entry.total {
-                    if let Some(chunk) = entry.chunks.get(&i) {
-                        data.extend_from_slice(chunk);
+            if (index as usize) < assembler.received_chunks.len()
+                && !assembler.received_chunks[index as usize]
+            {
+                if assembler.file_handle.is_none() {
+                    let db_state = app.state::<DbState>();
+                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                        let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                        let temp_filename =
+                            format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                        let file_path = media_dir.join(&temp_filename);
+                        if let Ok(f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .truncate(true)
+                            .write(true)
+                            .open(&file_path)
+                        {
+                            assembler.file_handle = Some(f);
+                        }
                     }
                 }
-                assembler.remove(&assembler_key);
+
+                if let Some(ref mut f) = assembler.file_handle {
+                    use std::io::{Seek, SeekFrom, Write};
+                    let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
+                    let _ = f.write_all(chunk_data);
+                }
+                assembler.received_chunks[index as usize] = true;
+                assembler.received_count += 1;
+                assembler.last_activity = std::time::Instant::now();
             }
 
-            // Throttled progress emission (every 2% or completion)
-            let progress_step = (tot / 50).max(1);
-            if cur % progress_step == 0 || cur == tot {
-                let _ = app.emit("transfer://progress", json!({
-                    "transferId": transfer_id,
-                    "sender": sender,
-                    "current": cur,
-                    "total": tot,
-                    "direction": "download"
-                }));
+            let current_count = assembler.received_count;
+            let complete = current_count >= assembler.total;
+
+            let progress_step = (total / 20).max(1);
+            if index % progress_step == 0 || complete {
+                let _ = app.emit(
+                    "transfer://progress",
+                    json!({
+                        "transferId": transfer_id,
+                        "sender": sender,
+                        "current": current_count,
+                        "total": total,
+                        "direction": "download"
+                    }),
+                );
             }
 
-            (complete, data, tot, cur)
+            if complete {
+                if frame_type == 0x01 || frame_type == 0x04 {
+                    let db_state = app.state::<DbState>();
+                    let type_suffix = "sig";
+                    let temp_filename =
+                        format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
+                        let file_path = media_dir.join(&temp_filename);
+                        if let Ok(data) = std::fs::read(&file_path) {
+                            let _ = std::fs::remove_file(file_path);
+                            assemblers.remove(&transfer_key);
+                            (true, Some(data))
+                        } else {
+                            (false, None)
+                        }
+                    } else {
+                        (false, None)
+                    }
+                } else {
+                    assemblers.remove(&transfer_key);
+                    (true, None)
+                }
+            } else {
+                (false, None)
+            }
         };
 
         if is_complete {
-            let complete_data = entry_data;
-
             if frame_type == 0x01 || frame_type == 0x04 {
+                let complete_data = complete_data.ok_or("Failed to load reassembled data")?;
                 let envelope: serde_json::Value = serde_json::from_slice(&complete_data)
                     .map_err(|e| format!("Failed to parse reassembled message envelope: {}", e))?;
 
@@ -259,26 +280,25 @@ pub async fn process_incoming_binary(
                 match internal_signal_decrypt(app.clone(), &sender, msg_type, &body_bytes).await {
                     Ok(decrypted_str) => {
                         let decrypted_json: serde_json::Value =
-                            serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
+                            serde_json::from_str(&decrypted_str)
+                                .map_err(|e: serde_json::Error| e.to_string())?;
 
-                        // check group status
                         if let Some(p_type) = decrypted_json["type"].as_str()
                             && p_type != "group_invite"
                             && let Some(gid) = decrypted_json["groupId"].as_str()
                         {
-                            let lock = db_state.conn.lock().map_err(|_| "DB Lock poisoned")?;
-                            if let Some(conn) = lock.as_ref() {
-                                let is_active: i32 = conn
-                                    .query_row(
-                                        "SELECT is_active FROM chats WHERE address = ?1",
-                                        params![gid],
-                                        |r| r.get(0),
-                                    )
-                                    .unwrap_or(1); // Default to 1 (active) if group not found yet
+                            let db_state = app.state::<DbState>();
+                            let conn = db_state.get_conn()?;
+                            let is_active: i32 = conn
+                                .query_row(
+                                    "SELECT is_active FROM chats WHERE address = ?1",
+                                    params![gid],
+                                    |r| r.get(0),
+                                )
+                                .unwrap_or(1);
 
-                                if is_active == 0 {
-                                    return Ok(());
-                                }
+                            if is_active == 0 {
+                                return Ok(());
                             }
                         }
 
@@ -334,7 +354,6 @@ pub async fn process_incoming_binary(
                                 )
                                 .ok();
 
-                                // batch members
                                 let mut handled_me = false;
                                 if let Some(new_m_list) = decrypted_json["newMembers"].as_array() {
                                     for nm_val in new_m_list {
@@ -367,17 +386,16 @@ pub async fn process_incoming_binary(
                                                 is_group: true,
                                                 reply_to_json: None,
                                             };
-                                            let _ = internal_db_save_message(
-                                                &db_state,
-                                                sys_msg.clone(),
-                                            )
-                                            .await;
-                                            let _ = app.emit("msg://added", json!(sys_msg));
+                                            if internal_db_save_message(&db_state, sys_msg.clone())
+                                                .await
+                                                .is_ok()
+                                            {
+                                                let _ = app.emit("msg://added", json!(sys_msg));
+                                            }
                                         }
                                     }
                                 }
 
-                                // fallback
                                 if !handled_me {
                                     let sys_id = uuid::Uuid::new_v4().to_string();
                                     let sys_ts = chrono::Utc::now().timestamp_millis();
@@ -496,11 +514,7 @@ pub async fn process_incoming_binary(
                                     };
 
                                     {
-                                        let lock = db_state
-                                            .conn
-                                            .lock()
-                                            .map_err(|_| "Database connection lock poisoned")?;
-                                        if let Some(conn) = lock.as_ref() {
+                                        if let Ok(conn) = db_state.get_conn() {
                                             // Detection of changes in group membership
                                             if let Some(new_members) =
                                                 decrypted_json["newMembers"].as_array()
@@ -526,11 +540,9 @@ pub async fn process_incoming_binary(
                                                     }
                                                 }
                                             } else if !m_strings.is_empty() {
-                                                // Fallback
                                                 let mut current_m = Vec::new();
                                                 if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                                                    && let Ok(rows) = stmt.query_map(params![&gid], |row| row.get::<_, String>(0))
-                                                {
+                                                    && let Ok(rows) = stmt.query_map(params![&gid], |row: &rusqlite::Row| row.get::<_, String>(0)) {
                                                     for m in rows.flatten() {
                                                         current_m.push(m);
                                                     }
@@ -554,7 +566,6 @@ pub async fn process_incoming_binary(
                                                 }
                                             }
 
-                                            // Update DB state
                                             if !m_strings.is_empty() {
                                                 let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![gid]);
                                                 for m in m_strings {
@@ -645,40 +656,34 @@ pub async fn process_incoming_binary(
                                 let db_state = app.state::<DbState>();
 
                                 // If it's a group and we have a name, ensure the chat record exists with the CORRECT name
-                                if is_group {
-                                    let lock = db_state
-                                        .conn
-                                        .lock()
-                                        .map_err(|_| "Database connection lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
-                                        let is_active: i32 = conn
-                                            .query_row(
-                                                "SELECT is_active FROM chats WHERE address = ?1",
-                                                params![chat_address],
-                                                |r| r.get(0),
-                                            )
-                                            .unwrap_or(1);
+                                if is_group && let Ok(conn) = db_state.get_conn() {
+                                    let is_active: i32 = conn
+                                        .query_row(
+                                            "SELECT is_active FROM chats WHERE address = ?1",
+                                            params![chat_address],
+                                            |r: &rusqlite::Row| r.get(0),
+                                        )
+                                        .unwrap_or(1);
 
-                                        if is_active == 0 {
-                                            return Ok(());
-                                        }
+                                    if is_active == 0 {
+                                        return Ok(());
                                     }
                                 }
 
                                 internal_db_save_message(&db_state, db_msg.clone()).await?;
-                                let mut final_json =
-                                    serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                let mut final_json = serde_json::to_value(&db_msg)
+                                    .map_err(|e: serde_json::Error| e.to_string())?;
                                 if is_group && let Some(obj) = final_json.as_object_mut() {
-                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    let _ = obj.insert("chatAlias".to_string(), json!(group_name));
                                     if let Some(members) = decrypted_json["groupMembers"].as_array()
                                     {
-                                        obj.insert("chatMembers".to_string(), json!(members));
+                                        let _ =
+                                            obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
-                                    .map_err(|e| e.to_string())?;
+                                    .map_err(|e: tauri::Error| e.to_string())?;
 
-                                // Automated delivery receipts for 1:1 chats
                                 if !is_group {
                                     let receipt_payload = json!({
                                         "type": "receipt",
@@ -732,10 +737,8 @@ pub async fn process_incoming_binary(
                             }
                             "profile_update" => {
                                 let alias = decrypted_json["alias"].as_str().map(|s| s.to_string());
-                                let db_state = app.state::<DbState>();
-                                // Update contact nickname in local storage on receipt
                                 let _ = db_set_contact_global_nickname(
-                                    db_state,
+                                    db_state.clone(),
                                     sender.clone(),
                                     alias.clone(),
                                 )
@@ -749,7 +752,6 @@ pub async fn process_incoming_binary(
                             "file" | "media" => {
                                 let raw_msg_id =
                                     decrypted_json["id"].as_str().ok_or("Missing msg id")?;
-                                // Sanitize msg_id to mitigate path traversal risks
                                 let msg_id = raw_msg_id
                                     .chars()
                                     .filter(|c| c.is_alphanumeric() || *c == '-')
@@ -765,8 +767,7 @@ pub async fn process_incoming_binary(
                                     as u32;
 
                                 let size = decrypted_json["size"].as_u64().ok_or("Missing size")?;
-                                if size > 100 * 1024 * 1024 {
-                                    // Rejected oversized file metadata
+                                if size > 10 * 1024 * 1024 * 1024u64 {
                                     return Err("File metadata exceeds size limit".into());
                                 }
                                 let m_type = decrypted_json["msg_type"]
@@ -786,38 +787,92 @@ pub async fn process_incoming_binary(
                                 let media_dir = get_media_dir(&app, &db_state)?;
                                 let final_file_path = media_dir.join(&msg_id);
 
-                                // fragmentation flow: Link or Wait
-                                // Both JSON and Binary share a link_key for metadata cross-referencing
                                 let inner_transfer_key =
                                     format!("{}:{}", sender, inner_transfer_id);
                                 let temp_filename =
-                                    format!("transfer_{}_{}.bin", sender, inner_transfer_id);
+                                    format!("transfer_{}_{}_media.bin", sender, inner_transfer_id);
                                 let temp_path = media_dir.join(&temp_filename);
                                 let key_str =
                                     bundle["key"].as_str().unwrap_or_default().to_string();
 
                                 if temp_path.exists() {
-                                    // Decrypt and save media arriving before metadata
-                                    if let Ok(encrypted_bytes) = std::fs::read(&temp_path) {
-                                        if let Ok(plaintext) = crypto_decrypt_media(
-                                            encrypted_bytes,
-                                            key_str.clone(),
+                                    // Decrypt and save media arriving before metadata (Streaming O(1) RAM)
+                                    if let Ok(key_bytes) =
+                                        base64::engine::general_purpose::STANDARD.decode(&key_str)
+                                    {
+                                        let transit_key = Key::from_slice(&key_bytes);
+                                        let transit_cipher = XChaCha20Poly1305::new(transit_key);
+
+                                        let vault_key_bytes = {
+                                            let lock = db_state
+                                                .media_key
+                                                .lock()
+                                                .map_err(|_| "Media key lock poisoned")?;
+                                            lock.clone().ok_or("Media key not initialized")?
+                                        };
+                                        let vault_key = Key::from_slice(&vault_key_bytes);
+                                        let vault_cipher = XChaCha20Poly1305::new(vault_key);
+
+                                        let vault_path = media_dir.join(&msg_id);
+
+                                        if let (Ok(mut src), Ok(mut dst)) = (
+                                            std::fs::File::open(&temp_path),
+                                            std::fs::File::create(&vault_path),
                                         ) {
-                                            let _ = vault_save_media(
-                                                app.clone(),
-                                                db_state.clone(),
-                                                msg_id.clone(),
-                                                plaintext,
-                                            )
-                                            .await;
+                                            use sha2::{Digest, Sha256};
+                                            use std::io::{Read, Write};
+                                            let mut file_hasher = Sha256::new();
+                                            let _expected_hash =
+                                                bundle["sha256"].as_str().unwrap_or_default();
+
+                                            loop {
+                                                let mut block_buf = vec![0u8; 1319];
+                                                let mut n = 0;
+                                                while n < 1319 {
+                                                    match src.read(&mut block_buf[n..]) {
+                                                        Ok(0) => break,
+                                                        Ok(read) => n += read,
+                                                        Err(_) => break,
+                                                    }
+                                                }
+                                                if n == 0 {
+                                                    break;
+                                                }
+
+                                                let chunk = &block_buf[..n];
+                                                if chunk.len() > 40 {
+                                                    let nonce = XNonce::from_slice(&chunk[..24]);
+                                                    let ciphertext = &chunk[24..];
+                                                    if let Ok(ptext) =
+                                                        transit_cipher.decrypt(nonce, ciphertext)
+                                                    {
+                                                        file_hasher.update(&ptext);
+                                                        let v_nonce =
+                                                            XChaCha20Poly1305::generate_nonce(
+                                                                &mut OsRng,
+                                                            );
+                                                        if let Ok(v_cipher) = vault_cipher
+                                                            .encrypt(&v_nonce, ptext.as_slice())
+                                                        {
+                                                            let _ = dst.write_all(&v_nonce);
+                                                            let _ = dst.write_all(&v_cipher);
+                                                        }
+                                                    }
+                                                } else {
+                                                    break; // Tail too short
+                                                }
+                                            }
+                                            let _ = dst.sync_all();
+
                                             let _ = std::fs::remove_file(&temp_path);
-                                            let _ = app.emit("network-bin-complete", serde_json::json!({
-                                                "sender": sender,
-                                                "transfer_id": inner_transfer_id,
-                                                "msg_id": Some(msg_id.clone())
-                                            }));
-                                        } else {
-                                            // Decryption failed silently
+                                            let _ = app.emit(
+                                                "network-bin-complete",
+                                                serde_json::json!({
+                                                    "sender": sender,
+                                                    "transfer_id": inner_transfer_id,
+                                                    "msg_id": Some(msg_id.clone())
+                                                }),
+                                            );
                                         }
                                     }
                                 } else {
@@ -851,52 +906,78 @@ pub async fn process_incoming_binary(
                                     id: msg_id.clone(),
                                     chat_address: chat_address.clone(),
                                     sender_hash: sender.clone(),
-                                    content: if m_type == "voice_note" { "Voice Note".to_string() } else { format!("File: {}", bundle["file_name"].as_str().unwrap_or("Unnamed File")) },
+                                    content: if m_type == "voice_note" {
+                                        "Voice Note".to_string()
+                                    } else {
+                                        format!(
+                                            "File: {}",
+                                            bundle["file_name"].as_str().unwrap_or("Unnamed File")
+                                        )
+                                    },
                                     timestamp,
                                     r#type: m_type.clone(),
                                     status: "delivered".to_string(),
-                                    attachment_json: Some(json!({
-                                        "fileName": bundle["file_name"],
-                                        "fileType": bundle["file_type"],
-                                        "size": size,
-                                        "duration": duration,
-                                        "bundle": bundle,
-                                        "vaultPath": final_file_path.to_string_lossy().to_string()
-                                    }).to_string()),
+                                    attachment_json: {
+                                        let expected_hash =
+                                            bundle["sha256"].as_str().unwrap_or_default();
+                                        if expected_hash.is_empty() {
+                                            Some(
+                                                json!({
+                                                    "fileName": bundle["file_name"],
+                                                    "fileType": bundle["file_type"],
+                                                    "size": size,
+                                                    "duration": duration,
+                                                    "thumbnail": decrypted_json["thumbnail"],
+                                                    "bundle": bundle,
+                                                    "transferId": inner_transfer_id
+                                                })
+                                                .to_string(),
+                                            )
+                                        } else {
+                                            Some(json!({
+                                                "fileName": bundle["file_name"],
+                                                "fileType": bundle["file_type"],
+                                                "size": size,
+                                                "duration": duration,
+                                                "thumbnail": decrypted_json["thumbnail"],
+                                                "bundle": bundle,
+                                                "transferId": inner_transfer_id,
+                                                "vaultPath": final_file_path.to_string_lossy().to_string()
+                                            }).to_string())
+                                        }
+                                    },
                                     is_starred: false,
                                     is_group,
-                                    reply_to_json: decrypted_json["replyTo"].as_object().map(|r| serde_json::to_string(r).unwrap_or_default()),
+                                    reply_to_json: decrypted_json["replyTo"]
+                                        .as_object()
+                                        .map(|r| serde_json::to_string(r).unwrap_or_default()),
                                 };
 
                                 // Auto-create/rename chat for media too
-                                if is_group {
-                                    let lock = db_state
-                                        .conn
-                                        .lock()
-                                        .map_err(|_| "Database connection lock poisoned")?;
-                                    if let Some(conn) = lock.as_ref() {
-                                        // Always update the alias to the one provided in the message metadata
-                                        let _ = conn.execute(
-                                            "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
-                                             ON CONFLICT(address) DO UPDATE SET 
-                                                alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
-                                                is_group = 1",
-                                            params![chat_address, group_name],
-                                        );
+                                if is_group && let Ok(conn) = db_state.get_conn() {
+                                    // Always update the alias to the one provided in the message metadata
+                                    let _ = conn.execute(
+                                        "INSERT INTO chats (address, is_group, alias) VALUES (?1, 1, ?2)
+                                         ON CONFLICT(address) DO UPDATE SET 
+                                             alias = CASE WHEN excluded.alias IS NOT NULL THEN excluded.alias ELSE alias END,
+                                             is_group = 1",
+                                        params![chat_address, group_name],
+                                    );
 
-                                        // Keep the group membership in sync
-                                        if let Some(members) =
-                                            decrypted_json["groupMembers"].as_array()
-                                        {
-                                            let m_strings: Vec<String> = members
-                                                .iter()
-                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                                .collect();
-                                            if !m_strings.is_empty() {
-                                                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![chat_address]);
-                                                for m in m_strings {
-                                                    let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![chat_address, m]);
-                                                }
+                                    // Keep the group membership in sync
+                                    if let Some(members) = decrypted_json["groupMembers"].as_array()
+                                    {
+                                        let m_strings: Vec<String> = members
+                                            .iter()
+                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                            .collect();
+                                        if !m_strings.is_empty() {
+                                            let _ = conn.execute(
+                                                "DELETE FROM chat_members WHERE chat_address = ?1",
+                                                params![chat_address],
+                                            );
+                                            for m in m_strings {
+                                                let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![chat_address, m]);
                                             }
                                         }
                                     }
@@ -904,17 +985,18 @@ pub async fn process_incoming_binary(
 
                                 internal_db_save_message(&db_state, db_msg.clone()).await?;
 
-                                let mut final_json =
-                                    serde_json::to_value(&db_msg).map_err(|e| e.to_string())?;
+                                let mut final_json = serde_json::to_value(&db_msg)
+                                    .map_err(|e: serde_json::Error| e.to_string())?;
                                 if is_group && let Some(obj) = final_json.as_object_mut() {
-                                    obj.insert("chatAlias".to_string(), json!(group_name));
+                                    let _ = obj.insert("chatAlias".to_string(), json!(group_name));
                                     if let Some(members) = decrypted_json["groupMembers"].as_array()
                                     {
-                                        obj.insert("chatMembers".to_string(), json!(members));
+                                        let _ =
+                                            obj.insert("chatMembers".to_string(), json!(members));
                                     }
                                 }
                                 app.emit("msg://added", final_json.clone())
-                                    .map_err(|e| e.to_string())?;
+                                    .map_err(|e: tauri::Error| e.to_string())?;
 
                                 // enforce 1:1 delivery receipts
                                 if !is_group {
@@ -947,10 +1029,13 @@ pub async fn process_incoming_binary(
                     }
                 }
             } else if frame_type == 0x02 {
-                // media reassembly
+                // media reassembly complete
                 let db_state = app.state::<DbState>();
                 let link_key = format!("{}:{}", sender, transfer_id);
                 if let Ok(media_dir) = get_media_dir(&app, &db_state) {
+                    let temp_filename = format!("transfer_{}_{}_media.bin", sender, transfer_id);
+                    let temp_path = media_dir.join(&temp_filename);
+
                     let meta = {
                         let mut links = net_state
                             .pending_media_links
@@ -960,37 +1045,104 @@ pub async fn process_incoming_binary(
                     };
 
                     if let Some(m) = meta {
-                        // vault encryption bridge
-                        if let Ok(plaintext) =
-                            crypto_decrypt_media(complete_data.clone(), m.key)
-                        {
-                            let _ = vault_save_media(
-                                app.clone(),
-                                db_state.clone(),
-                                m.id.clone(),
-                                plaintext,
-                            )
-                            .await;
-                            app.emit(
-                                "network-bin-complete",
-                                json!({
-                                    "sender": sender,
-                                    "transfer_id": transfer_id,
-                                    "msg_id": Some(m.id)
-                                }),
-                            )
-                            .map_err(|e| e.to_string())?;
-                        } else {
-                            // Media decryption failed
-                        }
+                        // Vault decryption bridge (Streaming O(1) RAM)
+                        // Offload to blocking thread pool to avoid starving the websocket processing loop
+                        let app_clone = app.clone();
+                        let sender_clone = sender.clone();
+                        let m_clone = m.clone();
+                        let temp_path_clone = temp_path.clone();
+
+                        let vault_key_bytes = {
+                            let lock = db_state
+                                .media_key
+                                .lock()
+                                .map_err(|_| "Media key lock poisoned")?;
+                            lock.clone().ok_or("Media key not initialized")?
+                        };
+
+                        tokio::task::spawn_blocking(move || {
+                            if temp_path_clone.exists() {
+                                let key_bytes = match base64::engine::general_purpose::STANDARD
+                                    .decode(&m_clone.key)
+                                {
+                                    Ok(b) => b,
+                                    Err(_) => return,
+                                };
+                                let transit_key = Key::from_slice(&key_bytes);
+                                let transit_cipher = XChaCha20Poly1305::new(transit_key);
+
+                                let vault_key = Key::from_slice(&vault_key_bytes);
+                                let vault_cipher = XChaCha20Poly1305::new(vault_key);
+
+                                let media_dir_res =
+                                    get_media_dir(&app_clone, &app_clone.state::<DbState>());
+                                if let Ok(media_dir) = media_dir_res {
+                                    let vault_path = media_dir.join(&m_clone.id);
+
+                                    if let (Ok(mut src), Ok(mut dst)) = (
+                                        std::fs::File::open(&temp_path_clone),
+                                        std::fs::File::create(&vault_path),
+                                    ) {
+                                        use sha2::{Digest, Sha256};
+                                        use std::io::{Read, Write};
+                                        let mut file_hasher = Sha256::new();
+
+                                        loop {
+                                            let mut block_buf = vec![0u8; 1319];
+                                            let mut n = 0;
+                                            while n < 1319 {
+                                                match src.read(&mut block_buf[n..]) {
+                                                    Ok(0) => break,
+                                                    Ok(read) => n += read,
+                                                    Err(_) => break,
+                                                }
+                                            }
+                                            if n == 0 {
+                                                break;
+                                            }
+
+                                            let chunk = &block_buf[..n];
+                                            if chunk.len() > 40 {
+                                                let nonce = XNonce::from_slice(&chunk[..24]);
+                                                let ciphertext = &chunk[24..];
+                                                if let Ok(ptext) =
+                                                    transit_cipher.decrypt(nonce, ciphertext)
+                                                {
+                                                    file_hasher.update(&ptext);
+                                                    // Re-encrypt for vault
+                                                    let v_nonce = XChaCha20Poly1305::generate_nonce(
+                                                        &mut OsRng,
+                                                    );
+                                                    if let Ok(v_cipher) = vault_cipher
+                                                        .encrypt(&v_nonce, ptext.as_slice())
+                                                    {
+                                                        let _ = dst.write_all(&v_nonce);
+                                                        let _ = dst.write_all(&v_cipher);
+                                                    }
+                                                }
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        let _ = dst.sync_all();
+
+                                        let _ = std::fs::remove_file(&temp_path_clone);
+
+                                        let _ = app_clone.emit(
+                                            "network-bin-complete",
+                                            json!({
+                                                "sender": sender_clone,
+                                                "transfer_id": transfer_id,
+                                                "msg_id": Some(m_clone.id)
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+                        });
                     } else {
-                        // Metadata not arrived yet, save raw Encrypted fragments to temp file
-                        let temp_filename = format!("transfer_{}_{}.bin", sender, transfer_id);
-                        let file_path = media_dir.join(&temp_filename);
-                        if let Ok(mut f) = std::fs::File::create(&file_path) {
-                            let _ = f.write_all(&complete_data);
-                            // Media reassembly complete
-                        }
+                        // Metadata not arrived yet, keep the .bin file.
+                        // It will be processed when the metadata (frame type 0x04) arrives.
                     }
                 }
             }

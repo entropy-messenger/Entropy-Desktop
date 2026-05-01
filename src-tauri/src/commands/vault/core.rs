@@ -1,15 +1,10 @@
-use crate::app_state::{DbState, NetworkState};
-use aes_gcm::{
-    Aes256Gcm,
-    aead::{KeyInit, OsRng},
-};
+use crate::app_state::{DbState, NetworkState, RusqliteManager, SqlCipherCustomizer};
 use argon2::{
-    Argon2, Params,
+    Algorithm, Argon2, Params, Version,
     password_hash::{PasswordHasher, SaltString},
 };
-use hex;
-use rusqlite::Connection;
-use sha2::{Digest, Sha256};
+use r2d2::Pool;
+use rusqlite::OpenFlags;
 use tauri::{AppHandle, Manager, State};
 
 const MIGRATIONS: &[&str] = &[
@@ -202,9 +197,7 @@ pub async fn init_vault(
     }
 
     let db_path = app_data_dir.join(get_db_filename());
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
     let attempts_file = app_data_dir.join("login_attempts.dat");
     let mut attempts = 0;
@@ -220,15 +213,17 @@ pub async fn init_vault(
         && let Ok(stored_hash) = std::fs::read_to_string(&panic_file)
     {
         let argon2 = Argon2::new(
-            argon2::Algorithm::Argon2id,
-            argon2::Version::V0x13,
+            Algorithm::Argon2id,
+            Version::V0x13,
             Params::new(65536, 3, 4, Some(32)).unwrap(),
         );
 
         let salt_file = app_data_dir.join("panic.salt");
         let salt = if salt_file.exists() {
-            let s = std::fs::read_to_string(&salt_file).unwrap_or_else(|_| "cGFuaWMtc2FsdC12MQ".to_string());
-            SaltString::from_b64(&s).unwrap_or_else(|_| SaltString::from_b64("cGFuaWMtc2FsdC12MQ").unwrap())
+            let s = std::fs::read_to_string(&salt_file)
+                .unwrap_or_else(|_| "cGFuaWMtc2FsdC12MQ".to_string());
+            SaltString::from_b64(&s)
+                .unwrap_or_else(|_| SaltString::from_b64("cGFuaWMtc2FsdC12MQ").unwrap())
         } else {
             SaltString::from_b64("cGFuaWMtc2FsdC12MQ").expect("valid salt")
         };
@@ -260,92 +255,110 @@ pub async fn init_vault(
         app.restart();
     }
 
-    let conn_res = Connection::open_with_flags(&db_path, flags);
-
-    // If connection opens, try to set key and query. If fail, increment attempts.
-    let conn = match conn_res {
-        Ok(c) => c,
-        Err(e) => return Err(e.to_string()),
+    let manager = RusqliteManager {
+        path: db_path.clone(),
+        flags,
     };
 
-    if !passphrase.is_empty() {
-        // Load or Generate a unique random salt
-        let salt_path = app_data_dir.join("vault.salt");
-        let salt_string = if salt_path.exists() {
-            std::fs::read_to_string(&salt_path)
-                .map_err(|e| format!("Failed to read salt: {}", e))?
-        } else {
-            let new_salt = SaltString::generate(&mut OsRng);
-            let s = new_salt.as_str().to_string();
-            std::fs::write(&salt_path, &s).map_err(|e| format!("Failed to save salt: {}", e))?;
-            s
-        };
+    let pool = Pool::builder()
+        .max_size(16)
+        .build(manager)
+        .map_err(|e| e.to_string())?;
 
-        let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
-            let salt =
-                SaltString::from_b64(&salt_string).map_err(|e| format!("Salt error: {}", e))?;
-            let argon2 = Argon2::new(
-                argon2::Algorithm::Argon2id,
-                argon2::Version::V0x13,
-                Params::new(65536, 3, 4, Some(32))
-                    .map_err(|e| format!("Argon2 params error: {}", e))?,
-            );
-            let password_hash = argon2
-                .hash_password(passphrase.as_bytes(), &salt)
-                .map_err(|e| format!("Argon2 hash failed: {}", e))?;
-            let derived_key = password_hash
-                .hash
-                .ok_or_else(|| "Argon2 key derivation failed to return hash".to_string())?;
-            Ok::<String, String>(hex::encode(derived_key.as_ref()))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let mut derived_key_hex_for_customizer = String::new();
 
-        let key_query = format!("PRAGMA key = \"x'{}'\";", derived_key_hex);
-        let _ = conn.execute_batch(&key_query);
-    }
-
-    // Test if key is correct by reading user_version
-    if conn
-        .query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
-        .is_err()
     {
-        attempts += 1;
-        let _ = std::fs::write(&attempts_file, attempts.to_string());
-        return Err(format!("Incorrect password. Attempt {}/10", attempts));
+        let conn = pool.get().map_err(|e| e.to_string())?;
+        if !passphrase.is_empty() {
+            let salt_path = app_data_dir.join("vault.salt");
+            let salt_string = if salt_path.exists() {
+                std::fs::read_to_string(&salt_path).map_err(|e| e.to_string())?
+            } else {
+                let new_salt =
+                    argon2::password_hash::SaltString::generate(&mut aes_gcm::aead::OsRng);
+                let s = new_salt.as_str().to_string();
+                std::fs::write(&salt_path, &s).map_err(|e| e.to_string())?;
+                s
+            };
+
+            let derived_key_hex = tauri::async_runtime::spawn_blocking(move || {
+                let salt = SaltString::from_b64(&salt_string).map_err(|e| e.to_string())?;
+                let argon2 = Argon2::new(
+                    Algorithm::Argon2id,
+                    Version::V0x13,
+                    Params::new(65536, 3, 4, Some(32)).map_err(|e| e.to_string())?,
+                );
+                let password_hash = argon2
+                    .hash_password(passphrase.as_bytes(), &salt)
+                    .map_err(|e| e.to_string())?;
+                Ok::<String, String>(hex::encode(password_hash.hash.unwrap()))
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+
+            derived_key_hex_for_customizer = derived_key_hex.clone();
+
+            {
+                let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", derived_key_hex));
+            }
+
+            // Test if key is correct by reading master table
+            if conn
+                .query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
+                .is_err()
+            {
+                attempts += 1;
+                let _ = std::fs::write(&attempts_file, attempts.to_string());
+                return Err(format!("Incorrect password. Attempt {}/10", attempts));
+            }
+
+            // Success - reset attempts
+            if attempts > 0 {
+                let _ = std::fs::remove_file(&attempts_file);
+            }
+        }
     }
 
-    // Success - reset attempts
-    if attempts > 0 {
-        let _ = std::fs::remove_file(attempts_file);
+    let manager = RusqliteManager {
+        path: db_path.clone(),
+        flags,
+    };
+    let pool = Pool::builder()
+        .max_size(16)
+        .connection_customizer(Box::new(SqlCipherCustomizer {
+            key: derived_key_hex_for_customizer,
+        }))
+        .build(manager)
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut db_conn = state.pool.lock().map_err(|_| "DB Pool lock poisoned")?;
+        *db_conn = Some(pool.clone());
     }
 
+    // Since customizer runs on acquire, we can now use get_conn safely for migrations
+    let conn = state.get_conn()?;
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
 
-    // --- DATABASE MIGRATIONS ---
+    // Migrations
     let current_version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .map_err(|e| format!("Schema version check failed: {}", e))?;
-
+        .map_err(|e| format!("Schema check failed: {}", e))?;
     let target_version = MIGRATIONS.len() as i32;
-
     if current_version < target_version {
-        for (idx, migration_sql) in MIGRATIONS.iter().enumerate() {
-            let migration_ver = (idx + 1) as i32;
-            if migration_ver > current_version {
-                conn.execute_batch(migration_sql)
-                    .map_err(|e| format!("Migration to v{} failed: {}", migration_ver, e))?;
-
-                conn.execute(&format!("PRAGMA user_version = {}", migration_ver), [])
-                    .map_err(|e| {
-                        format!("Failed to update user_version to v{}: {}", migration_ver, e)
-                    })?;
+        for (idx, sql) in MIGRATIONS.iter().enumerate() {
+            let ver = (idx + 1) as i32;
+            if ver > current_version {
+                conn.execute_batch(sql).map_err(|e| e.to_string())?;
+                conn.execute(&format!("PRAGMA user_version = {}", ver), [])
+                    .map_err(|e| e.to_string())?;
             }
         }
     }
 
     // Media Encryption Key Initialization
     let media_key = {
+        let conn = pool.get().map_err(|e| e.to_string())?;
         let mut stmt = conn
             .prepare("SELECT value FROM kv_store WHERE key = '_internal_media_key'")
             .map_err(|e| e.to_string())?;
@@ -354,7 +367,9 @@ pub async fn init_vault(
             let hex_key: String = row.get(0).map_err(|e| e.to_string())?;
             hex::decode(hex_key).map_err(|e| e.to_string())?
         } else {
-            let key = Aes256Gcm::generate_key(&mut OsRng);
+            use aes_gcm::Aes256Gcm;
+            use aes_gcm::aead::KeyInit;
+            let key = Aes256Gcm::generate_key(&mut aes_gcm::aead::OsRng);
             let hex_key = hex::encode(key);
             conn.execute(
                 "INSERT INTO kv_store (key, value) VALUES ('_internal_media_key', ?1)",
@@ -366,14 +381,6 @@ pub async fn init_vault(
     };
 
     {
-        let mut db_conn = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        *db_conn = Some(conn);
-    }
-
-    {
         let mut state_key = state
             .media_key
             .lock()
@@ -381,41 +388,32 @@ pub async fn init_vault(
         *state_key = Some(media_key);
     }
 
-    //  Restore the secure session from the vault synchronously
-    let pub_key_opt: Option<Vec<u8>> = {
-        let lock = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(c) = lock.as_ref() {
-            c.query_row("SELECT public_key FROM signal_identity LIMIT 1", [], |r| {
-                r.get(0)
-            })
-            .ok()
+    // Restore the secure session from the vault
+    let (pub_key_opt, token_opt) = {
+        let pool_lock = state.pool.lock().map_err(|_| "Pool lock poisoned")?;
+        if let Some(p) = pool_lock.as_ref() {
+            let conn = p.get().map_err(|e| e.to_string())?;
+            let pk: Option<Vec<u8>> = conn
+                .query_row("SELECT public_key FROM signal_identity LIMIT 1", [], |r| {
+                    r.get(0)
+                })
+                .ok();
+            let tk: Option<String> = conn
+                .query_row(
+                    "SELECT session_token FROM signal_identity LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .ok()
+                .flatten();
+            (pk, tk)
         } else {
-            None
-        }
-    };
-
-    let token_opt: Option<String> = {
-        let lock = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(c) = lock.as_ref() {
-            c.query_row(
-                "SELECT session_token FROM signal_identity LIMIT 1",
-                [],
-                |r| r.get(0),
-            )
-            .ok()
-            .flatten()
-        } else {
-            None
+            (None, None)
         }
     };
 
     if let Some(mut pk) = pub_key_opt {
+        use sha2::{Digest, Sha256};
         if pk.len() == 33 && pk[0] == 0x05 {
             pk.remove(0);
         }
@@ -459,14 +457,8 @@ pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(),
 #[tauri::command]
 pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Result<(), String> {
     {
-        let mut conn = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(c) = conn.take() {
-            let _ = c.close();
-        }
-        *conn = None;
+        let mut pool_lock = state.pool.lock().map_err(|_| "Pool lock poisoned")?;
+        *pool_lock = None;
     }
 
     let filename = get_db_filename();

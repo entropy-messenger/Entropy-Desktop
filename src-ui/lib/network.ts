@@ -77,7 +77,7 @@ export class NetworkLayer {
             const payload = event.payload as any;
             const chatAddress = payload.chatAddress || payload.chat_address;
             if (payload.id) {
-                updateSingleMessageStatusUI(payload.id, payload.status, chatAddress);
+                updateSingleMessageStatusUI(payload.id, payload.status, chatAddress, payload.attachment);
             } else if (payload.ids) {
                 updateMessageStatusUI(chatAddress, payload.ids, payload.status);
             }
@@ -171,6 +171,16 @@ export class NetworkLayer {
                 if (current >= total) {
                     setTimeout(() => m.removeTransfer(transfer_id), 3000);
                 }
+            });
+        });
+
+        listen('network-bin-complete', (event) => {
+            const { msg_id } = event.payload as any;
+            if (!msg_id) return;
+            
+            // Mark the message as ready in the UI store
+            import('./actions/chat').then(m => {
+                m.refreshMessageUI(msg_id);
             });
         });
     }

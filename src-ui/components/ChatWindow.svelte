@@ -13,7 +13,7 @@
   import { tick } from 'svelte';
   import { playingVoiceNoteId } from '../lib/stores/audio';
   
-  let { showStarredMessages = $bindable(false), onCloseStarred }: { showStarredMessages?: boolean; onCloseStarred?: () => void } = $props();
+  let { showStarredMessages = $bindable(false), onCloseStarred, isMobile }: { showStarredMessages?: boolean; onCloseStarred?: () => void; isMobile?: boolean } = $props();
   
   let messageSearchQuery = $state("");
   let showMessageSearch = $state(false);
@@ -29,8 +29,6 @@
 
   let activeChat = $derived($userStore.activeChatHash ? $userStore.chats[$userStore.activeChatHash] : null);
   let activeMessages = $derived($userStore.activeChatHash ? ($messageStore[$userStore.activeChatHash] || []) : []);
-  
-  let virtualizedMessages = $derived(activeMessages);
 
   const getDayLabel = (ts: number) => {
     const date = new Date(ts);
@@ -47,7 +45,7 @@
   };
 
   let groupedMessages = $derived.by(() => {
-    const msgs = virtualizedMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase()));
+    const msgs = activeMessages.filter(m => !messageSearchQuery || m.content.toLowerCase().includes(messageSearchQuery.toLowerCase()));
     const result: (any)[] = [];
     let lastDateLabel = "";
 
@@ -184,6 +182,7 @@
                 onToggleSearch={() => showMessageSearch = !showMessageSearch}
                 onShowGallery={() => showGallery = true}
                 onSelectionModeChange={(mode) => {selectionMode = mode; if (mode) selectedIds = [];}}
+                {isMobile}
             />
             
             {#if $playingVoiceNoteId}
@@ -258,6 +257,7 @@
                             scrollToMessage={scrollToMessage}
                             setReplyingTo={setReplyingTo}
                             toggleStar={toggleStar}
+                            {isMobile}
                         />
                     {/if}
                 {/each}

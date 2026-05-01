@@ -27,3 +27,4 @@ yarn-error.log*
 # Desktop OS files
 .DS_Store
 Thumbs.db
+*.txt

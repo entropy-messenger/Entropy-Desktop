@@ -11,6 +11,7 @@
         msg, 
         isMine, 
         chatAddress,
+        isMobile = false,
         compactMode = false,
         scrollToMessage
     } = $props<{
@@ -18,6 +19,7 @@
         isMine: boolean;
         chatAddress: string;
         compactMode?: boolean;
+        isMobile?: boolean;
         scrollToMessage?: (id: string) => void;
     }>();
 
@@ -118,11 +120,12 @@
     {/if}
 
     {#if (msg.type === 'voice_note' || msg.type === 'file') && msg.attachment}
-        <AttachmentRenderer {msg} chatId={chatAddress} />
+        <AttachmentRenderer {msg} chatId={chatAddress} {isMobile} />
+        
         {#if !compactMode}
              <div class="absolute bottom-1 right-2 px-1.5 py-0.5 rounded-full bg-black/40 backdrop-blur-md flex items-center space-x-1 select-none pointer-events-none z-20">
                 {#if msg.isStarred}<LucideStar size={9} class="text-yellow-400 fill-yellow-400/50" />{/if}
-                <span class="text-[8.5px] font-bold tabular-nums text-white/90">
+                <span class="text-[10.5px] font-semibold tabular-nums text-white/90">
                     {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                 </span>
                 {#if isMine}
@@ -138,7 +141,7 @@
              </div>
         {/if}
     {:else}
-        <div class="text-[14px] leading-snug whitespace-pre-wrap break-words relative overflow-hidden pb-0.5 select-text">
+        <div class="text-[15.5px] leading-relaxed whitespace-pre-wrap break-words relative overflow-hidden pb-0.5 select-text font-medium antialiased">
             {@html linkify(resolveHashesInText(msg.content), isMine)}
             <!-- Native float wrap for the timestamp block -->
             {#if !compactMode}
@@ -146,7 +149,7 @@
                     {#if msg.isStarred}
                         <LucideStar size={9} class={isMine ? 'text-white/50 fill-white/30' : 'text-yellow-500/80 fill-yellow-500/40'} />
                     {/if}
-                    <span class="text-[9px] font-bold tabular-nums opacity-60 {isMine ? 'text-white' : 'text-entropy-text-dim'} whitespace-nowrap">
+                    <span class="text-[11px] font-semibold tabular-nums opacity-70 {isMine ? 'text-white' : 'text-entropy-text-dim'} whitespace-nowrap">
                         {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                     </span>
                     {#if isMine}
@@ -177,7 +180,7 @@
             {#if msg.isStarred}
                 <LucideStar size={9} class={isMine ? 'text-white/40 fill-white/20' : 'text-yellow-500/60 fill-yellow-500/20'} />
             {/if}
-            <span class="text-[8.5px] font-bold tabular-nums {isMine ? 'text-white/60' : 'text-entropy-text-secondary/70'}">
+            <span class="text-[10px] font-semibold tabular-nums {isMine ? 'text-white/60' : 'text-entropy-text-secondary/70'}">
                 {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
             </span>
         </div>

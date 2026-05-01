@@ -18,7 +18,8 @@
         toggleSelect,
         scrollToMessage,
         setReplyingTo,
-        toggleStar
+        toggleStar,
+        isMobile
     } = $props<{
         msg: Message,
         activeChat: Chat,
@@ -27,9 +28,11 @@
         toggleSelect: (id: string) => void,
         scrollToMessage: (id: string) => void,
         setReplyingTo: (msg: Message) => void,
-        toggleStar: (peerHash: string, id: string) => void
+        toggleStar: (peerHash: string, id: string) => void,
+        isMobile?: boolean
     }>();
 
+    let showActions = $state(false);
     const isSelected = $derived(selectedIds.includes(msg.id));
     
     /**
@@ -81,11 +84,14 @@
         <div 
             style="word-break: break-all; min-width: {msg.isMine ? '68px' : '52px'};"
             ondblclick={() => setReplyingTo(msg)}
-            onclick={() => selectionMode && toggleSelect(msg.id)}
+            onclick={() => { 
+                if (selectionMode) { toggleSelect(msg.id); } 
+                else if (isMobile) { showActions = !showActions; }
+            }}
             role="button"
             tabindex="0"
-            class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-default active:scale-[0.99]
-                {msg.type === 'voice_note' ? 'p-1.5 px-2' : 'pt-1.5 px-4 pb-1.5'}
+            class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-default active:scale-[0.99] max-w-full
+                {msg.type === 'voice_note' ? 'p-1.5 px-2' : (msg.type === 'file' ? 'p-1' : 'pt-1.5 px-4 pb-1.5')}
                 {msg.isMine ? (msg.isStarred ? 'bg-entropy-primary ring-1 ring-yellow-400/60 shadow-[0_0_10px_rgba(250,204,21,0.15)]' : 'bg-entropy-primary') : (msg.isStarred ? 'bg-entropy-surface-light ring-1 ring-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'bg-entropy-surface-light')}
                 {msg.isMine ? 'text-white rounded-tr-none' : 'text-entropy-text-primary rounded-tl-none'}
                 {isSelected ? 'ring-4 ring-entropy-accent ring-opacity-50 opacity-100 scale-100' : ''}
@@ -101,19 +107,22 @@
                     </span>
                 </div>
             {/if}
-
+ 
             <MessageContent 
                 {msg} 
                 isMine={msg.isMine} 
                 chatAddress={activeChat.peerHash} 
                 {scrollToMessage}
+                {isMobile}
             />
         </div>
 
         {#if !selectionMode}
-            <div class="absolute {msg.isMine ? '-left-8' : '-right-8'} top-0 bottom-0 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center space-y-1 transition-all duration-200 z-10">
-                <button onclick={() => setReplyingTo(msg)} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/80 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-primary shadow-sm transition active:scale-90" title="Reply"><LucideReply size={14} /></button>
-                <button onclick={() => toggleStar(activeChat.peerHash, msg.id)} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/80 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-yellow-500 shadow-sm transition active:scale-90" title="Star"><LucideStar size={14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
+            <div class="absolute {msg.isMine ? '-left-10' : '-right-10'} top-0 bottom-0 flex flex-col items-center justify-center space-y-1 transition-all duration-200 z-10
+                {isMobile ? (showActions ? 'opacity-100 scale-100' : 'opacity-0 scale-90 pointer-events-none') : 'opacity-0 group-hover:opacity-100'}"
+            >
+                <button onclick={() => { setReplyingTo(msg); if(isMobile) showActions = false; }} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-primary shadow-md transition active:scale-90" title="Reply"><LucideReply size={isMobile ? 16 : 14} /></button>
+                <button onclick={() => { toggleStar(activeChat.peerHash, msg.id); if(isMobile) showActions = false; }} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-yellow-500 shadow-md transition active:scale-90" title="Star"><LucideStar size={isMobile ? 16 : 14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
             </div>
         {/if}
     </div>

@@ -1,6 +1,5 @@
 use crate::app_state::DbState;
 use crate::commands::{get_db_filename, get_media_dirname};
-use std::io::{Read, Write};
 use tauri::{Manager, State};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
@@ -12,11 +11,7 @@ pub async fn export_database(
     target_path: String,
 ) -> Result<(), String> {
     {
-        let conn_guard = state
-            .conn
-            .lock()
-            .map_err(|_| "Database connection lock poisoned")?;
-        if let Some(conn) = conn_guard.as_ref() {
+        if let Ok(conn) = state.get_conn() {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
                 .map_err(|e| format!("Failed to checkpoint DB: {}", e))?;
         }
@@ -82,9 +77,7 @@ pub async fn export_database(
             if path.is_file() {
                 zip.start_file(name, options).map_err(|e| e.to_string())?;
                 let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-                let mut buffer = Vec::new();
-                f.read_to_end(&mut buffer).map_err(|e| e.to_string())?;
-                zip.write_all(&buffer).map_err(|e| e.to_string())?;
+                std::io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
             } else if !name.is_empty() {
                 zip.add_directory(name, options)
                     .map_err(|e| e.to_string())?;
@@ -103,12 +96,11 @@ pub async fn import_database(
     src_path: String,
 ) -> Result<(), String> {
     {
-        let mut conn = state
-            .conn
+        let mut pool_lock = state
+            .pool
             .lock()
             .map_err(|_| "Database connection lock poisoned")?;
-        *conn = None;
-        drop(conn);
+        *pool_lock = None;
     }
 
     let backup_path = std::path::Path::new(&src_path);
@@ -175,7 +167,7 @@ pub async fn import_database(
 
         // Prevent Path Traversal
         if name.contains("..") || name.starts_with('/') || name.contains(':') {
-            continue; 
+            continue;
         }
 
         // Ensure backups from other profiles map to the ACTIVE profile
@@ -201,6 +193,7 @@ pub async fn import_database(
             }
             let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
             std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+            outfile.sync_all().map_err(|e| e.to_string())?;
         }
     }
 

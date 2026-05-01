@@ -35,8 +35,18 @@
         "dialog:allow-save",
         "dialog:allow-open",
         "core:path:default",
+        "core:path:allow-join",
+        "core:path:allow-resolve-directory",
+        "fs:allow-appdata-read",
+        "fs:allow-appdata-write",
+        "fs:allow-download-read",
+        "fs:allow-download-write",
+        "fs:allow-read-file",
+        "fs:allow-write-file",
+        "fs:allow-exists",
+        "opener:allow-open-path",
+        "opener:allow-open-url",
         "default",
-        "updater:default",
         "allow-commands"
     ]
 }
