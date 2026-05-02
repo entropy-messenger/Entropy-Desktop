@@ -282,6 +282,18 @@ export class NetworkLayer {
             connectionStatus: 'jailed',
             jailTimeRemaining: 300
         }));
+
+        // Start local countdown for UI
+        const timer = setInterval(() => {
+            userStore.update(s => {
+                if (s.jailTimeRemaining && s.jailTimeRemaining > 0) {
+                    return { ...s, jailTimeRemaining: s.jailTimeRemaining - 1 };
+                } else {
+                    clearInterval(timer);
+                    return { ...s, jailTimeRemaining: null, connectionStatus: s.isConnected ? s.connectionStatus : 'disconnected' };
+                }
+            });
+        }, 1000);
     }
 
     private onDisconnect() {
@@ -297,10 +309,12 @@ export class NetworkLayer {
         this.isAuthenticated = false;
 
         userStore.update((s: any) => {
+            // Don't overwrite the Jailed status with a generic Offline/Disconnected status
+            const newStatus = s.connectionStatus === 'jailed' ? 'jailed' : 'disconnected';
             return {
                 ...s,
                 isConnected: false,
-                connectionStatus: 'disconnected'
+                connectionStatus: newStatus
             };
         });
     }

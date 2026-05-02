@@ -163,11 +163,9 @@ pub async fn import_database(
     }
 
     let media_dir_name = get_media_dirname();
-    if include_media {
-        let media_path = app_dir.join(&media_dir_name);
-        if media_path.exists() {
-            std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
-        }
+    let media_path = app_dir.join(&media_dir_name);
+    if media_path.exists() {
+        std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
     }
 
     // Prevent importing from hidden files or internal app data
@@ -202,10 +200,17 @@ pub async fn import_database(
             if !include_media {
                 continue;
             }
-            if let Some(pos) = name.find('/') {
-                name = format!("{}{}", media_dir_name, &name[pos..]);
-            } else {
-                name = media_dir_name.clone() + "/";
+            // Strip the old 'media/profile/' prefix and prepend the new 'media/profile/' dirname
+            if let Some(first_slash) = name.find('/') {
+                let after_media = &name[first_slash + 1..];
+                if let Some(second_slash) = after_media.find('/') {
+                    // It's media/old_profile/relative_path
+                    let relative_path = &after_media[second_slash..]; // includes the slash
+                    name = format!("{}{}", media_dir_name, relative_path);
+                } else {
+                    // It's just media/old_profile (the directory itself)
+                    name = media_dir_name.clone();
+                }
             }
         }
 
