@@ -14,7 +14,7 @@
   let currentTime = $state(0);
   let duration = $state(initialDuration);
   $effect(() => {
-    if (initialDuration > 0) duration = initialDuration;
+    duration = initialDuration;
   });
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
@@ -272,8 +272,9 @@
       <div 
         class="relative h-8 w-full cursor-pointer flex items-center" 
         onclick={handleSeek}
-        onkeypress={(e) => e.key === 'Enter' && togglePlay()}
+        onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && togglePlay()}
         role="button"
+        aria-label="Seek audio"
         tabindex="0"
       >
           <canvas 
@@ -285,19 +286,19 @@
           ></canvas>
       </div>
       <div class="flex items-center px-2">
-           <span class="text-[9px] font-bold {isMine ? 'text-white/70' : 'text-entropy-primary/70'} tabular-nums">
-               {formatTime(isPlaying ? currentTime : duration)}
-           </span>
-           <div class="flex-1"></div>
            <button 
                onclick={toggleSpeed}
-               class="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded transition-all active:scale-90 mr-11
+               class="text-[9px] font-black uppercase tracking-tighter px-1.5 py-0.5 rounded transition-all active:scale-90 mr-2
                {isMine 
                    ? (playbackSpeed > 1 ? 'bg-white text-entropy-primary shadow-sm' : 'bg-white/10 text-white/80 hover:bg-white/20') 
                    : (playbackSpeed > 1 ? 'bg-entropy-primary text-white shadow-sm' : 'bg-entropy-primary/10 text-entropy-primary hover:bg-entropy-primary/20')}"
            >
                {playbackSpeed}x
            </button>
+           <span class="text-[9px] font-bold {isMine ? 'text-white/70' : 'text-entropy-primary/70'} tabular-nums">
+               {formatTime(isPlaying ? currentTime : duration)}
+           </span>
+           <div class="flex-1"></div>
       </div>
   </div>
 

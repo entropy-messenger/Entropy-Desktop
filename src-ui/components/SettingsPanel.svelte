@@ -40,7 +40,8 @@
                 filters: [{ name: 'Entropy Backup', extensions: ['entropy', 'zip'] }]
             });
             if (path) {
-                await invoke('export_database', { targetPath: path });
+                const includeMedia = await showConfirm("Do you want to include all media files (photos/videos) in this backup?", "Backup Options");
+                await invoke('export_database', { targetPath: path, includeMedia });
                 addToast("Backup exported successfully!", 'success');
             } else {
                 addToast("Export cancelled.", 'info');
@@ -63,7 +64,8 @@
                 filters: [{ name: 'Entropy Backup', extensions: ['entropy', 'zip'] }]
             });
             if (path) {
-                await invoke('import_database', { srcPath: path });
+                const includeMedia = await showConfirm("This backup may contain media files. Do you want to extract and restore them as well?", "Restore Options");
+                await invoke('import_database', { srcPath: path, includeMedia });
                 addToast("Backup restored! The app will now reload.", 'success');
                 setTimeout(() => window.location.reload(), 2000);
             }

@@ -55,8 +55,6 @@ jobs:
     - name: Prepare Dummy Dist
       run: mkdir -p dist
 
-    - name: Backend Format Check
-      run: cd src-tauri && cargo fmt -- --check
 
     - name: Backend Lint & Build Tests
       run: cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings

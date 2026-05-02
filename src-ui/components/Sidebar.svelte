@@ -45,7 +45,7 @@
              }
          }, 500 + (Math.random() * 2000));
      });
-   });
+    });
   let filter = $state<'all' | 'archived'>('all');
   
   let { 
@@ -164,6 +164,16 @@
 
 <div class="h-full w-full lg:w-80 bg-entropy-bg flex flex-col relative shrink-0">
   <div class="p-4 flex flex-col space-y-4 bg-entropy-surface/50 pt-[var(--sat,1rem)]">
+    {#if $userStore.connectionStatus === 'jailed'}
+        <div class="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex flex-col space-y-1 animate-in slide-in-from-top-4 duration-500">
+            <div class="flex items-center space-x-2 text-red-500">
+                <LucideWifiOff size={14} class="animate-pulse" />
+                <span class="text-[10px] font-black uppercase tracking-[0.2em]">Identity Jailed</span>
+            </div>
+            <p class="text-[9px] text-red-400/60 font-bold leading-tight">Your identity hash has been temporarily suspended by the relay. Cooldown: <span class="text-red-500">{$userStore.jailTimeRemaining || 0}s</span></p>
+        </div>
+    {/if}
+    
     <div class="flex justify-end items-center px-1">
         <div class="flex items-center space-x-1">
             <button onclick={toggleTheme} class="p-2 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-entropy-primary transition" title="Toggle Theme">
@@ -355,7 +365,7 @@
                 <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-yellow-500 tracking-tighter">Reconnecting</span><span class="text-[8px] font-bold text-entropy-text-dim truncate tracking-tight">RETRYING IN {$userStore.reconnectTimer || 0}s...</span></div>
             {:else if $userStore.connectionStatus === 'jailed'}
                 <LucideWifiOff size={14} class="text-red-600 animate-pulse" />
-                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-600 tracking-tighter">Connection Jailed</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">TEMPORARILY SUSPENDED</span></div>
+                <div class="flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-600 tracking-tighter">Connection Jailed</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">RETRYING IN {$userStore.jailTimeRemaining || 0}s</span></div>
             {:else}
                 <LucideWifiOff size={14} class="text-red-500 animate-pulse" />
                 <div class="flex-1 flex flex-col min-w-0"><span class="text-[9px] font-black uppercase text-red-500 tracking-tighter">Offline</span><span class="text-[8px] font-bold text-red-400/60 truncate tracking-tight">WAITING FOR NETWORK...</span></div>

@@ -128,6 +128,13 @@ export const createIdentity = async (password: string) => {
 
     if (idHash) {
         userStore.update(s => ({ ...s, identityHash: idHash }));
+        
+        // Ensure proxy port is set for new identities
+        try {
+            const port = await invoke<number>('get_media_proxy_port');
+            mediaProxyPort.set(port);
+        } catch (e) { }
+
         network.connect();
     } else {
         throw new Error("Identity generation returned null.");
@@ -151,54 +158,3 @@ export const purgeIdentity = async () => {
         // Reset failed
     }
 }
-
-export const exportVault = async () => {
-    try {
-        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-            const { save } = await import('@tauri-apps/plugin-dialog');
-            const path = await save({
-                defaultPath: `entropy_backup_${Date.now()}.entropy`,
-                filters: [{
-                    name: 'Entropy Backup',
-                    extensions: ['entropy']
-                }]
-            });
-
-            if (path) {
-                await invoke('export_database', { targetPath: path });
-                addToast("Backup exported successfully!", 'success');
-            }
-        } else {
-            addToast("Export not supported in web mode.", 'warning');
-        }
-    } catch (e) {
-        addToast("Export failed: " + e, 'error');
-    }
-};
-
-export const importVault = async () => {
-    if (!await showConfirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?", "Restore Backup")) return;
-
-    try {
-        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const path = await open({
-                multiple: false,
-                filters: [{
-                    name: 'Entropy Backup',
-                    extensions: ['entropy', 'zip']
-                }]
-            });
-
-            if (path) {
-                await invoke('import_database', { srcPath: path });
-                addToast("Backup restored! The app will now reload.", 'success');
-                setTimeout(() => window.location.reload(), 2000);
-            }
-        } else {
-            addToast("Import not supported in web mode.", 'warning');
-        }
-    } catch (e) {
-        addToast("Import failed: " + e, 'error');
-    }
-};

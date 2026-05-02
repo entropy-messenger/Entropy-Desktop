@@ -20,6 +20,7 @@
 
   const MAX_CHAR_LIMIT = 4000;
   let replyingTo = $derived($userStore.replyingTo);
+  let stagedFile = $state<{ name: string, type: string, path: string, thumbnail?: string } | null>(null);
 
   $effect(() => {
     if (messageInput !== undefined && messageInputEl) {
@@ -77,8 +78,7 @@
         const localUrl = port ? `http://127.0.0.1:${port}/local?path=${encodedPath}` : null;
         const thumbnail = localUrl ? await generateThumbnail(localUrl, mimeType) : null;
 
-        const { sendFile } = await import('../lib/actions/chat');
-        sendFile(activeChat.peerHash, { name: fileName, type: mimeType, path }, 'file', 0, thumbnail || undefined);
+        stagedFile = { name: fileName, type: mimeType, path, thumbnail: thumbnail || undefined };
     }
   }
 
@@ -168,21 +168,63 @@
             </button>
         </div>
     {:else}
-        {#if replyingTo}
-            <div class="px-4 py-2 bg-entropy-surface/95 backdrop-blur-md flex items-center animate-in slide-in-from-bottom duration-300 border-t border-entropy-border/5">
-                <div class="flex-1 bg-entropy-surface-light rounded-lg p-2 px-3 border-l-2 border-entropy-primary flex items-center justify-between shadow-sm">
-                    <div class="min-w-0 pr-4">
-                        <div class="text-[10px] font-black text-entropy-primary truncate uppercase tracking-widest mb-0.5">
-                            {replyingTo.isMine ? 'You' : ($userStore.nicknames[replyingTo.senderHash] || replyingTo.senderAlias || replyingTo.senderHash.slice(0, 8))}
+        <div class="flex flex-col space-y-0.5">
+            {#if replyingTo}
+                <div class="px-4 py-2 bg-entropy-surface/95 backdrop-blur-md flex items-center animate-in slide-in-from-bottom duration-300 border-t border-entropy-border/5">
+                    <div class="flex-1 bg-entropy-surface-light rounded-lg p-2 px-3 border-l-2 border-entropy-primary flex items-center justify-between shadow-sm">
+                        <div class="min-w-0 pr-4">
+                            <div class="text-[10px] font-black text-entropy-primary truncate uppercase tracking-widest mb-0.5">
+                                {replyingTo.isMine ? 'You' : ($userStore.nicknames[replyingTo.senderHash] || replyingTo.senderAlias || replyingTo.senderHash.slice(0, 8))}
+                            </div>
+                            <div class="text-xs text-entropy-text-secondary line-clamp-2 opacity-80 break-words">{replyingTo.content}</div>
                         </div>
-                        <div class="text-xs text-entropy-text-secondary line-clamp-2 opacity-80 break-words">{replyingTo.content}</div>
+                        <button onclick={() => setReplyingTo(null)} class="p-1.5 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-red-500 transition-colors">
+                            <LucideX size={16} />
+                        </button>
                     </div>
-                    <button onclick={() => setReplyingTo(null)} class="p-1.5 hover:bg-entropy-surface-light rounded-full text-entropy-text-dim hover:text-red-500 transition-colors">
-                        <LucideX size={16} />
-                    </button>
                 </div>
-            </div>
-        {/if}
+            {/if}
+
+            {#if stagedFile}
+                <div class="px-4 py-3 bg-entropy-surface/95 backdrop-blur-md flex items-center animate-in slide-in-from-bottom duration-300 border-t border-entropy-border/5">
+                    <div class="flex-1 bg-entropy-surface-light rounded-xl p-3 border border-entropy-primary/20 flex items-center justify-between shadow-xl">
+                        <div class="flex items-center space-x-3 min-w-0 pr-4">
+                            {#if stagedFile.thumbnail}
+                                <img src={stagedFile.thumbnail} class="w-12 h-12 rounded-lg object-cover shadow-md" alt="Preview" />
+                            {:else}
+                                <div class="w-12 h-12 bg-entropy-primary/10 rounded-lg flex items-center justify-center text-entropy-primary">
+                                    <LucidePaperclip size={20} />
+                                </div>
+                            {/if}
+                            <div class="min-w-0">
+                                <div class="text-[10px] font-black text-entropy-primary uppercase tracking-widest mb-1">SEND</div>
+                                <div class="text-xs font-bold text-entropy-text-primary truncate">{stagedFile.name}</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button 
+                                onclick={() => stagedFile = null}
+                                class="px-4 py-2 bg-entropy-surface text-entropy-text-dim rounded-xl text-[10px] font-black uppercase tracking-tighter hover:bg-red-500 hover:text-white transition-all active:scale-95"
+                            >
+                                No
+                            </button>
+                            <button 
+                                onclick={async () => {
+                                    if (stagedFile && activeChat) {
+                                        const { sendFile } = await import('../lib/actions/chat');
+                                        sendFile(activeChat.peerHash, { name: stagedFile.name, type: stagedFile.type, path: stagedFile.path }, 'file', 0, stagedFile.thumbnail);
+                                        stagedFile = null;
+                                    }
+                                }}
+                                class="px-6 py-2 bg-entropy-primary text-white rounded-xl text-[10px] font-black uppercase tracking-tighter hover:bg-entropy-primary-dim transition-all active:scale-95 shadow-lg"
+                            >
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            {/if}
+        </div>
 
         <div class="p-3 bg-entropy-bg flex items-end space-x-2 min-h-[64px] pb-[calc(1rem+var(--sab,0px))]">
             {#if isRecording}
@@ -198,7 +240,8 @@
                     <button 
                         id="emoji-toggle-btn"
                         onclick={() => showEmojiPicker = !showEmojiPicker} 
-                        class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition {showEmojiPicker ? 'text-entropy-primary bg-entropy-surface-light' : ''}"
+                        disabled={$userStore.connectionStatus === 'jailed'}
+                        class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition {showEmojiPicker ? 'text-entropy-primary bg-entropy-surface-light' : ''} disabled:opacity-20"
                     >
                         <LucideSmile size={24} />
                     </button>
@@ -209,16 +252,23 @@
                         />
                     {/if}
                 </div>
-                <button onclick={onFileSelect} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition"><LucidePaperclip size={24} /></button>
+                <button 
+                    onclick={onFileSelect} 
+                    disabled={$userStore.connectionStatus === 'jailed'}
+                    class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full transition disabled:opacity-20"
+                >
+                    <LucidePaperclip size={24} />
+                </button>
                 <div class="flex-1 flex flex-col items-end">
                     <textarea 
                         id="message-input"
                         bind:this={messageInputEl}
                         bind:value={messageInput}
                         onkeydown={handleKeydown}
+                        disabled={$userStore.connectionStatus === 'jailed'}
                         rows="1"
-                        class="w-full p-3.5 pb-4 rounded-2xl border-none focus:ring-1 focus:ring-entropy-primary bg-entropy-surface-light text-entropy-text-primary resize-none max-h-[200px] overflow-y-auto custom-scrollbar placeholder:text-entropy-text-dim leading-relaxed antialiased"
-                        placeholder="Type a message" 
+                        class="w-full p-3.5 pb-4 rounded-2xl border-none focus:ring-1 focus:ring-entropy-primary bg-entropy-surface-light text-entropy-text-primary resize-none max-h-[200px] overflow-y-auto custom-scrollbar placeholder:text-entropy-text-dim leading-relaxed antialiased disabled:opacity-50 disabled:cursor-not-allowed"
+                        placeholder={$userStore.connectionStatus === 'jailed' ? "Sending disabled: Identity Jailed" : "Type a message"} 
                         style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;"
                     ></textarea>
                     {#if messageInput.length > 3500}
@@ -228,9 +278,21 @@
                     {/if}
                 </div>
                 {#if !messageInput.trim()}
-                    <button onclick={() => isRecording = true} class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full shadow-sm"><LucideMic size={24} /></button>
+                    <button 
+                        onclick={() => isRecording = true} 
+                        disabled={$userStore.connectionStatus === 'jailed'}
+                        class="p-3 text-entropy-text-dim hover:bg-entropy-surface-light rounded-full shadow-sm disabled:opacity-20"
+                    >
+                        <LucideMic size={24} />
+                    </button>
                 {:else}
-                    <button onclick={handleSend} class="p-3 bg-entropy-primary text-white rounded-full hover:bg-entropy-primary-dim shadow-lg active:scale-95 transition-transform"><LucideSend size={24} /></button>
+                    <button 
+                        onclick={handleSend} 
+                        disabled={$userStore.connectionStatus === 'jailed'}
+                        class="p-3 bg-entropy-primary text-white rounded-full hover:bg-entropy-primary-dim shadow-lg active:scale-95 transition-transform disabled:opacity-20"
+                    >
+                        <LucideSend size={24} />
+                    </button>
                 {/if}
             {/if}
         </div>

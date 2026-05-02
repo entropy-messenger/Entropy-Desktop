@@ -81,10 +81,16 @@ pub struct MediaTransferState {
     pub received_count: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PendingMediaMetadata {
     pub id: String,
     pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct OutgoingTransferInfo {
+    pub file_path: std::path::PathBuf,
+    pub transit_key: [u8; 32],
 }
 
 pub struct NetworkState {
@@ -106,4 +112,5 @@ pub struct NetworkState {
     pub is_refilling: Mutex<bool>,
     pub jailed_until: Mutex<Option<tokio::time::Instant>>,
     pub pending_transfers: Mutex<std::collections::HashMap<u32, String>>,
+    pub active_outgoing_transfers: Mutex<std::collections::HashMap<u32, OutgoingTransferInfo>>,
 }

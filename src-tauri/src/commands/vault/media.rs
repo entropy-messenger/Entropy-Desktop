@@ -1,10 +1,10 @@
 use crate::app_state::DbState;
 use chacha20poly1305::{
-    Key, XChaCha20Poly1305,
-    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Key, XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit},
 };
-use std::io::Write;
 use tauri::{Manager, State};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub fn get_media_dir(
     app: &tauri::AppHandle,
@@ -23,50 +23,6 @@ pub fn get_media_dir(
 }
 
 // vault_save_media handles encryption now.
-
-#[tauri::command]
-pub async fn vault_save_media(
-    app: tauri::AppHandle,
-    state: State<'_, DbState>,
-    id: String,
-    data: Vec<u8>,
-) -> Result<String, String> {
-    let id = id
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-')
-        .collect::<String>();
-    if id.is_empty() {
-        return Err("Invalid ID".into());
-    }
-    let key_bytes = {
-        let lock = state
-            .media_key
-            .lock()
-            .map_err(|_| "Media key lock poisoned")?;
-        lock.clone().ok_or("Media key not initialized")?
-    };
-
-    let key = Key::from_slice(&key_bytes);
-    let cipher = XChaCha20Poly1305::new(key);
-
-    let mut final_blob = Vec::new();
-
-    // Split data into chunks to match the streaming loader
-    for chunk in data.chunks(1279) {
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let ciphertext = cipher.encrypt(&nonce, chunk).map_err(|e| e.to_string())?;
-        final_blob.extend_from_slice(&nonce);
-        final_blob.extend_from_slice(&ciphertext);
-    }
-
-    let media_dir = get_media_dir(&app, &state)?;
-    let file_path = media_dir.join(&id);
-    let mut file = std::fs::File::create(&file_path).map_err(|e| e.to_string())?;
-    file.write_all(&final_blob).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-
-    Ok(file_path.to_string_lossy().to_string())
-}
 
 #[tauri::command]
 pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(), String> {
@@ -93,12 +49,6 @@ pub async fn vault_export_media(
     id: String,
     target_path: String,
 ) -> Result<(), String> {
-    use chacha20poly1305::{
-        Key, XChaCha20Poly1305, XNonce,
-        aead::{Aead, KeyInit},
-    };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
     // 1. Get the media key
     let key_bytes = {
         let lock = state.media_key.lock().map_err(|_| "Vault not open")?;
@@ -125,12 +75,23 @@ pub async fn vault_export_media(
     let block_size_enc = 1319;
     let mut buf = vec![0u8; block_size_enc];
 
-    while let Ok(n) = src_file.read(&mut buf).await {
+    loop {
+        let mut n = 0;
+        while n < block_size_enc {
+            match src_file.read(&mut buf[n..]).await {
+                Ok(0) => break,
+                Ok(read) => n += read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(format!("Read error during export: {}", e)),
+            }
+        }
+
         if n == 0 {
             break;
         }
+
         if n < 40 {
-            return Err("Corrupted media block".to_string());
+            return Err("Corrupted media block (too small)".to_string());
         }
 
         let nonce = XNonce::from_slice(&buf[..24]);
@@ -141,7 +102,7 @@ pub async fn vault_export_media(
                 dst_file
                     .write_all(&ptext)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("Write error during export: {}", e))?;
             }
             Err(_) => {
                 return Err("Decryption failed - possibly wrong key or corruption".to_string());
@@ -149,7 +110,10 @@ pub async fn vault_export_media(
         }
     }
 
-    dst_file.flush().await.map_err(|e| e.to_string())?;
+    dst_file
+        .sync_all()
+        .await
+        .map_err(|e| format!("Failed to sync export file: {}", e))?;
 
     Ok(())
 }

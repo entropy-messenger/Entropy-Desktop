@@ -42,6 +42,20 @@ export const refreshMessageUI = (msgId: string) => {
     });
 };
 
+export const markMessageAsError = (msgId: string, error: string) => {
+    messageStore.update(m => {
+        for (const chatAddress in m) {
+            const list = m[chatAddress];
+            const idx = list.findIndex(x => x.id === msgId);
+            if (idx !== -1) {
+                list[idx] = { ...list[idx], status: 'failed', error };
+                break;
+            }
+        }
+        return { ...m };
+    });
+};
+
 export const sendMessage = async (destIdRaw: string, content: string) => {
     const destId = destIdRaw.toLowerCase();
     const state = get(userStore);
@@ -157,10 +171,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
     // from retried packets inflating unread counters or adding ghost entries.
     const existingMsgs = get(messageStore)[peerHash] || [];
     if (existingMsgs.some(m => m.id === msg.id)) return;
-
-    if (msg.attachment?.data && !(msg.isMine && msg.status === 'sending')) {
-        await invoke('vault_save_media', { id: msg.id, data: msg.attachment.data }).catch(() => { });
-    }
 
     let updatedChatMetadata: Chat | null = null;
 

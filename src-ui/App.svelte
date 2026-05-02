@@ -254,7 +254,8 @@
                 });
 
                 if (path) {
-                    await exportVault(path);
+                    const includeMedia = await showConfirm("Do you want to include all media files (photos/videos) in this backup?", "Backup Options");
+                    await exportVault(path, includeMedia);
                 }
             } else {
                 addToast("Export not supported in web mode.", 'warning');
@@ -278,7 +279,8 @@
                 });
 
                 if (path) {
-                    await importVault(path);
+                    const includeMedia = await showConfirm("This backup may contain media files. Do you want to extract and restore them as well?", "Restore Options");
+                    await importVault(path, includeMedia);
                 }
             } else {
                 addToast("Import not supported in web mode.", 'warning');

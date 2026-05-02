@@ -465,7 +465,29 @@ async fn run_connection_loop(app: AppHandle) {
         if token_val.is_cancelled() {
             break;
         }
+
         if let Some(target_url) = url {
+            // Check if identity is jailed before trying to connect
+            let jailed_until = if let Ok(l) = app.state::<NetworkState>().jailed_until.lock() {
+                *l
+            } else {
+                None
+            };
+
+            if let Some(until) = jailed_until {
+                let now = tokio::time::Instant::now();
+                if until > now {
+                    let _ = app.emit("network-status", "jailed");
+                    let sleep_dur = until.duration_since(now);
+                    tokio::select! {
+                        _ = token_val.cancelled() => break 'outer_loop,
+                        _ = tokio::time::sleep(sleep_dur) => {}
+                    }
+                    // Re-check everything after jail time expires
+                    continue;
+                }
+            }
+
             let _ = app.emit("network-status", "connecting");
             if internal_establish_network(app.clone(), target_url, proxy_url, token_val.clone())
                 .await
@@ -476,6 +498,7 @@ async fn run_connection_loop(app: AppHandle) {
                 retry_count = 0;
             }
         }
+
         let is_enabled = app
             .state::<NetworkState>()
             .is_enabled

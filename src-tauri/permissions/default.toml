@@ -16,7 +16,6 @@ commands.allow = [
     "signal_sync_keys",
     "signal_encrypt",
     "set_panic_password",
-    "vault_save_media",
     "vault_delete_media",
     "vault_export_media",
     "signal_sign_message",
@@ -55,7 +54,8 @@ commands.allow = [
     "identity_resolve",
     "db_set_contact_global_nickname",
     "update_group_name",
-    "get_media_proxy_port"
+    "get_media_proxy_port",
+    "vault_retry_bridge"
 ]
 
 [[set]]

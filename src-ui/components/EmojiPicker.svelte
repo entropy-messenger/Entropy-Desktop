@@ -33,7 +33,7 @@
 </script>
 
 <div class="absolute bottom-20 left-4 z-50 premium-shadow rounded-3xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300 border border-white/10 glass">
-  <emoji-picker bind:this={pickerEl}></emoji-picker>
+  <emoji-picker bind:this={pickerEl} data-source="/emoji-data.json"></emoji-picker>
 </div>
 
 <style>

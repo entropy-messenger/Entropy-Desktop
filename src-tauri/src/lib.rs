@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
 pub fn run() {
@@ -52,6 +52,7 @@ pub fn run() {
             is_refilling: Mutex::new(false),
             jailed_until: Mutex::new(None),
             pending_transfers: Mutex::new(std::collections::HashMap::new()),
+            active_outgoing_transfers: Mutex::new(std::collections::HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -77,7 +78,6 @@ pub fn run() {
             commands::signal_sync_keys,
             commands::signal_encrypt,
             commands::set_panic_password,
-            commands::vault_save_media,
             commands::vault_delete_media,
             commands::vault_export_media,
             commands::signal_sign_message,
@@ -116,7 +116,8 @@ pub fn run() {
             commands::process_outgoing_text,
             commands::process_outgoing_group_text,
             commands::process_outgoing_media,
-            commands::process_outgoing_group_media
+            commands::process_outgoing_group_media,
+            commands::vault_retry_bridge
         ])
         .setup(|app| {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK
@@ -147,14 +148,16 @@ pub fn run() {
                 let show_i = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
                 let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
 
-                let tray_builder = TrayIconBuilder::new();
+                let tray_builder = TrayIconBuilder::with_id("entropy-tray");
                 let tray_icon = app.default_window_icon().cloned();
 
                 let builder = if let Some(icon) = tray_icon {
                     tray_builder.icon(icon)
                 } else {
                     tray_builder
-                };
+                }
+                .tooltip("Entropy")
+                .title("Entropy");
 
                 let _tray = builder
                     .menu(&menu)
@@ -170,14 +173,22 @@ pub fn run() {
                         }
                         _ => {}
                     })
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { .. } = event {
+                    .on_tray_icon_event(|tray, event| match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        }
+                        | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => {
                             let app = tray.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
                         }
+                        _ => {}
                     })
                     .build(app)?;
             }
@@ -186,6 +197,12 @@ pub fn run() {
             media_proxy::start_media_server(app.handle().clone());
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

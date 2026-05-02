@@ -1,7 +1,6 @@
-
 /**
  * Generates a high-quality micro-thumbnail (base64) for images and videos.
- * Targeted size: 5-8KB.
+ * Targeted size: 5-8pKB.
  */
 export async function generateThumbnail(url: string, type: string): Promise<string | null> {
     const isImage = type.startsWith('image/');
@@ -14,33 +13,33 @@ export async function generateThumbnail(url: string, type: string): Promise<stri
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload = () => {
-                    const canvas = document.createElement('canvas');
-                    const maxDim = 120; 
-                    let width = img.width;
-                    let height = img.height;
+                const canvas = document.createElement('canvas');
+                const maxDim = 120;
+                let width = img.width;
+                let height = img.height;
 
-                    if (width > height) {
-                        height *= maxDim / width;
-                        width = maxDim;
-                    } else {
-                        width *= maxDim / height;
-                        height = maxDim;
-                    }
+                if (width > height) {
+                    height *= maxDim / width;
+                    width = maxDim;
+                } else {
+                    width *= maxDim / height;
+                    height = maxDim;
+                }
 
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    if (ctx) {
-                        ctx.imageSmoothingEnabled = true;
-                        ctx.imageSmoothingQuality = 'high';
-                        ctx.drawImage(img, 0, 0, width, height);
-                        resolve(canvas.toDataURL('image/webp', 0.6));
-                    } else {
-                        resolve(null);
-                    }
-                };
-                img.onerror = () => resolve(null);
-                img.src = url;
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/webp', 0.6));
+                } else {
+                    resolve(null);
+                }
+            };
+            img.onerror = () => resolve(null);
+            img.src = url;
         } else if (isVideo) {
             const video = document.createElement('video');
             video.preload = 'metadata';
@@ -77,7 +76,6 @@ export async function generateThumbnail(url: string, type: string): Promise<stri
                 video.currentTime = Math.min(0.5, (video.duration * 0.1) || 0.5);
             };
 
-            // Register capture AFTER seek completes, not before
             video.onseeked = () => {
                 if ('requestVideoFrameCallback' in video) {
                     (video as any).requestVideoFrameCallback(captureFrame);

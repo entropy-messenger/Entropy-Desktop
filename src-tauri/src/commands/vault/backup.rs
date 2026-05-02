@@ -9,6 +9,7 @@ pub async fn export_database(
     app: tauri::AppHandle,
     state: State<'_, DbState>,
     target_path: String,
+    include_media: bool,
 ) -> Result<(), String> {
     {
         if let Ok(conn) = state.get_conn() {
@@ -62,25 +63,27 @@ pub async fn export_database(
         std::io::copy(&mut sf, &mut zip).map_err(|e| e.to_string())?;
     }
 
-    let media_dir_name = get_media_dirname();
-    let media_path = app_dir.join(&media_dir_name);
-    if media_path.exists() {
-        let walker = WalkDir::new(&media_path).into_iter();
-        for entry in walker.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = path
-                .strip_prefix(&app_dir)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .into_owned();
+    if include_media {
+        let media_dir_name = get_media_dirname();
+        let media_path = app_dir.join(&media_dir_name);
+        if media_path.exists() {
+            let walker = WalkDir::new(&media_path).into_iter();
+            for entry in walker.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let name = path
+                    .strip_prefix(&app_dir)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .into_owned();
 
-            if path.is_file() {
-                zip.start_file(name, options).map_err(|e| e.to_string())?;
-                let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-                std::io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
-            } else if !name.is_empty() {
-                zip.add_directory(name, options)
-                    .map_err(|e| e.to_string())?;
+                if path.is_file() {
+                    zip.start_file(name, options).map_err(|e| e.to_string())?;
+                    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                    std::io::copy(&mut f, &mut zip).map_err(|e| e.to_string())?;
+                } else if !name.is_empty() {
+                    zip.add_directory(name, options)
+                        .map_err(|e| e.to_string())?;
+                }
             }
         }
     }
@@ -94,6 +97,7 @@ pub async fn import_database(
     app: tauri::AppHandle,
     state: State<'_, DbState>,
     src_path: String,
+    include_media: bool,
 ) -> Result<(), String> {
     {
         let mut pool_lock = state
@@ -114,6 +118,32 @@ pub async fn import_database(
 
     if !backup_path.exists() {
         return Err("Selected backup file does not exist".to_string());
+    }
+
+    let src_path_buf = std::path::PathBuf::from(&src_path);
+    let canonical_src = std::fs::canonicalize(&src_path_buf)
+        .map_err(|e| format!("Invalid or blocked backup path: {}", e))?;
+
+    // PRE-CHECK: Open and validate the ZIP before touching any local files
+    let file = std::fs::File::open(&canonical_src).map_err(|e| e.to_string())?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("Corrupted backup file: {}", e))?;
+
+    let mut has_db = false;
+    let mut has_salt = false;
+    for i in 0..zip.len() {
+        let file = zip.by_index(i).map_err(|e| e.to_string())?;
+        let name = file.name();
+        if name.ends_with(".db") {
+            has_db = true;
+        }
+        if name == "vault.salt" {
+            has_salt = true;
+        }
+    }
+
+    if !has_db || !has_salt {
+        return Err("Invalid backup: Missing core database or encryption salt".into());
     }
 
     let filename = get_db_filename();
@@ -138,10 +168,6 @@ pub async fn import_database(
         std::fs::remove_dir_all(&media_path).map_err(|e| e.to_string())?;
     }
 
-    let src_path_buf = std::path::PathBuf::from(&src_path);
-    let canonical_src = std::fs::canonicalize(&src_path_buf)
-        .map_err(|e| format!("Invalid or blocked backup path: {}", e))?;
-
     // Prevent importing from hidden files or internal app data
     if canonical_src
         .file_name()
@@ -157,9 +183,6 @@ pub async fn import_database(
         return Err("Cannot import from within the application data directory".into());
     }
 
-    let file = std::fs::File::open(&canonical_src).map_err(|e| e.to_string())?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
 
@@ -174,10 +197,20 @@ pub async fn import_database(
         if name.starts_with("entropy") && name.ends_with(".db") {
             name = filename.clone();
         } else if name.starts_with("media") {
-            if let Some(pos) = name.find('/') {
-                name = format!("{}{}", media_dir_name, &name[pos..]);
-            } else {
-                name = media_dir_name.clone() + "/";
+            if !include_media {
+                continue;
+            }
+            // Strip the old 'media/profile/' prefix and prepend the new 'media/profile/' dirname
+            if let Some(first_slash) = name.find('/') {
+                let after_media = &name[first_slash + 1..];
+                if let Some(second_slash) = after_media.find('/') {
+                    // It's media/old_profile/relative_path
+                    let relative_path = &after_media[second_slash..]; // includes the slash
+                    name = format!("{}{}", media_dir_name, relative_path);
+                } else {
+                    // It's just media/old_profile (the directory itself)
+                    name = media_dir_name.clone();
+                }
             }
         }
 
@@ -196,6 +229,9 @@ pub async fn import_database(
             outfile.sync_all().map_err(|e| e.to_string())?;
         }
     }
+
+    let flag_path = app_dir.join(".restore_cleanup_pending");
+    let _ = std::fs::write(&flag_path, "1");
 
     app.restart();
 

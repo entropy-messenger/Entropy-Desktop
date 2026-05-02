@@ -61,12 +61,18 @@ export const removeToast = (id: string) => {
     toasts.update(all => all.filter(t => t.id !== id));
 };
 
-export const showConfirm = (message: string, title = 'Confirm'): Promise<boolean> => {
+/**
+ * Standard confirmation dialog.
+ * Defaults button labels to "Yes" and "No" per user preference.
+ */
+export const showConfirm = (message: string, title = 'Confirm', confirmText = 'Yes', cancelText = 'No'): Promise<boolean> => {
     return new Promise((resolve) => {
         modal.set({
             title,
             message,
             type: 'confirm',
+            confirmText,
+            cancelText,
             onConfirm: () => {
                 modal.set(null);
                 resolve(true);
