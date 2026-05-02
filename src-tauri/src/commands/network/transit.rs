@@ -203,6 +203,7 @@ pub async fn internal_dispatch_fragment(
     chunk_data: &[u8],
     is_media: bool,
     is_volatile: bool,
+    silent: bool,
 ) -> Result<(), String> {
     let mut envelope = Vec::with_capacity(PACKET_SIZE);
     envelope.extend_from_slice(&target_hash_bytes);
@@ -246,11 +247,11 @@ pub async fn internal_dispatch_fragment(
             tx.send(paced_msg).await.map_err(|e| e.to_string())?;
         }
 
-        if index.is_multiple_of(20) || index == total - 1 {
+        if !silent && (index.is_multiple_of(20) || index == total - 1) {
             let _ = app.emit(
                 "transfer://progress",
                 json!({
-                    "transferId": transfer_id,
+                    "transfer_id": transfer_id,
                     "current": index + 1,
                     "total": total,
                     "direction": "upload",

@@ -1,7 +1,7 @@
 //! Inbound message reassembly and protocol orchestration.
 //! Handles fragment collection, Signal decryption, and vault persistence.
 
-use crate::app_state::{DbState, MediaTransferState, NetworkState};
+use crate::app_state::{DbState, MediaTransferState, NetworkState, PendingMediaMetadata};
 use crate::commands::{
     DbChat, DbMessage, db_set_contact_global_nickname, db_update_messages, get_media_dir,
     internal_db_save_message, internal_db_upsert_chat, internal_send_to_network,
@@ -21,6 +21,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rusqlite::params;
 use serde_json::json;
+use std::io::{Read, Seek, SeekFrom, Write};
 use tauri::{AppHandle, Emitter, Manager};
 
 async fn internal_signal_decrypt(
@@ -164,7 +165,7 @@ pub async fn process_incoming_binary(
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?,
         ) as usize;
 
-        if total > 10_000_000 {
+        if total > 250_000 {
             return Err("Payload exceeds limit".into());
         }
 
@@ -195,27 +196,47 @@ pub async fn process_incoming_binary(
             {
                 if assembler.file_handle.is_none() {
                     let db_state = app.state::<DbState>();
-                    if let Ok(media_dir) = crate::commands::vault::get_media_dir(&app, &db_state) {
-                        let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
-                        let temp_filename =
-                            format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
-                        let file_path = media_dir.join(&temp_filename);
-                        if let Ok(f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .truncate(true)
-                            .write(true)
-                            .open(&file_path)
-                        {
-                            assembler.file_handle = Some(f);
-                        }
-                    }
+                    let media_dir = crate::commands::vault::get_media_dir(&app, &db_state)?;
+                    let type_suffix = if frame_type == 0x02 { "media" } else { "sig" };
+                    let temp_filename =
+                        format!("transfer_{}_{}_{}.bin", sender, transfer_id, type_suffix);
+                    let file_path = media_dir.join(&temp_filename);
+                    let f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .truncate(true)
+                        .write(true)
+                        .open(&file_path)
+                        .map_err(|e| format!("Failed to create reassembly file: {}", e))?;
+                    assembler.file_handle = Some(f);
                 }
 
                 if let Some(ref mut f) = assembler.file_handle {
-                    use std::io::{Seek, SeekFrom, Write};
-                    let _ = f.seek(SeekFrom::Start(index as u64 * 1319));
-                    let _ = f.write_all(chunk_data);
+                    let mut retries = 0;
+                    let max_retries = 3;
+                    loop {
+                        let res = f
+                            .seek(SeekFrom::Start(index as u64 * 1319))
+                            .and_then(|_| f.write_all(chunk_data));
+
+                        match res {
+                            Ok(_) => break,
+                            Err(e) if retries < max_retries => {
+                                retries += 1;
+                                std::thread::sleep(std::time::Duration::from_millis(10 * retries));
+                                continue;
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "Persistent I/O error during fragment reassembly: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    return Err("Internal Error: Media file handle lost during reassembly".into());
                 }
+
                 assembler.received_chunks[index as usize] = true;
                 assembler.received_count += 1;
                 assembler.last_activity = std::time::Instant::now();
@@ -229,7 +250,7 @@ pub async fn process_incoming_binary(
                 let _ = app.emit(
                     "transfer://progress",
                     json!({
-                        "transferId": transfer_id,
+                        "transfer_id": transfer_id,
                         "sender": sender,
                         "current": current_count,
                         "total": total,
@@ -306,6 +327,89 @@ pub async fn process_incoming_binary(
                             .as_str()
                             .ok_or("Missing message type")?;
                         match p_type {
+                            "media_resend_request" => {
+                                let transfer_id = decrypted_json["transfer_id"]
+                                    .as_u64()
+                                    .ok_or("Missing transfer_id")?
+                                    as u32;
+                                let indices: Vec<u32> = decrypted_json["indices"]
+                                    .as_array()
+                                    .ok_or("Missing indices")?
+                                    .iter()
+                                    .filter_map(|v| v.as_u64().map(|i| i as u32))
+                                    .collect();
+
+                                let net_state = app.state::<NetworkState>();
+                                let info = {
+                                    let active =
+                                        net_state.active_outgoing_transfers.lock().unwrap();
+                                    active.get(&transfer_id).cloned()
+                                };
+
+                                if let Some(info) = info {
+                                    let app_clone = app.clone();
+                                    let recipient = sender.clone();
+                                    tokio::spawn(async move {
+                                        let net_state = app_clone.state::<NetworkState>();
+                                        if let Ok(mut file) = std::fs::File::open(&info.file_path) {
+                                            let file_size =
+                                                file.metadata().map(|m| m.len()).unwrap_or(0);
+                                            let total_fragments =
+                                                (file_size as f64 / 1279.0).ceil() as u32;
+
+                                            let transit_cipher = XChaCha20Poly1305::new(
+                                                Key::from_slice(&info.transit_key),
+                                            );
+
+                                            // Pre-calculate routing hash
+                                            let mut routing_hash = [0u8; 64];
+                                            let r_bytes = recipient.as_bytes();
+                                            let r_len = std::cmp::min(r_bytes.len(), 64);
+                                            routing_hash[..r_len]
+                                                .copy_from_slice(&r_bytes[..r_len]);
+
+                                            for idx in indices {
+                                                let mut buffer = vec![0u8; 1279];
+                                                let offset = (idx as u64) * 1279;
+                                                use std::io::{Read, Seek, SeekFrom};
+                                                if file.seek(SeekFrom::Start(offset)).is_ok() {
+                                                    let n = file.read(&mut buffer).unwrap_or(0);
+                                                    if n > 0 {
+                                                        let chunk = &buffer[..n];
+                                                        let t_nonce =
+                                                            XChaCha20Poly1305::generate_nonce(
+                                                                &mut OsRng,
+                                                            );
+                                                        if let Ok(t_cipher) =
+                                                            transit_cipher.encrypt(&t_nonce, chunk)
+                                                        {
+                                                            let mut packet = Vec::with_capacity(
+                                                                t_cipher.len() + 24,
+                                                            );
+                                                            packet.extend_from_slice(&t_nonce);
+                                                            packet.extend_from_slice(&t_cipher);
+                                                            let _ = crate::commands::network::transit::internal_dispatch_fragment(
+                                                                app_clone.clone(),
+                                                                &net_state,
+                                                                routing_hash,
+                                                                None,
+                                                                transfer_id,
+                                                                idx,
+                                                                total_fragments,
+                                                                &packet,
+                                                                true,  // is_media
+                                                                false, // not volatile
+                                                                true   // silent
+                                                            ).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                                return Ok(());
+                            }
                             "group_invite" => {
                                 let gid = decrypted_json["groupId"]
                                     .as_str()
@@ -767,7 +871,7 @@ pub async fn process_incoming_binary(
                                     as u32;
 
                                 let size = decrypted_json["size"].as_u64().ok_or("Missing size")?;
-                                if size > 10 * 1024 * 1024 * 1024u64 {
+                                if size > 256 * 1024 * 1024u64 {
                                     return Err("File metadata exceeds size limit".into());
                                 }
                                 let m_type = decrypted_json["msg_type"]
@@ -787,13 +891,59 @@ pub async fn process_incoming_binary(
                                 let media_dir = get_media_dir(&app, &db_state)?;
                                 let final_file_path = media_dir.join(&msg_id);
 
-                                let inner_transfer_key =
-                                    format!("{}:{}", sender, inner_transfer_id);
                                 let temp_filename =
                                     format!("transfer_{}_{}_media.bin", sender, inner_transfer_id);
                                 let temp_path = media_dir.join(&temp_filename);
                                 let key_str =
                                     bundle["key"].as_str().unwrap_or_default().to_string();
+
+                                // 1. Handle thumbnail saving to vault
+                                if let Some(thumb_b64) = decrypted_json["thumbnail"].as_str() {
+                                    if let Ok(thumb_bytes) =
+                                        base64::engine::general_purpose::STANDARD.decode(thumb_b64)
+                                    {
+                                        if let Ok(vault_key_bytes) =
+                                            db_state.media_key.lock().map(|l| l.clone())
+                                        {
+                                            if let Some(vk) = vault_key_bytes {
+                                                let vault_key = Key::from_slice(&vk);
+                                                let vault_cipher =
+                                                    XChaCha20Poly1305::new(vault_key);
+                                                let thumb_path =
+                                                    media_dir.join(format!("{}_thumb", msg_id));
+                                                let v_nonce =
+                                                    XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                                                if let Ok(v_cipher) = vault_cipher
+                                                    .encrypt(&v_nonce, thumb_bytes.as_slice())
+                                                {
+                                                    if let Ok(mut f) =
+                                                        std::fs::File::create(&thumb_path)
+                                                    {
+                                                        let _ = f.write_all(&v_nonce);
+                                                        let _ = f.write_all(&v_cipher);
+                                                        let _ = f.sync_all();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Buffer metadata so fragments arriving later can trigger the bridge
+                                {
+                                    let mut links = net_state
+                                        .pending_media_links
+                                        .lock()
+                                        .map_err(|_| "Network state poisoned")?;
+                                    let transfer_key = format!("{}:{}", sender, inner_transfer_id);
+                                    links.insert(
+                                        transfer_key,
+                                        PendingMediaMetadata {
+                                            id: msg_id.clone(),
+                                            key: key_str.clone(),
+                                        },
+                                    );
+                                }
 
                                 if temp_path.exists() {
                                     // Decrypt and save media arriving before metadata (Streaming O(1) RAM)
@@ -815,55 +965,89 @@ pub async fn process_incoming_binary(
 
                                         let vault_path = media_dir.join(&msg_id);
 
-                                        if let (Ok(mut src), Ok(mut dst)) = (
-                                            std::fs::File::open(&temp_path),
-                                            std::fs::File::create(&vault_path),
-                                        ) {
-                                            use sha2::{Digest, Sha256};
-                                            use std::io::{Read, Write};
-                                            let mut file_hasher = Sha256::new();
-                                            let _expected_hash =
-                                                bundle["sha256"].as_str().unwrap_or_default();
-
-                                            loop {
-                                                let mut block_buf = vec![0u8; 1319];
-                                                let mut n = 0;
-                                                while n < 1319 {
-                                                    match src.read(&mut block_buf[n..]) {
-                                                        Ok(0) => break,
-                                                        Ok(read) => n += read,
-                                                        Err(_) => break,
+                                        // 2. Check for missing fragments (Selective Repeat)
+                                        let mut missing = Vec::new();
+                                        {
+                                            let assemblers = net_state
+                                                .media_assembler
+                                                .lock()
+                                                .map_err(|_| "Network state poisoned")?;
+                                            let transfer_key =
+                                                format!("{}:{}:2", sender, inner_transfer_id);
+                                            if let Some(assembler) = assemblers.get(&transfer_key) {
+                                                for (idx, received) in
+                                                    assembler.received_chunks.iter().enumerate()
+                                                {
+                                                    if !received {
+                                                        missing.push(idx as u32);
                                                     }
-                                                }
-                                                if n == 0 {
-                                                    break;
-                                                }
-
-                                                let chunk = &block_buf[..n];
-                                                if chunk.len() > 40 {
-                                                    let nonce = XNonce::from_slice(&chunk[..24]);
-                                                    let ciphertext = &chunk[24..];
-                                                    if let Ok(ptext) =
-                                                        transit_cipher.decrypt(nonce, ciphertext)
-                                                    {
-                                                        file_hasher.update(&ptext);
-                                                        let v_nonce =
-                                                            XChaCha20Poly1305::generate_nonce(
-                                                                &mut OsRng,
-                                                            );
-                                                        if let Ok(v_cipher) = vault_cipher
-                                                            .encrypt(&v_nonce, ptext.as_slice())
-                                                        {
-                                                            let _ = dst.write_all(&v_nonce);
-                                                            let _ = dst.write_all(&v_cipher);
-                                                        }
-                                                    }
-                                                } else {
-                                                    break; // Tail too short
                                                 }
                                             }
-                                            let _ = dst.sync_all();
+                                        }
 
+                                        if !missing.is_empty() {
+                                            // Request resend via background signal
+                                            let resend_req = serde_json::json!({
+                                                "type": "media_resend_request",
+                                                "transfer_id": inner_transfer_id,
+                                                "indices": missing,
+                                                "msg_id": msg_id.clone()
+                                            });
+
+                                            if let Ok(encrypted) = internal_signal_encrypt(
+                                                app.clone(),
+                                                &net_state,
+                                                &sender,
+                                                resend_req.to_string(),
+                                            )
+                                            .await
+                                            {
+                                                let _ = crate::commands::network::transit::internal_send_to_network(
+                                                    app.clone(),
+                                                    &net_state,
+                                                    Some(sender.clone()),
+                                                    None,
+                                                    None,
+                                                    Some(encrypted.to_string().into_bytes()),
+                                                    true,
+                                                    false,
+                                                    None,
+                                                    true,
+                                                )
+                                                .await;
+                                            }
+                                            // Do NOT bridge yet. The arrival of the missing fragments will trigger it.
+                                            return Ok(());
+                                        }
+
+                                        // All fragments present - consume the metadata and bridge now
+                                        {
+                                            let mut links = net_state
+                                                .pending_media_links
+                                                .lock()
+                                                .map_err(|_| "Network state poisoned")?;
+                                            let transfer_key =
+                                                format!("{}:{}", sender, inner_transfer_id);
+                                            links.remove(&transfer_key);
+                                        }
+
+                                        if let Err(e) = internal_vault_bridge(
+                                            &app,
+                                            &temp_path,
+                                            &vault_path,
+                                            &transit_cipher,
+                                            &vault_cipher,
+                                            inner_transfer_id,
+                                            &sender,
+                                        ) {
+                                            let _ = app.emit(
+                                                "network-bin-error",
+                                                serde_json::json!({
+                                                    "msg_id": msg_id.clone(),
+                                                    "error": e
+                                                }),
+                                            );
+                                        } else {
                                             let _ = std::fs::remove_file(&temp_path);
                                             let _ = app.emit(
                                                 "network-bin-complete",
@@ -875,19 +1059,6 @@ pub async fn process_incoming_binary(
                                             );
                                         }
                                     }
-                                } else {
-                                    // Buffer metadata while waiting for fragments
-                                    let mut links = net_state
-                                        .pending_media_links
-                                        .lock()
-                                        .map_err(|_| "Network state poisoned")?;
-                                    links.insert(
-                                        inner_transfer_key,
-                                        crate::app_state::PendingMediaMetadata {
-                                            id: msg_id.clone(),
-                                            key: key_str,
-                                        },
-                                    );
                                 }
 
                                 let is_group = decrypted_json["isGroup"].as_bool().unwrap_or(false);
@@ -1079,55 +1250,24 @@ pub async fn process_incoming_binary(
                                 if let Ok(media_dir) = media_dir_res {
                                     let vault_path = media_dir.join(&m_clone.id);
 
-                                    if let (Ok(mut src), Ok(mut dst)) = (
-                                        std::fs::File::open(&temp_path_clone),
-                                        std::fs::File::create(&vault_path),
+                                    if let Err(e) = internal_vault_bridge(
+                                        &app_clone,
+                                        &temp_path_clone,
+                                        &vault_path,
+                                        &transit_cipher,
+                                        &vault_cipher,
+                                        transfer_id,
+                                        &sender_clone,
                                     ) {
-                                        use sha2::{Digest, Sha256};
-                                        use std::io::{Read, Write};
-                                        let mut file_hasher = Sha256::new();
-
-                                        loop {
-                                            let mut block_buf = vec![0u8; 1319];
-                                            let mut n = 0;
-                                            while n < 1319 {
-                                                match src.read(&mut block_buf[n..]) {
-                                                    Ok(0) => break,
-                                                    Ok(read) => n += read,
-                                                    Err(_) => break,
-                                                }
-                                            }
-                                            if n == 0 {
-                                                break;
-                                            }
-
-                                            let chunk = &block_buf[..n];
-                                            if chunk.len() > 40 {
-                                                let nonce = XNonce::from_slice(&chunk[..24]);
-                                                let ciphertext = &chunk[24..];
-                                                if let Ok(ptext) =
-                                                    transit_cipher.decrypt(nonce, ciphertext)
-                                                {
-                                                    file_hasher.update(&ptext);
-                                                    // Re-encrypt for vault
-                                                    let v_nonce = XChaCha20Poly1305::generate_nonce(
-                                                        &mut OsRng,
-                                                    );
-                                                    if let Ok(v_cipher) = vault_cipher
-                                                        .encrypt(&v_nonce, ptext.as_slice())
-                                                    {
-                                                        let _ = dst.write_all(&v_nonce);
-                                                        let _ = dst.write_all(&v_cipher);
-                                                    }
-                                                }
-                                            } else {
-                                                break;
-                                            }
-                                        }
-                                        let _ = dst.sync_all();
-
+                                        let _ = app_clone.emit(
+                                            "network-bin-error",
+                                            json!({
+                                                "msg_id": m_clone.id,
+                                                "error": e
+                                            }),
+                                        );
+                                    } else {
                                         let _ = std::fs::remove_file(&temp_path_clone);
-
                                         let _ = app_clone.emit(
                                             "network-bin-complete",
                                             json!({
@@ -1151,6 +1291,100 @@ pub async fn process_incoming_binary(
         // ignore
     }
 
+    Ok(())
+}
+
+fn internal_vault_bridge(
+    app: &tauri::AppHandle,
+    src_path: &std::path::Path,
+    vault_path: &std::path::Path,
+    transit_cipher: &XChaCha20Poly1305,
+    vault_cipher: &XChaCha20Poly1305,
+    transfer_id: u32,
+    sender: &str,
+) -> Result<(), String> {
+    let mut src =
+        std::fs::File::open(src_path).map_err(|e| format!("Failed to open temp file: {}", e))?;
+    let mut dst = std::fs::File::create(vault_path)
+        .map_err(|e| format!("Failed to create vault file: {}", e))?;
+
+    let file_size = src.metadata().map(|m| m.len()).unwrap_or(0);
+    let total_blocks = (file_size as f64 / 1319.0).ceil() as u64;
+    let progress_step = (total_blocks / 10).max(1);
+
+    let mut block_buf = [0u8; 1319];
+    let mut block_count = 0;
+
+    loop {
+        let mut n = 0;
+        while n < 1319 {
+            match src.read(&mut block_buf[n..]) {
+                Ok(0) => break,
+                Ok(read) => n += read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(format!("Read error during bridge: {}", e)),
+            }
+        }
+        if n == 0 {
+            break;
+        }
+
+        let chunk = &block_buf[..n];
+        if chunk.len() > 40 {
+            let nonce = XNonce::from_slice(&chunk[..24]);
+            let ciphertext = &chunk[24..];
+            let ptext = transit_cipher
+                .decrypt(nonce, ciphertext)
+                .map_err(|_| "Decryption failed during bridge - potential corruption")?;
+
+            let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+            let v_cipher = vault_cipher
+                .encrypt(&v_nonce, ptext.as_slice())
+                .map_err(|e| format!("Vault encryption failed: {}", e))?;
+
+            let mut retries = 0;
+            loop {
+                match dst
+                    .write_all(&v_nonce)
+                    .and_then(|_| dst.write_all(&v_cipher))
+                {
+                    Ok(_) => break,
+                    Err(e) if retries < 3 => {
+                        retries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(e) => return Err(format!("Write error during bridge: {}", e)),
+                }
+            }
+
+            block_count += 1;
+            if block_count % progress_step == 0 || block_count == total_blocks {
+                let _ = app.emit(
+                    "network-bin-progress",
+                    json!({
+                        "transfer_id": transfer_id,
+                        "current": block_count,
+                        "total": total_blocks,
+                        "sender": sender
+                    }),
+                );
+            }
+        } else {
+            break;
+        }
+    }
+
+    let mut retries = 0;
+    loop {
+        match dst.sync_all() {
+            Ok(_) => break,
+            Err(e) if retries < 3 => {
+                retries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Final sync failed: {}", e)),
+        }
+    }
     Ok(())
 }
 
@@ -1178,4 +1412,98 @@ async fn internal_send_volatile(
         false,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn vault_retry_bridge(app: tauri::AppHandle, msg_id: String) -> Result<(), String> {
+    let db_state = app.state::<DbState>();
+    let net_state = app.state::<NetworkState>();
+
+    // 1. Get message from DB to find transfer info
+    let (attachment_json, sender_hash) = {
+        let conn = db_state.get_conn()?;
+        conn.query_row(
+            "SELECT attachment_json, sender_hash FROM messages WHERE id = ?1",
+            rusqlite::params![msg_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .map_err(|e| format!("Message not found: {}", e))?
+    };
+
+    let attachment: serde_json::Value =
+        serde_json::from_str(&attachment_json).map_err(|e| format!("Invalid attachment: {}", e))?;
+    let transfer_id = attachment["transferId"]
+        .as_u64()
+        .ok_or("No transferId found")? as u32;
+    let sender = sender_hash;
+
+    // 2. Locate temp file
+    let media_dir = get_media_dir(&app, &db_state)?;
+    let temp_filename = format!("transfer_{}_{}_media.bin", sender, transfer_id);
+    let temp_path = media_dir.join(&temp_filename);
+
+    if !temp_path.exists() {
+        return Err("Temporary media file not found. It may have been cleared.".into());
+    }
+
+    // 3. Setup keys
+    let vault_key_bytes = {
+        let lock = db_state.media_key.lock().unwrap();
+        lock.clone().ok_or("Vault locked")?
+    };
+    let vault_key = Key::from_slice(&vault_key_bytes);
+    let vault_cipher = XChaCha20Poly1305::new(vault_key);
+
+    let transfer_key = format!("{}:{}", sender, transfer_id);
+    let transit_key_str = {
+        let lock = net_state
+            .pending_media_links
+            .lock()
+            .map_err(|_| "State poisoned")?;
+        lock.get(&transfer_key)
+            .cloned()
+            .ok_or("Transfer metadata expired. You may need to ask the sender to resend.")?
+            .key
+    };
+    let transit_key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&transit_key_str)
+        .map_err(|_| "Invalid transit key format")?;
+    let transit_key = Key::from_slice(&transit_key_bytes);
+    let transit_cipher = XChaCha20Poly1305::new(transit_key);
+
+    let vault_path = media_dir.join(&msg_id);
+
+    // 4. Run bridge
+    internal_vault_bridge(
+        &app,
+        &temp_path,
+        &vault_path,
+        &transit_cipher,
+        &vault_cipher,
+        transfer_id,
+        &sender,
+    )?;
+
+    // 5. Cleanup and notify
+    let _ = std::fs::remove_file(&temp_path);
+
+    // Update DB status to 'sent' (which means received/complete for incoming)
+    let _ = {
+        let conn = db_state.get_conn()?;
+        conn.execute(
+            "UPDATE messages SET status = 'sent', error = NULL WHERE id = ?1",
+            rusqlite::params![msg_id],
+        )
+    };
+
+    let _ = app.emit(
+        "network-bin-complete",
+        serde_json::json!({
+            "sender": sender,
+            "transfer_id": transfer_id,
+            "msg_id": Some(msg_id)
+        }),
+    );
+
+    Ok(())
 }

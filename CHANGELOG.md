@@ -6,8 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.1] - 2026-05-01
+- Increased media file transfer limits from 100MB to 256MB.
+- Hardened data wiping: Total trace-free vaporization of browser and app data.
+- Vault import integrity pre-check to prevent data loss from corrupted backups.
+- Selective media backup for ultra-fast, lightweight identity transfers.
 - Validation of the Signal-protocol pipeline with some tests.
-- Integrated `cargo fmt` and `cargo clippy` into the CI pipeline to enforce strict code quality standards.
 - Enabled opening exported files directly from the app.
 - Added Emoji support.
 - Implemented database connection pooling for faster parallel operations.
@@ -25,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Overhauled the application typography stack with **Plus Jakarta Sans** (UI/Headings) and **JetBrains Mono** (Technical/Input) for a nicer UI.
 - **Networking & Backend**:
     - Integrated a 60-second sentinel timeout on WebSocket intake to mitigate stalled TCP states and semi-open connections.
-    - Increased media file transfer limits from 10MB to 100MB with real-time progress indicators (0-100%).
+    - Increased media file transfer limits from 100MB to 256MB with real-time progress indicators (0-100%).
     - Corrected chat sidebar preview logic for dynamic message deletion handling.
 
 ## [0.0.6] - 2026-04-14

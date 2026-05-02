@@ -155,11 +155,11 @@ export class NetworkLayer {
         });
 
         listen('transfer://progress', (event) => {
-            const { transferId, current, total, direction, msgId } = event.payload as any;
+            const { transfer_id, current, total, direction, msgId } = event.payload as any;
             import('./stores/transfers').then(m => {
-                m.updateTransferProgress(transferId, current, total, direction, undefined, msgId);
+                m.updateTransferProgress(transfer_id, current, total, direction, undefined, msgId);
                 if (current >= total) {
-                    setTimeout(() => m.removeTransfer(transferId), 3000);
+                    setTimeout(() => m.removeTransfer(transfer_id), 3000);
                 }
             });
         });
@@ -178,9 +178,17 @@ export class NetworkLayer {
             const { msg_id } = event.payload as any;
             if (!msg_id) return;
             
-            // Mark the message as ready in the UI store
             import('./actions/chat').then(m => {
                 m.refreshMessageUI(msg_id);
+            });
+        });
+
+        listen('network-bin-error', (event) => {
+            const { msg_id, error } = event.payload as any;
+            if (!msg_id) return;
+            
+            import('./actions/chat').then(m => {
+                m.markMessageAsError(msg_id, error);
             });
         });
     }

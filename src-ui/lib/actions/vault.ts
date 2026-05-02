@@ -2,9 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { userStore } from '../stores/user';
 import { addToast } from '../stores/ui';
 
-export const exportVault = async (targetPath: string) => {
+export const exportVault = async (targetPath: string, includeMedia: boolean) => {
     try {
-        await invoke('export_database', { targetPath });
+        await invoke('export_database', { targetPath, includeMedia });
         addToast("Backup exported successfully!", 'success');
         return true;
     } catch (e: any) {
@@ -13,9 +13,9 @@ export const exportVault = async (targetPath: string) => {
     }
 };
 
-export const importVault = async (srcPath: string) => {
+export const importVault = async (srcPath: string, includeMedia: boolean) => {
     try {
-        await invoke('import_database', { srcPath });
+        await invoke('import_database', { srcPath, includeMedia });
         addToast("Backup restored! Identity is being re-synchronized.", 'success');
         // Allow time for native cleanup before reload
         setTimeout(() => window.location.reload(), 2000);

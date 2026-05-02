@@ -26,6 +26,7 @@ export interface Message {
     groupId?: string;
     isMine: boolean;
     status: 'pending' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+    error?: string;
     isStarred?: boolean;
     isGroup?: boolean;
     chatAlias?: string;

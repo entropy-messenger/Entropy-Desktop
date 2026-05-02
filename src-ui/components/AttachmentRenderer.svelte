@@ -1,7 +1,8 @@
 <script lang="ts">
     import { 
         LucideMic, LucidePaperclip, LucideDownload, LucideLoader, 
-        LucideCheck, LucidePlay, LucideClock, LucideCheckCheck, LucideX, LucideStar
+        LucideCheck, LucidePlay, LucideClock, LucideCheckCheck, LucideX, LucideStar,
+        LucideAlertCircle, LucideRefreshCw
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import { convertFileSrc, invoke } from '@tauri-apps/api/core';
@@ -227,6 +228,40 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        {:else if msg.status === 'failed'}
+            <div class="flex flex-col items-center justify-center py-6 px-10 bg-red-500/10 rounded-[0.9rem] border border-red-500/20 w-full sm:w-[320px]">
+                <LucideAlertCircle size={24} class="text-red-500 mb-2" />
+                <span class="text-[10px] font-bold text-red-500 uppercase tracking-widest text-center">
+                    Decryption Failed
+                </span>
+                {#if msg.error}
+                    <span class="text-[9px] text-red-400/80 mt-1 text-center line-clamp-2 px-4 mb-3">
+                        {msg.error}
+                    </span>
+                {/if}
+                
+                <button 
+                    onclick={async () => {
+                        loading = true;
+                        try {
+                            const { invoke } = await import('@tauri-apps/api/core');
+                            await invoke('vault_retry_bridge', { msgId: msg.id });
+                        } catch (e: any) {
+                            console.error(e);
+                        } finally {
+                            loading = false;
+                        }
+                    }}
+                    class="mt-1 px-4 py-1.5 bg-red-500 text-white rounded-full text-[10px] font-bold uppercase tracking-wider hover:bg-red-600 transition-colors shadow-lg active:scale-95 disabled:opacity-50"
+                    disabled={loading}
+                >
+                    {#if loading}
+                        <LucideLoader size={12} class="animate-spin" />
+                    {:else}
+                        Retry Decryption
+                    {/if}
+                </button>
             </div>
         {:else if loading}
             <div class="flex flex-col items-center justify-center py-10 px-16 bg-entropy-surface-light rounded-[0.9rem] border border-white/10 animate-pulse w-full sm:w-[320px]">

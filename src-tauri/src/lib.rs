@@ -52,6 +52,7 @@ pub fn run() {
             is_refilling: Mutex::new(false),
             jailed_until: Mutex::new(None),
             pending_transfers: Mutex::new(std::collections::HashMap::new()),
+            active_outgoing_transfers: Mutex::new(std::collections::HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -77,7 +78,6 @@ pub fn run() {
             commands::signal_sync_keys,
             commands::signal_encrypt,
             commands::set_panic_password,
-            commands::vault_save_media,
             commands::vault_delete_media,
             commands::vault_export_media,
             commands::signal_sign_message,
@@ -116,7 +116,8 @@ pub fn run() {
             commands::process_outgoing_text,
             commands::process_outgoing_group_text,
             commands::process_outgoing_media,
-            commands::process_outgoing_group_media
+            commands::process_outgoing_group_media,
+            commands::vault_retry_bridge
         ])
         .setup(|app| {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK

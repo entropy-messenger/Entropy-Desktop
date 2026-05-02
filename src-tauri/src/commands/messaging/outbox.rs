@@ -14,6 +14,7 @@ use chacha20poly1305::{
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::io::Write;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -195,13 +196,13 @@ pub fn process_outgoing_media(
 
         let metadata =
             std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
-        if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if metadata.len() > 256 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         Some(canonical_path)
     } else if let Some(ref d) = payload.file_data {
-        if d.len() as u64 > 10 * 1024 * 1024 * 1024u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if d.len() as u64 > 256 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         None
     } else {
@@ -294,9 +295,18 @@ pub fn process_outgoing_media(
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
             let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
+            {
+                if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
+                    active.insert(
+                        transfer_id,
+                        crate::app_state::OutgoingTransferInfo {
+                            file_path: canonical_path_opt.clone().unwrap_or_default(),
+                            transit_key: net_key.into(),
+                        },
+                    );
+                }
+            }
             let vault_key_bytes = {
                 let lock = db_state.media_key.lock().unwrap();
                 lock.clone().unwrap()
@@ -323,8 +333,7 @@ pub fn process_outgoing_media(
                 "bundle": {
                     "key": key_b64,
                     "file_name": payload.file_name,
-                    "file_type": payload.file_type,
-                    "sha256": ""
+                    "file_type": payload.file_type
                 }
             });
 
@@ -365,25 +374,53 @@ pub fn process_outgoing_media(
 
             loop {
                 let mut n = 0;
+                let mut read_retries = 0;
                 while n < 1279 {
                     match reader.read(&mut buffer[n..]) {
                         Ok(0) => break,
-                        Ok(read) => n += read,
+                        Ok(read) => {
+                            n += read;
+                            read_retries = 0;
+                        }
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
+                        Err(e) if read_retries < 3 => {
+                            read_retries += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(e) => {
+                            let _ = app.emit(
+                                "network-bin-error",
+                                serde_json::json!({
+                                    "msg_id": msg_id.clone(),
+                                    "error": format!("Disk read error: {}", e)
+                                }),
+                            );
+                            return;
+                        }
                     }
                 }
+
                 if n == 0 {
                     break;
                 }
                 let chunk = &buffer[..n];
-                hasher.update(chunk);
 
                 let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
                 let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
-                use std::io::Write;
-                let _ = vault_file.write_all(&v_nonce);
-                let _ = vault_file.write_all(&v_cipher);
+                let mut retries = 0;
+                loop {
+                    match vault_file
+                        .write_all(&v_nonce)
+                        .and_then(|_| vault_file.write_all(&v_cipher))
+                    {
+                        Ok(_) => break,
+                        Err(e) if retries < 3 => {
+                            retries += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(_e) => return, // Abort background task if vault is unusable
+                    }
+                }
 
                 let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
                 let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -408,12 +445,40 @@ pub fn process_outgoing_media(
                     &packet,
                     true,
                     false,
+                    false,
                 )
                 .await;
                 fragment_index += 1;
             }
+            let _ = vault_file.sync_all();
 
-            let final_hash = hex::encode(hasher.finalize());
+            if fragment_index != total_fragments {
+                let _ = app.emit(
+                    "network-bin-error",
+                    serde_json::json!({
+                        "msg_id": msg_id.clone(),
+                        "error": "Incomplete read: fragment mismatch"
+                    }),
+                );
+                return;
+            }
+
+            // Save our own thumbnail to vault so we can see it
+            if let Some(thumb_b64) = &payload.thumbnail {
+                if let Ok(thumb_bytes) = base64::engine::general_purpose::STANDARD.decode(thumb_b64)
+                {
+                    let thumb_path = media_dir.join(format!("{}_thumb", msg_id));
+                    let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                    if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, thumb_bytes.as_slice()) {
+                        if let Ok(mut f) = std::fs::File::create(&thumb_path) {
+                            let _ = f.write_all(&v_nonce);
+                            let _ = f.write_all(&v_cipher);
+                            let _ = f.sync_all();
+                        }
+                    }
+                }
+            }
+
             let final_meta = serde_json::json!({
                 "type": "file",
                 "id": msg_id.clone(),
@@ -427,8 +492,7 @@ pub fn process_outgoing_media(
                 "bundle": {
                     "key": key_b64,
                     "file_name": payload.file_name,
-                    "file_type": payload.file_type,
-                    "sha256": final_hash
+                    "file_type": payload.file_type
                 }
             });
 
@@ -481,6 +545,11 @@ pub fn process_outgoing_media(
                     "attachment": final_attachment_obj
                 }),
             );
+
+            // Success cleanup
+            if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
+                active.remove(&transfer_id);
+            }
         });
     });
 
@@ -763,13 +832,13 @@ pub async fn process_outgoing_group_media(
 
         let metadata =
             std::fs::metadata(&canonical_path).map_err(|e: std::io::Error| e.to_string())?;
-        if metadata.len() > 10 * 1024 * 1024 * 1024u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if metadata.len() > 256 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         Some(canonical_path)
     } else if let Some(ref d) = payload.file_data {
-        if d.len() as u64 > 10 * 1024 * 1024 * 1024u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if d.len() as u64 > 256 * 1024 * 1024u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         None
     } else {
@@ -845,9 +914,18 @@ pub async fn process_outgoing_group_media(
         let db_state = app.state::<DbState>();
         let net_state = app.state::<NetworkState>();
 
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
         let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
+        {
+            if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
+                active.insert(
+                    transfer_id,
+                    crate::app_state::OutgoingTransferInfo {
+                        file_path: canonical_path_bg.clone().unwrap_or_default(),
+                        transit_key: net_key.into(),
+                    },
+                );
+            }
+        }
         let vault_key_bytes = {
             let lock = db_state.media_key.lock().unwrap();
             lock.clone().unwrap()
@@ -878,8 +956,7 @@ pub async fn process_outgoing_group_media(
             "bundle": {
                 "key": key_b64,
                 "file_name": payload.file_name,
-                "file_type": payload.file_type,
-                "sha256": ""
+                "file_type": payload.file_type
             }
         });
 
@@ -931,25 +1008,52 @@ pub async fn process_outgoing_group_media(
 
         loop {
             let mut n = 0;
+            let mut read_retries = 0;
             while n < 1279 {
                 match reader.read(&mut buffer[n..]) {
                     Ok(0) => break,
-                    Ok(read) => n += read,
+                    Ok(read) => {
+                        n += read;
+                        read_retries = 0;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
+                    Err(e) if read_retries < 3 => {
+                        read_retries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(e) => {
+                        let _ = app.emit(
+                            "network-bin-error",
+                            serde_json::json!({
+                                "msg_id": msg_id.clone(),
+                                "error": format!("Disk read error: {}", e)
+                            }),
+                        );
+                        return;
+                    }
                 }
             }
             if n == 0 {
                 break;
             }
             let chunk = &buffer[..n];
-            hasher.update(chunk);
 
             let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
             let v_cipher = vault_cipher.encrypt(&v_nonce, chunk).unwrap();
-            use std::io::Write;
-            let _ = vault_file.write_all(&v_nonce);
-            let _ = vault_file.write_all(&v_cipher);
+            let mut retries = 0;
+            loop {
+                match vault_file
+                    .write_all(&v_nonce)
+                    .and_then(|_| vault_file.write_all(&v_cipher))
+                {
+                    Ok(_) => break,
+                    Err(e) if retries < 3 => {
+                        retries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(_e) => return,
+                }
+            }
 
             let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
             let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
@@ -983,14 +1087,26 @@ pub async fn process_outgoing_group_media(
                     &packet,
                     true,
                     false,
+                    false,
                 )
                 .await;
             }
             fragment_index += 1;
         }
+        let _ = vault_file.sync_all();
+
+        if fragment_index != total_fragments {
+            let _ = app.emit(
+                "network-bin-error",
+                serde_json::json!({
+                    "msg_id": msg_id.clone(),
+                    "error": "Incomplete read: fragment mismatch"
+                }),
+            );
+            return;
+        }
 
         // Final Metadata
-        let final_hash = hex::encode(hasher.finalize());
         let final_meta = serde_json::json!({
             "type": "file",
             "id": msg_id.clone(),
@@ -1007,8 +1123,7 @@ pub async fn process_outgoing_group_media(
             "bundle": {
                 "key": key_b64,
                 "file_name": payload.file_name,
-                "file_type": payload.file_type,
-                "sha256": final_hash
+                "file_type": payload.file_type
             }
         });
 
@@ -1067,6 +1182,11 @@ pub async fn process_outgoing_group_media(
                 "attachment": final_attachment_obj
             }),
         );
+
+        // Success cleanup
+        if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
+            active.remove(&transfer_id);
+        }
     });
 
     Ok(serde_json::to_value(&db_msg).unwrap())

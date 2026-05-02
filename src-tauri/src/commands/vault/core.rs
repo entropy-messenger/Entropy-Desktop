@@ -171,7 +171,7 @@ pub fn get_media_dirname() -> String {
     if let Ok(profile) = std::env::var("ENTROPY_PROFILE")
         && !profile.is_empty()
     {
-        return format!("media_{}", profile);
+        return format!("media/{}", profile);
     }
     "media".to_string()
 }
@@ -239,6 +239,15 @@ pub async fn init_vault(
             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
             let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
             let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("temp_media"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("streaming_cache"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("WebKitCache"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("databases"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("storage"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("CacheStorage"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
+            let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
+            let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
             let _ = std::fs::remove_file(&attempts_file);
             app.restart();
         }
@@ -251,6 +260,15 @@ pub async fn init_vault(
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
         let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("temp_media"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("streaming_cache"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("WebKitCache"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("databases"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("storage"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("CacheStorage"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
+        let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
+        let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
         let _ = std::fs::remove_file(&attempts_file);
         app.restart();
     }
@@ -482,6 +500,17 @@ pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Resul
     if media_dir.exists() {
         let _ = std::fs::remove_dir_all(media_dir);
     }
+
+    // Comprehensive clean of all volatile app data
+    let _ = std::fs::remove_dir_all(app_dir.join("temp_media"));
+    let _ = std::fs::remove_dir_all(app_dir.join("streaming_cache"));
+    let _ = std::fs::remove_dir_all(app_dir.join("WebKitCache"));
+    let _ = std::fs::remove_dir_all(app_dir.join("databases"));
+    let _ = std::fs::remove_dir_all(app_dir.join("storage"));
+    let _ = std::fs::remove_dir_all(app_dir.join("CacheStorage"));
+    let _ = std::fs::remove_dir_all(app_dir.join("mediakeys"));
+    let _ = std::fs::remove_dir_all(app_dir.join("deviceidhashsalts"));
+    let _ = std::fs::remove_file(app_dir.join("hsts-storage.sqlite"));
 
     app.restart();
     #[allow(unreachable_code)]
