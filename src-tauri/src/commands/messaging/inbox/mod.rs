@@ -152,8 +152,18 @@ pub async fn process_incoming_binary(
                                                     let n = file.read(&mut buffer).unwrap_or(0);
                                                     if n > 0 {
                                                         let chunk = &buffer[..n];
+                                                        
+                                                        use chacha20poly1305::{XChaCha20Poly1305, aead::{Aead, AeadCore, KeyInit, OsRng}, Key as ChaKey};
+                                                        let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&info.transit_key));
+                                                        let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+                                                        let t_cipher = transit_cipher.encrypt(&t_nonce, chunk).unwrap();
+                                                        
+                                                        let mut packet = Vec::with_capacity(t_cipher.len() + 24);
+                                                        packet.extend_from_slice(&t_nonce);
+                                                        packet.extend_from_slice(&t_cipher);
+
                                                         let _ = crate::commands::network::transit::internal_dispatch_fragment(
-                                                            app_clone.clone(), &net_state, routing_hash, None, transfer_id, idx, total_fragments, chunk, true, false, true
+                                                            app_clone.clone(), &net_state, routing_hash, None, transfer_id, idx, total_fragments, &packet, true, true, true
                                                         ).await;
                                                     }
                                                 }
