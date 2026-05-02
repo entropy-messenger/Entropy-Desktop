@@ -21,7 +21,7 @@ use crate::signal_store::SqliteSignalStore;
 
 use super::pacing::{PACKET_SIZE, send_paced_json};
 use super::transit::flush_outbox;
-const RELAY_URL: &str = "ws://relay.entropymessenger.com/ws";
+const RELAY_URL: &str = "wss://relay.entropymessenger.com/ws";
 
 #[tauri::command]
 pub async fn revoke_session_token(
