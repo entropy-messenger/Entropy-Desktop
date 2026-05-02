@@ -8,7 +8,7 @@ use rusqlite::OpenFlags;
 use tauri::{AppHandle, Manager, State};
 
 const MIGRATIONS: &[&str] = &[
-    // Version 1: Initial Schema (Consolidated base tables, indexes, and FTS triggers)
+    // Version 1: Initial Schema
     "
     /* Core Infrastructure */
     CREATE TABLE IF NOT EXISTS kv_store (
@@ -384,7 +384,6 @@ pub async fn init_vault(
         let _ = std::fs::remove_file(&flag_path);
     }
 
-    // Media Encryption Key Initialization
     let media_key = {
         let conn = pool.get().map_err(|e| e.to_string())?;
         let mut stmt = conn

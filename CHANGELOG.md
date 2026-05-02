@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.1] - 2026-05-01
+- Message synchronization after database restore.
 - Increased media file transfer limits from 100MB to 256MB.
 - Hardened data wiping: Total trace-free vaporization of browser and app data.
 - Vault import integrity pre-check to prevent data loss from corrupted backups.

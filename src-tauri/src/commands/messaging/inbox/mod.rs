@@ -167,9 +167,9 @@ pub async fn process_incoming_binary(
                             "group_leave" => handlers::groups::handle_group_leave(app.clone(), sender.clone(), decrypted_json).await?,
                             "group_update" => handlers::groups::handle_group_update(app.clone(), sender.clone(), decrypted_json, &own_hash).await?,
                             "text_msg" => handlers::text::handle_text_msg(app.clone(), sender.clone(), decrypted_json).await?,
-                            "receipt" => handlers::system::handle_receipt(app.clone(), sender.clone(), decrypted_json).await?,
-                            "typing" => handlers::system::handle_typing(app.clone(), sender.clone(), decrypted_json).await?,
-                            "profile_update" => handlers::system::handle_profile_update(app.clone(), sender.clone(), decrypted_json).await?,
+                            "receipt" => handlers::status::handle_receipt(app.clone(), sender.clone(), decrypted_json).await?,
+                            "typing" => handlers::status::handle_typing(app.clone(), sender.clone(), decrypted_json).await?,
+                            "profile_update" => handlers::status::handle_profile_update(app.clone(), sender.clone(), decrypted_json).await?,
                             "file" | "media" => handlers::media::handle_media_msg(app.clone(), sender.clone(), decrypted_json, &net_state).await?,
                             _ => {
                                 app.emit("msg://decrypted", json!({ "sender": sender, "type": p_type, "payload": decrypted_json })).map_err(|e: tauri::Error| e.to_string())?;
