@@ -470,7 +470,9 @@ async fn run_connection_loop(app: AppHandle) {
             // Check if identity is jailed before trying to connect
             let jailed_until = if let Ok(l) = app.state::<NetworkState>().jailed_until.lock() {
                 *l
-            } else { None };
+            } else {
+                None
+            };
 
             if let Some(until) = jailed_until {
                 let now = tokio::time::Instant::now();

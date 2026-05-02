@@ -1,4 +1,4 @@
-pub mod text;
+pub mod groups;
 pub mod media;
 pub mod status;
-pub mod groups;
+pub mod text;

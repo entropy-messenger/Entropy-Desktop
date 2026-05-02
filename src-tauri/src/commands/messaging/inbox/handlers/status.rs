@@ -52,16 +52,8 @@ pub async fn handle_profile_update(
 ) -> Result<(), String> {
     let alias = decrypted_json["alias"].as_str().map(|s| s.to_string());
     let db_state = app.state::<DbState>();
-    let _ = db_set_contact_global_nickname(
-        db_state.clone(),
-        sender.clone(),
-        alias.clone(),
-    )
-    .await;
-    app.emit(
-        "contact-update",
-        json!({ "hash": sender, "alias": alias }),
-    )
-    .map_err(|e: tauri::Error| e.to_string())?;
+    let _ = db_set_contact_global_nickname(db_state.clone(), sender.clone(), alias.clone()).await;
+    app.emit("contact-update", json!({ "hash": sender, "alias": alias }))
+        .map_err(|e: tauri::Error| e.to_string())?;
     Ok(())
 }

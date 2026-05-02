@@ -1,17 +1,26 @@
+use super::super::OutgoingMedia;
 use crate::app_state::{DbState, NetworkState, OutgoingTransferInfo};
 use crate::commands::{
-    get_media_dir, internal_db_save_message, internal_dispatch_fragment, internal_send_to_network,
-    internal_signal_encrypt, DbMessage,
+    DbMessage, get_media_dir, internal_db_save_message, internal_dispatch_fragment,
+    internal_send_to_network, internal_signal_encrypt,
 };
 use base64::Engine;
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
     Key as ChaKey, XChaCha20Poly1305,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use serde_json::json;
 use std::io::{Read, Write};
 use tauri::{AppHandle, Emitter, Manager};
-use super::super::OutgoingMedia;
+
+struct MediaTransfer {
+    msg_id: String,
+    transfer_id: u32,
+    timestamp: i64,
+    file_size: u64,
+    canonical_path: Option<std::path::PathBuf>,
+    is_group: bool,
+}
 
 pub fn process_outgoing_media(
     app: AppHandle,
@@ -81,7 +90,19 @@ pub fn process_outgoing_media(
     }
 
     let recipients = vec![payload.recipient.clone()];
-    spawn_transfer_task(app, payload, msg_id.clone(), recipients, transfer_id, timestamp, file_size, canonical_path, false);
+    spawn_transfer_task(
+        app,
+        payload,
+        recipients,
+        MediaTransfer {
+            msg_id: msg_id.clone(),
+            transfer_id,
+            timestamp,
+            file_size,
+            canonical_path,
+            is_group: false,
+        },
+    );
 
     Ok(serde_json::to_value(&db_msg).unwrap())
 }
@@ -146,15 +167,32 @@ pub async fn process_outgoing_group_media(
     internal_db_save_message(&db_state, db_msg.clone()).await?;
     let _ = app.emit("msg://added", db_msg.clone());
 
-    let mut recipients = payload.group_members.clone().ok_or("Group members missing")?;
+    let mut recipients = payload
+        .group_members
+        .clone()
+        .ok_or("Group members missing")?;
     recipients.retain(|r| r != &own_id);
 
-    spawn_transfer_task(app, payload, msg_id.clone(), recipients, transfer_id, timestamp, file_size, canonical_path, true);
+    spawn_transfer_task(
+        app,
+        payload,
+        recipients,
+        MediaTransfer {
+            msg_id: msg_id.clone(),
+            transfer_id,
+            timestamp,
+            file_size,
+            canonical_path,
+            is_group: true,
+        },
+    );
 
     Ok(serde_json::to_value(&db_msg).unwrap())
 }
 
-fn validate_media_payload(payload: &OutgoingMedia) -> Result<(Option<std::path::PathBuf>, u64), String> {
+fn validate_media_payload(
+    payload: &OutgoingMedia,
+) -> Result<(Option<std::path::PathBuf>, u64), String> {
     if let Some(p) = &payload.file_path {
         let path_buf = std::path::PathBuf::from(p);
         let canonical_path = std::fs::canonicalize(&path_buf)
@@ -178,13 +216,8 @@ fn validate_media_payload(payload: &OutgoingMedia) -> Result<(Option<std::path::
 fn spawn_transfer_task(
     app: AppHandle,
     payload: OutgoingMedia,
-    msg_id: String,
     recipients: Vec<String>,
-    transfer_id: u32,
-    timestamp: i64,
-    file_size: u64,
-    canonical_path: Option<std::path::PathBuf>,
-    is_group: bool,
+    task: MediaTransfer,
 ) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -199,9 +232,9 @@ fn spawn_transfer_task(
             {
                 if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
                     active.insert(
-                        transfer_id,
+                        task.transfer_id,
                         OutgoingTransferInfo {
-                            file_path: canonical_path.clone().unwrap_or_default(),
+                            file_path: task.canonical_path.clone().unwrap_or_default(),
                             transit_key: net_key.into(),
                         },
                     );
@@ -213,35 +246,33 @@ fn spawn_transfer_task(
             let vault_cipher = XChaCha20Poly1305::new(vault_key);
 
             let media_dir = get_media_dir(&app, &db_state).unwrap();
-            let vault_path = media_dir.join(&msg_id);
+            let vault_path = media_dir.join(&task.msg_id);
             let mut vault_file = std::fs::File::create(&vault_path).unwrap();
 
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
 
-            // 1. Announcements
             let mut announcement = serde_json::json!({
                 "type": "file",
-                "id": msg_id.clone(),
-                "transfer_id": transfer_id,
-                "size": file_size,
+                "id": task.msg_id.clone(),
+                "transfer_id": task.transfer_id,
+                "size": task.file_size,
                 "msg_type": payload.msg_type.as_deref().unwrap_or("file"),
                 "duration": payload.duration,
                 "thumbnail": payload.thumbnail,
                 "replyTo": payload.reply_to,
-                "timestamp": timestamp,
+                "timestamp": task.timestamp,
                 "bundle": {
                     "key": key_b64,
                     "file_name": payload.file_name,
                     "file_type": payload.file_type
                 }
             });
-            if is_group {
-                if let Some(obj) = announcement.as_object_mut() {
+            if task.is_group
+                && let Some(obj) = announcement.as_object_mut() {
                     obj.insert("isGroup".to_string(), json!(true));
                     obj.insert("groupId".to_string(), json!(payload.recipient));
                     obj.insert("groupName".to_string(), json!(payload.group_name));
                 }
-            }
 
             for recipient in &recipients {
                 if let Ok(encrypted) = internal_signal_encrypt(
@@ -257,19 +288,19 @@ fn spawn_transfer_task(
                         app.clone(),
                         &net_state,
                         Some(routing_hash),
-                        Some(msg_id.clone()),
+                        Some(task.msg_id.clone()),
                         None,
                         Some(encrypted.to_string().into_bytes()),
                         true,
                         false,
-                        Some(transfer_id),
+                        Some(task.transfer_id),
                         true,
                     )
                     .await;
                 }
             }
 
-            let mut reader: Box<dyn std::io::Read + Send> = if let Some(ref p) = canonical_path {
+            let mut reader: Box<dyn std::io::Read + Send> = if let Some(ref p) = task.canonical_path {
                 Box::new(std::io::BufReader::new(std::fs::File::open(p).unwrap()))
             } else if let Some(ref d) = payload.file_data {
                 Box::new(std::io::Cursor::new(d.to_vec()))
@@ -279,7 +310,7 @@ fn spawn_transfer_task(
 
             let mut fragment_index = 0;
             let mut buffer = vec![0u8; 1279];
-            let total_fragments = (file_size as f64 / 1279.0).ceil() as u32;
+            let total_fragments = (task.file_size as f64 / 1279.0).ceil() as u32;
 
             loop {
                 let mut n = 0;
@@ -299,7 +330,7 @@ fn spawn_transfer_task(
                         Err(e) => {
                             let _ = app.emit(
                                 "network-bin-error",
-                                json!({ "msg_id": msg_id.clone(), "error": format!("Disk read error: {}", e) }),
+                                json!({ "msg_id": task.msg_id.clone(), "error": format!("Disk read error: {}", e) }),
                             );
                             return;
                         }
@@ -335,8 +366,8 @@ fn spawn_transfer_task(
                         app.clone(),
                         &net_state,
                         routing_hash,
-                        Some(msg_id.clone()),
-                        transfer_id,
+                        Some(task.msg_id.clone()),
+                        task.transfer_id,
                         fragment_index,
                         total_fragments,
                         &packet,
@@ -350,21 +381,19 @@ fn spawn_transfer_task(
             }
             let _ = vault_file.sync_all();
 
-            if let Some(thumb_b64) = &payload.thumbnail {
-                if let Ok(thumb_bytes) = base64::engine::general_purpose::STANDARD.decode(thumb_b64)
+            if let Some(thumb_b64) = &payload.thumbnail
+                && let Ok(thumb_bytes) = base64::engine::general_purpose::STANDARD.decode(thumb_b64)
                 {
-                    let thumb_path = media_dir.join(format!("{}_thumb", msg_id));
+                    let thumb_path = media_dir.join(format!("{}_thumb", task.msg_id));
                     let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                    if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, thumb_bytes.as_slice()) {
-                        if let Ok(mut f) = std::fs::File::create(&thumb_path) {
+                    if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, thumb_bytes.as_slice())
+                        && let Ok(mut f) = std::fs::File::create(&thumb_path) {
                             let _ = f
                                 .write_all(&v_nonce)
                                 .and_then(|_| f.write_all(&v_cipher))
                                 .and_then(|_| f.sync_all());
                         }
-                    }
                 }
-            }
 
             for recipient in &recipients {
                 if let Ok(encrypted) = internal_signal_encrypt(
@@ -380,42 +409,41 @@ fn spawn_transfer_task(
                         app.clone(),
                         &net_state,
                         Some(routing_hash),
-                        Some(msg_id.clone()),
+                        Some(task.msg_id.clone()),
                         None,
                         Some(encrypted.to_string().into_bytes()),
                         true,
                         false,
-                        Some(transfer_id),
+                        Some(task.transfer_id),
                         true,
                     )
                     .await;
                 }
             }
 
-            // 5. Success Updates
             let final_attachment_obj = json!({
                 "fileName": payload.file_name,
                 "fileType": payload.file_type,
-                "size": file_size,
+                "size": task.file_size,
                 "duration": payload.duration,
                 "thumbnail": payload.thumbnail,
-                "originalPath": canonical_path.as_ref().map(|p| p.to_string_lossy().to_string()),
-                "transferId": transfer_id,
+                "originalPath": task.canonical_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "transferId": task.transfer_id,
                 "vaultPath": vault_path.to_string_lossy().to_string()
             });
 
             if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute(
                     "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1",
-                    rusqlite::params![msg_id, final_attachment_obj.to_string()],
+                    rusqlite::params![task.msg_id, final_attachment_obj.to_string()],
                 );
             }
             let _ = app.emit("msg://status", json!({
-                "id": msg_id, "status": "sent", "chatAddress": payload.recipient, "attachment": final_attachment_obj
+                "id": task.msg_id, "status": "sent", "chatAddress": payload.recipient, "attachment": final_attachment_obj
             }));
 
             if let Ok(mut active) = net_state.active_outgoing_transfers.lock() {
-                active.remove(&transfer_id);
+                active.remove(&task.transfer_id);
             }
         });
     });

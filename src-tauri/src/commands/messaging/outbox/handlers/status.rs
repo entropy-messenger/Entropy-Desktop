@@ -66,7 +66,7 @@ pub async fn send_receipt(
                 "SELECT is_group FROM chats WHERE address = ?1",
                 [&peer_hash],
                 |r: &rusqlite::Row| r.get::<_, i32>(0),
-                )
+            )
             .unwrap_or(0)
             != 0;
         if is_group {

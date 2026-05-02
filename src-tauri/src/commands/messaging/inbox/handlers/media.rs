@@ -1,13 +1,13 @@
 use crate::app_state::{DbState, NetworkState, PendingMediaMetadata};
+use crate::commands::messaging::inbox::internal_send_volatile;
 use crate::commands::{
     DbMessage, get_media_dir, internal_db_save_message, internal_signal_encrypt,
 };
-use crate::commands::messaging::inbox::internal_send_volatile;
+use base64::Engine;
 use chacha20poly1305::{
     Key, XChaCha20Poly1305, XNonce,
     aead::{Aead, AeadCore, KeyInit, OsRng},
 };
-use base64::Engine;
 use rusqlite::params;
 use serde_json::json;
 use std::io::{Read, Write};
@@ -58,25 +58,21 @@ pub async fn handle_media_msg(
     let key_str = bundle["key"].as_str().unwrap_or_default().to_string();
 
     // 1. Handle thumbnail saving to vault
-    if let Some(thumb_b64) = decrypted_json["thumbnail"].as_str() {
-        if let Ok(thumb_bytes) =
-            base64::engine::general_purpose::STANDARD.decode(thumb_b64)
+    if let Some(thumb_b64) = decrypted_json["thumbnail"].as_str()
+        && let Ok(thumb_bytes) = base64::engine::general_purpose::STANDARD.decode(thumb_b64)
+        && let Ok(vault_key_bytes) = db_state.media_key.lock().map(|l| l.clone())
+        && let Some(vk) = vault_key_bytes
+    {
+        let vault_key = Key::from_slice(&vk);
+        let vault_cipher = XChaCha20Poly1305::new(vault_key);
+        let thumb_path = media_dir.join(format!("{}_thumb", msg_id));
+        let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, thumb_bytes.as_slice())
+            && let Ok(mut f) = std::fs::File::create(&thumb_path)
         {
-            if let Ok(vault_key_bytes) = db_state.media_key.lock().map(|l| l.clone()) {
-                if let Some(vk) = vault_key_bytes {
-                    let vault_key = Key::from_slice(&vk);
-                    let vault_cipher = XChaCha20Poly1305::new(vault_key);
-                    let thumb_path = media_dir.join(format!("{}_thumb", msg_id));
-                    let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-                    if let Ok(v_cipher) = vault_cipher.encrypt(&v_nonce, thumb_bytes.as_slice()) {
-                        if let Ok(mut f) = std::fs::File::create(&thumb_path) {
-                            let _ = f.write_all(&v_nonce);
-                            let _ = f.write_all(&v_cipher);
-                            let _ = f.sync_all();
-                        }
-                    }
-                }
-            }
+            let _ = f.write_all(&v_nonce);
+            let _ = f.write_all(&v_cipher);
+            let _ = f.sync_all();
         }
     }
 
@@ -140,17 +136,13 @@ pub async fn handle_media_msg(
                     "msg_id": msg_id.clone()
                 });
 
-                if let Ok(encrypted) = internal_signal_encrypt(
-                    app.clone(),
-                    &net_state,
-                    &sender,
-                    resend_req.to_string(),
-                )
-                .await
+                if let Ok(encrypted) =
+                    internal_signal_encrypt(app.clone(), net_state, &sender, resend_req.to_string())
+                        .await
                 {
                     let _ = crate::commands::network::transit::internal_send_to_network(
                         app.clone(),
-                        &net_state,
+                        net_state,
                         Some(sender.clone()),
                         None,
                         None,
@@ -303,8 +295,8 @@ pub async fn handle_media_msg(
 
     internal_db_save_message(&db_state, db_msg.clone()).await?;
 
-    let mut final_json = serde_json::to_value(&db_msg)
-        .map_err(|e: serde_json::Error| e.to_string())?;
+    let mut final_json =
+        serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
     if is_group && let Some(obj) = final_json.as_object_mut() {
         let _ = obj.insert("chatAlias".to_string(), json!(group_name));
         if let Some(members) = decrypted_json["groupMembers"].as_array() {
@@ -321,21 +313,11 @@ pub async fn handle_media_msg(
             "msgIds": vec![msg_id],
             "status": "delivered"
         });
-        if let Ok(encrypted) = internal_signal_encrypt(
-            app.clone(),
-            &net_state,
-            &sender,
-            receipt_payload.to_string(),
-        )
-        .await
+        if let Ok(encrypted) =
+            internal_signal_encrypt(app.clone(), net_state, &sender, receipt_payload.to_string())
+                .await
         {
-            let _ = internal_send_volatile(
-                app.clone(),
-                &net_state,
-                &sender,
-                encrypted,
-            )
-            .await;
+            let _ = internal_send_volatile(app.clone(), net_state, &sender, encrypted).await;
         }
     }
     Ok(())
@@ -423,10 +405,7 @@ pub async fn handle_media_completion(
     Ok(())
 }
 
-pub fn handle_vault_retry_bridge(
-    app: AppHandle,
-    msg_id: String,
-) -> Result<(), String> {
+pub fn handle_vault_retry_bridge(app: AppHandle, msg_id: String) -> Result<(), String> {
     let db_state = app.state::<DbState>();
     let net_state = app.state::<NetworkState>();
 
@@ -504,7 +483,8 @@ pub fn handle_vault_retry_bridge(
         conn.execute(
             "UPDATE messages SET status = 'sent', error = NULL WHERE id = ?1",
             rusqlite::params![msg_id],
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     let _ = app.emit(

@@ -1,6 +1,6 @@
 use crate::app_state::{DbState, NetworkState};
-use crate::commands::{DbMessage, internal_db_save_message, internal_signal_encrypt};
 use crate::commands::messaging::inbox::internal_send_volatile;
+use crate::commands::{DbMessage, internal_db_save_message, internal_signal_encrypt};
 use rusqlite::params;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -68,16 +68,16 @@ pub async fn handle_text_msg(
     }
 
     internal_db_save_message(&db_state, db_msg.clone()).await?;
-    let mut final_json = serde_json::to_value(&db_msg)
-        .map_err(|e: serde_json::Error| e.to_string())?;
-    
+    let mut final_json =
+        serde_json::to_value(&db_msg).map_err(|e: serde_json::Error| e.to_string())?;
+
     if is_group && let Some(obj) = final_json.as_object_mut() {
         let _ = obj.insert("chatAlias".to_string(), json!(group_name));
         if let Some(members) = decrypted_json["groupMembers"].as_array() {
             let _ = obj.insert("chatMembers".to_string(), json!(members));
         }
     }
-    
+
     app.emit("msg://added", final_json.clone())
         .map_err(|e: tauri::Error| e.to_string())?;
 
@@ -97,15 +97,9 @@ pub async fn handle_text_msg(
         )
         .await
         {
-            let _ = internal_send_volatile(
-                app.clone(),
-                &net_state,
-                &sender,
-                encrypted,
-            )
-            .await;
+            let _ = internal_send_volatile(app.clone(), &net_state, &sender, encrypted).await;
         }
     }
-    
+
     Ok(())
 }

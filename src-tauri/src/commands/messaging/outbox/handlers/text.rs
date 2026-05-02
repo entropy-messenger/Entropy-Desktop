@@ -1,3 +1,4 @@
+use super::super::OutgoingText;
 use crate::app_state::{DbState, NetworkState};
 use crate::commands::{
     DbMessage, internal_db_save_message, internal_send_to_network, internal_signal_encrypt,
@@ -5,7 +6,6 @@ use crate::commands::{
 use rusqlite::params;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
-use super::super::{OutgoingText};
 
 pub async fn process_outgoing_text(
     app: AppHandle,

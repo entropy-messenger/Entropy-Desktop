@@ -90,6 +90,12 @@
             }}
             role="button"
             tabindex="0"
+            onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    if (selectionMode) { toggleSelect(msg.id); } 
+                    else if (isMobile) { showActions = !showActions; }
+                }
+            }}
             class="relative rounded-2xl shadow-sm transition-all duration-200 overflow-hidden cursor-default active:scale-[0.99] max-w-full
                 {msg.type === 'voice_note' ? 'p-1.5 px-2' : (msg.type === 'file' ? 'p-1' : 'pt-1.5 px-4 pb-1.5')}
                 {msg.isMine ? (msg.isStarred ? 'bg-entropy-primary-dim ring-1 ring-yellow-400/60 shadow-[0_0_10px_rgba(250,204,21,0.15)]' : 'bg-entropy-primary-dim') : (msg.isStarred ? 'bg-entropy-surface-light ring-1 ring-yellow-500/40 shadow-[0_0_10px_rgba(250,204,21,0.1)]' : 'bg-entropy-surface-light')}

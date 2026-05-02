@@ -187,6 +187,10 @@
                 class="relative group/media overflow-hidden rounded-[0.9rem] border border-white/10 shadow-xl bg-entropy-surface flex flex-col w-full sm:w-[320px] transition-all hover:shadow-2xl active:scale-[0.98]"
                 oncontextmenu={openContextMenu}
                 onclick={triggerFullView}
+                onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && triggerFullView(e as any)}
+                role="button"
+                tabindex="0"
+                aria-label="View media full screen"
             >
                 <div class="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden cursor-pointer">
                     {#if isImage}

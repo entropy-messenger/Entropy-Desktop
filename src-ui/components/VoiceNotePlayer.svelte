@@ -14,7 +14,7 @@
   let currentTime = $state(0);
   let duration = $state(initialDuration);
   $effect(() => {
-    if (initialDuration > 0) duration = initialDuration;
+    duration = initialDuration;
   });
   let playbackSpeed = $state(1);
   let waveformData = $state<number[]>([]);
@@ -272,8 +272,9 @@
       <div 
         class="relative h-8 w-full cursor-pointer flex items-center" 
         onclick={handleSeek}
-        onkeypress={(e) => e.key === 'Enter' && togglePlay()}
+        onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && togglePlay()}
         role="button"
+        aria-label="Seek audio"
         tabindex="0"
       >
           <canvas 

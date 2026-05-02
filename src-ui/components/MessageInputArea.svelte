@@ -197,7 +197,7 @@
                                 </div>
                             {/if}
                             <div class="min-w-0">
-                                <div class="text-[10px] font-black text-entropy-primary uppercase tracking-widest mb-1">Staged for Send</div>
+                                <div class="text-[10px] font-black text-entropy-primary uppercase tracking-widest mb-1">SEND</div>
                                 <div class="text-xs font-bold text-entropy-text-primary truncate">{stagedFile.name}</div>
                             </div>
                         </div>
@@ -218,7 +218,7 @@
                                 }}
                                 class="px-6 py-2 bg-entropy-primary text-white rounded-xl text-[10px] font-black uppercase tracking-tighter hover:bg-entropy-primary-dim transition-all active:scale-95 shadow-lg"
                             >
-                                Yes (Send)
+                                Send
                             </button>
                         </div>
                     </div>

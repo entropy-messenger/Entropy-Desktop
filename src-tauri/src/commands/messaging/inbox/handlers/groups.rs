@@ -134,7 +134,7 @@ pub async fn handle_group_invite(
         }),
     )
     .map_err(|e: tauri::Error| e.to_string())?;
-    
+
     Ok(())
 }
 
@@ -171,13 +171,13 @@ pub async fn handle_group_leave(
     internal_db_save_message(&db_state, sys_msg.clone()).await?;
     app.emit("msg://added", json!(sys_msg))
         .map_err(|e: tauri::Error| e.to_string())?;
-    
+
     app.emit(
         "msg://group_leave",
         json!({ "groupId": gid, "member": leaver }),
     )
     .map_err(|e: tauri::Error| e.to_string())?;
-    
+
     Ok(())
 }
 
@@ -220,8 +220,7 @@ pub async fn handle_group_update(
 
     {
         let mut system_messages = Vec::new();
-        let m_strings: Vec<String> = if let Some(members_val) =
-            decrypted_json["members"].as_array()
+        let m_strings: Vec<String> = if let Some(members_val) = decrypted_json["members"].as_array()
         {
             members_val
                 .iter()
@@ -253,14 +252,17 @@ pub async fn handle_group_update(
                 }
             } else if !m_strings.is_empty() {
                 let mut current_m = Vec::new();
-                if let Ok(mut stmt) = conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
-                    && let Ok(rows) = stmt.query_map(params![&gid], |row: &rusqlite::Row| row.get::<_, String>(0)) {
+                if let Ok(mut stmt) =
+                    conn.prepare("SELECT member_hash FROM chat_members WHERE chat_address = ?1")
+                    && let Ok(rows) =
+                        stmt.query_map(params![&gid], |row: &rusqlite::Row| row.get::<_, String>(0))
+                {
                     for m in rows.flatten() {
                         current_m.push(m);
                     }
                 }
                 for m in &m_strings {
-                    if !current_m.contains(m) && m != &own_hash {
+                    if !current_m.contains(m) && m != own_hash {
                         let content = if m == &sender {
                             format!("{} joined the group", &m[0..8.min(m.len())])
                         } else {
@@ -276,13 +278,19 @@ pub async fn handle_group_update(
             }
 
             if !m_strings.is_empty() {
-                let _ = conn.execute("DELETE FROM chat_members WHERE chat_address = ?1", params![gid]);
+                let _ = conn.execute(
+                    "DELETE FROM chat_members WHERE chat_address = ?1",
+                    params![gid],
+                );
                 for m in m_strings {
                     let _ = conn.execute("INSERT OR IGNORE INTO chat_members (chat_address, member_hash) VALUES (?1, ?2)", params![gid, m]);
                 }
             }
             if let Some(name) = group_name {
-                let _ = conn.execute("UPDATE chats SET alias = ?1 WHERE address = ?2", params![name, gid]);
+                let _ = conn.execute(
+                    "UPDATE chats SET alias = ?1 WHERE address = ?2",
+                    params![name, gid],
+                );
             }
         }
 
@@ -316,6 +324,6 @@ pub async fn handle_group_update(
         json!({ "groupId": gid, "name": group_name }),
     )
     .map_err(|e: tauri::Error| e.to_string())?;
-    
+
     Ok(())
 }
