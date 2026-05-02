@@ -1186,6 +1186,7 @@ dependencies = [
  "r2d2",
  "rand 0.9.2",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -4229,9 +4230,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.36"
+version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c665f33d38cea657d9614f766881e4d510e0eda4239891eea56b4cadcf01801b"
+checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
 dependencies = [
  "aws-lc-rs",
  "log",
