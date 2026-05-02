@@ -6,7 +6,7 @@ authors = ["Moyzy<moyzy@entropymessenger.com>"]
 edition = "2024"
 
 [lib]
-name = "entropy"
+name = "entropy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 
