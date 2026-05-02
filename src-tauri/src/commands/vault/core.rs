@@ -374,6 +374,16 @@ pub async fn init_vault(
         }
     }
 
+    let flag_path = app_data_dir.join(".restore_cleanup_pending");
+    if flag_path.exists() {
+        let _ = conn.execute_batch("
+            DELETE FROM signal_sessions;
+            DELETE FROM signal_kyber_base_keys_seen;
+            DELETE FROM pending_outbox;
+        ");
+        let _ = std::fs::remove_file(&flag_path);
+    }
+
     // Media Encryption Key Initialization
     let media_key = {
         let conn = pool.get().map_err(|e| e.to_string())?;

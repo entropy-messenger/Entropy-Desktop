@@ -230,6 +230,9 @@ pub async fn import_database(
         }
     }
 
+    let flag_path = app_dir.join(".restore_cleanup_pending");
+    let _ = std::fs::write(&flag_path, "1");
+
     app.restart();
 
     #[allow(unreachable_code)]
