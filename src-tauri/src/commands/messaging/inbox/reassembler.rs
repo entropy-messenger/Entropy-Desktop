@@ -69,7 +69,7 @@ pub async fn internal_process_fragments(
 
                     match res {
                         Ok(_) => break,
-                        Err(e) if retries < max_retries => {
+                        Err(_e) if retries < max_retries => {
                             retries += 1;
                             std::thread::sleep(std::time::Duration::from_millis(10 * retries));
                             continue;

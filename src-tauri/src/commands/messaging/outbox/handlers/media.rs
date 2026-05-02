@@ -323,7 +323,7 @@ fn spawn_transfer_task(
                             read_retries = 0;
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(e) if read_retries < 3 => {
+                        Err(_e) if read_retries < 3 => {
                             read_retries += 1;
                             std::thread::sleep(std::time::Duration::from_millis(50));
                         }

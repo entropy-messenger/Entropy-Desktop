@@ -554,7 +554,7 @@ pub fn internal_vault_bridge(
                     .and_then(|_| dst.write_all(&v_cipher))
                 {
                     Ok(_) => break,
-                    Err(e) if retries < 3 => {
+                    Err(_e) if retries < 3 => {
                         retries += 1;
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
@@ -583,7 +583,7 @@ pub fn internal_vault_bridge(
     loop {
         match dst.sync_all() {
             Ok(_) => break,
-            Err(e) if retries < 3 => {
+            Err(_e) if retries < 3 => {
                 retries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }

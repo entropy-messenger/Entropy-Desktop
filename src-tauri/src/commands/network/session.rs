@@ -21,7 +21,7 @@ use crate::signal_store::SqliteSignalStore;
 
 use super::pacing::{PACKET_SIZE, send_paced_json};
 use super::transit::flush_outbox;
-const RELAY_URL: &str = "ws://localhost:8080/ws";
+const RELAY_URL: &str = "ws://relay.entropymessenger.com/ws";
 
 #[tauri::command]
 pub async fn revoke_session_token(
@@ -47,8 +47,6 @@ pub async fn revoke_session_token(
             })
             .await;
     }
-
-    // Always clear local even if server message fails to send
     if let Ok(mut l) = state.session_token.lock() {
         *l = None;
     }
