@@ -4,6 +4,8 @@ All notable changes to the Entropy Desktop Application will be documented in thi
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.2.1] - 2026-05-04
+-Fix CSP issue preventing thumbnail generation and media streaming
 
 ## [0.2.0] - 2026-05-02
 - Message synchronization after database restore.
