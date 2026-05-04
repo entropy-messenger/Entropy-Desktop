@@ -21,7 +21,7 @@
             }
         ],
         "security": {
-            "csp": "default-src 'self' tauri: asset: blob:; connect-src 'self' tauri: ipc: ws: wss:; img-src 'self' tauri: asset: blob: data:; font-src 'self' tauri: data:; media-src 'self' blob:; script-src 'self' tauri:; style-src 'self' 'unsafe-inline' tauri:;",
+            "csp": "default-src 'self' tauri: asset: blob:; connect-src 'self' tauri: ipc: ws: wss: http://127.0.0.1:*; img-src 'self' tauri: asset: blob: data: http://127.0.0.1:*; font-src 'self' tauri: data:; media-src 'self' blob: http://127.0.0.1:*; script-src 'self' tauri:; style-src 'self' 'unsafe-inline' tauri:;",
             "capabilities": [
                 "main"
             ]

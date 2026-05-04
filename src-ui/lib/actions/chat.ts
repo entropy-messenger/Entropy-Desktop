@@ -19,7 +19,7 @@ export const getMediaUrl = async (id: string, type: string): Promise<string> => 
             return "";
         }
     }
-    return `http://localhost:${proxyPort}/media/${id}?type=${encodeURIComponent(type)}`;
+    return `http://127.0.0.1:${proxyPort}/media/${id}?type=${encodeURIComponent(type)}`;
 };
 
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
