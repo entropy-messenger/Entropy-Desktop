@@ -67,10 +67,28 @@ export class NetworkLayer {
                 ...m,
                 isMine: m.senderHash === state.identityHash,
                 attachment: safeParse(m.attachmentJson),
-                replyTo: safeParse(m.replyToJson)
+                replyTo: safeParse(m.replyToJson),
+                reactions: safeParse(m.reactionsJson)
             };
 
             addMessage(m.chatAddress, uiMsg);
+        });
+
+        listen('msg://reaction', (event) => {
+            const { targetMsgId, reactions } = event.payload as any;
+            import('./stores/user').then(({ messageStore }) => {
+                messageStore.update(mStore => {
+                    for (const chatAddress in mStore) {
+                        const idx = mStore[chatAddress].findIndex(m => m.id === targetMsgId);
+                        if (idx !== -1) {
+                            const msgs = [...mStore[chatAddress]];
+                            msgs[idx] = { ...msgs[idx], reactions };
+                            return { ...mStore, [chatAddress]: msgs };
+                        }
+                    }
+                    return mStore;
+                });
+            });
         });
 
         listen('msg://status', (event) => {

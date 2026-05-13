@@ -259,6 +259,7 @@ pub async fn handle_media_msg(
         reply_to_json: decrypted_json["replyTo"]
             .as_object()
             .map(|r| serde_json::to_string(r).unwrap_or_default()),
+        reactions_json: None,
     };
 
     // Auto-create/rename chat for media too

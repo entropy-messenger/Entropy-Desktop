@@ -107,6 +107,7 @@ const MIGRATIONS: &[&str] = &[
         is_starred INTEGER DEFAULT 0,
         is_pinned INTEGER DEFAULT 0,
         reply_to_json TEXT,
+        reactions_json TEXT,
         FOREIGN KEY(chat_address) REFERENCES chats(address)
     );
 
@@ -156,6 +157,8 @@ const MIGRATIONS: &[&str] = &[
         VALUES('delete', old.rowid, old.id, old.content, old.chat_address);
     END;
     ",
+    // Version 2: Reaction Emojis — adds reactions_json to existing databases
+    "ALTER TABLE messages ADD COLUMN reactions_json TEXT;",
 ];
 
 pub fn get_db_filename() -> String {

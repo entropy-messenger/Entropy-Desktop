@@ -88,6 +88,7 @@ pub async fn handle_group_invite(
                     is_starred: false,
                     is_group: true,
                     reply_to_json: None,
+            reactions_json: None,
                 };
                 if internal_db_save_message(&db_state, sys_msg.clone())
                     .await
@@ -117,6 +118,7 @@ pub async fn handle_group_invite(
             is_starred: false,
             is_group: true,
             reply_to_json: None,
+            reactions_json: None,
         };
         internal_db_save_message(&db_state, sys_msg.clone()).await?;
         app.emit("msg://added", json!(sys_msg))
@@ -167,6 +169,7 @@ pub async fn handle_group_leave(
         is_starred: false,
         is_group: true,
         reply_to_json: None,
+        reactions_json: None,
     };
     internal_db_save_message(&db_state, sys_msg.clone()).await?;
     app.emit("msg://added", json!(sys_msg))
@@ -213,6 +216,7 @@ pub async fn handle_group_update(
             is_starred: false,
             is_group: true,
             reply_to_json: None,
+            reactions_json: None,
         };
         let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
         let _ = app.emit("msg://added", json!(sys_msg));
@@ -309,6 +313,7 @@ pub async fn handle_group_update(
                 is_starred: false,
                 is_group: true,
                 reply_to_json: None,
+            reactions_json: None,
             };
             if internal_db_save_message(&db_state, sys_msg.clone())
                 .await

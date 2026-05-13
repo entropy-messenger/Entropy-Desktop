@@ -46,6 +46,7 @@ pub async fn process_outgoing_text(
             .reply_to
             .as_ref()
             .map(|r| serde_json::to_string(&r).unwrap_or_default()),
+        reactions_json: None,
     };
 
     internal_db_save_message(&db_state, db_msg.clone()).await?;
@@ -161,6 +162,7 @@ pub async fn process_outgoing_group_text(
             .reply_to
             .as_ref()
             .map(|r| serde_json::to_string(&r).unwrap_or_default()),
+        reactions_json: None,
     };
 
     internal_db_save_message(&db_state, db_msg.clone()).await?;

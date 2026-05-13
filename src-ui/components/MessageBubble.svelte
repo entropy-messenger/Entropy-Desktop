@@ -6,6 +6,7 @@
     } from 'lucide-svelte';
     import { userStore } from '../lib/stores/user';
     import { resolveIdentity } from '../lib/actions/contacts';
+    import { sendReaction } from '../lib/actions/chat';
     import AttachmentRenderer from './AttachmentRenderer.svelte';
     import MessageContent from './MessageContent.svelte';
     import { onMount } from 'svelte';
@@ -33,7 +34,9 @@
     }>();
 
     let showActions = $state(false);
+    let showReactionPicker = $state(false);
     const isSelected = $derived(selectedIds.includes(msg.id));
+    const PRESET_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
     
     /**
      * Deterministically derives a vibrant, readable color from a sender's hash.
@@ -129,6 +132,44 @@
             >
                 <button onclick={() => { setReplyingTo(msg); if(isMobile) showActions = false; }} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-primary shadow-md transition active:scale-90" title="Reply"><LucideReply size={isMobile ? 16 : 14} /></button>
                 <button onclick={() => { toggleStar(activeChat.peerHash, msg.id); if(isMobile) showActions = false; }} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-yellow-500 shadow-md transition active:scale-90" title="Star"><LucideStar size={isMobile ? 16 : 14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
+                <button
+                    onclick={() => { showReactionPicker = !showReactionPicker; showActions = false; }}
+                    class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-accent shadow-md transition active:scale-90"
+                    title="React"
+                >😊</button>
+            </div>
+
+            {#if showReactionPicker}
+                <div
+                    class="absolute {msg.isMine ? 'right-0' : 'left-0'} -top-10 flex items-center space-x-1 bg-entropy-surface/95 backdrop-blur-xl border border-entropy-border/10 rounded-2xl px-2 py-1.5 shadow-xl z-20 animate-in fade-in slide-in-from-bottom-2 duration-200"
+                >
+                    {#each PRESET_EMOJIS as emoji}
+                        <button
+                            onclick={() => { sendReaction(activeChat.peerHash, msg.id, emoji); showReactionPicker = false; }}
+                            class="text-lg hover:scale-125 active:scale-95 transition-transform duration-150 leading-none"
+                        >{emoji}</button>
+                    {/each}
+                </div>
+            {/if}
+        {/if}
+
+        {#if msg.reactions && Object.keys(msg.reactions).length > 0}
+            <div class="flex flex-wrap gap-1 mt-1 {msg.isMine ? 'justify-end' : 'justify-start'}">
+                {#each Object.entries(msg.reactions) as [emoji, senders]}
+                    {#if senders.length > 0}
+                        {@const iMine = senders.includes($userStore.identityHash || '')}
+                        <button
+                            onclick={() => sendReaction(activeChat.peerHash, msg.id, emoji)}
+                            class="flex items-center space-x-0.5 px-2 py-0.5 rounded-full text-xs font-bold border transition-all active:scale-95
+                                {iMine
+                                    ? 'bg-entropy-primary/20 border-entropy-primary/40 text-entropy-primary'
+                                    : 'bg-entropy-surface-light border-entropy-border/10 text-entropy-text-secondary'}"
+                        >
+                            <span>{emoji}</span>
+                            <span class="text-[10px]">{senders.length}</span>
+                        </button>
+                    {/if}
+                {/each}
             </div>
         {/if}
     </div>

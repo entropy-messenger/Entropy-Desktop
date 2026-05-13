@@ -89,6 +89,7 @@ pub async fn create_group(
             is_starred: false,
             is_group: true,
             reply_to_json: None,
+            reactions_json: None,
         };
         let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
         let _ = app.emit("msg://added", json!(sys_msg));
@@ -198,6 +199,7 @@ pub async fn add_to_group(
             is_starred: false,
             is_group: true,
             reply_to_json: None,
+            reactions_json: None,
         };
         let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
         let _ = app.emit("msg://added", json!(sys_msg));

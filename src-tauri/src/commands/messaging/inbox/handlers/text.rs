@@ -47,6 +47,7 @@ pub async fn handle_text_msg(
         reply_to_json: decrypted_json["replyTo"]
             .as_object()
             .map(|r| serde_json::to_string(r).unwrap_or_default()),
+        reactions_json: None,
     };
 
     let db_state = app.state::<DbState>();

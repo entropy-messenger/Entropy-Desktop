@@ -39,6 +39,7 @@ export interface Message {
         senderAlias?: string;
         type: Message['type'];
     };
+    reactions?: Record<string, string[]>; // emoji → [senderHash, ...]
 }
 
 export interface PrivacySettings {

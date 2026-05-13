@@ -117,6 +117,7 @@ pub fn run() {
             commands::process_outgoing_group_text,
             commands::process_outgoing_media,
             commands::process_outgoing_group_media,
+            commands::process_outgoing_reaction,
             commands::vault_retry_bridge
         ])
         .setup(|app| {

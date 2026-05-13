@@ -24,6 +24,25 @@ export const getMediaUrl = async (id: string, type: string): Promise<string> => 
 
 export const setReplyingTo = (msg: Message | null) => userStore.update(s => ({ ...s, replyingTo: msg }));
 
+export const sendReaction = async (peerHashRaw: string, targetMsgId: string, emoji: string) => {
+    const peerHash = peerHashRaw.toLowerCase();
+    const state = get(userStore);
+    const chat = state.chats[peerHash];
+    try {
+        await invoke('process_outgoing_reaction', {
+            payload: {
+                recipient: peerHash,
+                targetMsgId,
+                emoji,
+                isGroup: !!chat?.isGroup,
+                groupMembers: chat?.members || null,
+            }
+        });
+    } catch (e) {
+        // Reaction send failed
+    }
+};
+
 /**
  * Force a reactive UI refresh for a specific message.
  * Used when a background process (like media re-encryption) completes.
@@ -394,7 +413,8 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0,
             status: m.status as any,
             attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
             isStarred: !!m.isStarred,
-            replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
+            replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined,
+            reactions: m.reactionsJson ? JSON.parse(m.reactionsJson) : undefined
         }));
 
         messageStore.update(mStore => {
@@ -470,7 +490,8 @@ export const loadStarredMessages = async () => {
                     status: m.status as any,
                     attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
                     isStarred: !!m.isStarred,
-                    replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined
+                    replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined,
+                    reactions: m.reactionsJson ? JSON.parse(m.reactionsJson) : undefined
                 };
 
                 if (!newStore[peerHash]) newStore[peerHash] = [];

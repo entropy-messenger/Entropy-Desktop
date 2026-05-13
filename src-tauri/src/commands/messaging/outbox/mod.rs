@@ -111,3 +111,24 @@ pub async fn send_profile_update(
 ) -> Result<(), String> {
     handlers::status::send_profile_update(app, db_state, net_state, peer_hash, alias).await
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingReaction {
+    pub recipient: String,
+    pub target_msg_id: String,
+    pub emoji: String,
+    #[serde(rename = "isGroup", default)]
+    pub is_group: bool,
+    pub group_members: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn process_outgoing_reaction(
+    app: AppHandle,
+    db_state: State<'_, DbState>,
+    net_state: State<'_, NetworkState>,
+    payload: OutgoingReaction,
+) -> Result<(), String> {
+    handlers::reaction::process_outgoing_reaction(app, db_state, net_state, payload).await
+}

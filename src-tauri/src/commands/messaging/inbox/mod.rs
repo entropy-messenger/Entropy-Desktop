@@ -274,6 +274,14 @@ pub async fn process_incoming_binary(
                                 )
                                 .await?
                             }
+                            "reaction" => {
+                                handlers::reaction::handle_reaction(
+                                    app.clone(),
+                                    sender.clone(),
+                                    decrypted_json,
+                                )
+                                .await?
+                            }
                             "file" | "media" => {
                                 handlers::media::handle_media_msg(
                                     app.clone(),

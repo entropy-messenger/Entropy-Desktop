@@ -109,10 +109,10 @@ pub async fn db_get_messages(
     let conn = state.get_conn()?;
 
     let sql = if include_attachments {
-        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, is_group, reply_to_json
+        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, is_group, reply_to_json, reactions_json
          FROM messages WHERE chat_address = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
     } else {
-        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, NULL, is_starred, is_group, reply_to_json
+        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, NULL, is_starred, is_group, reply_to_json, reactions_json
          FROM messages WHERE chat_address = ?1 ORDER BY timestamp DESC LIMIT ?2 OFFSET ?3"
     };
 
@@ -132,6 +132,7 @@ pub async fn db_get_messages(
                 is_starred: row.get::<_, i32>(8)? != 0,
                 is_group: row.get::<_, i32>(9)? != 0,
                 reply_to_json: row.get(10)?,
+                reactions_json: row.get(11)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -173,6 +174,7 @@ pub async fn db_search_messages(
                 is_starred: row.get::<_, i32>(8)? != 0,
                 is_group: row.get::<_, i32>(9)? != 0,
                 reply_to_json: row.get(10)?,
+                reactions_json: None,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -455,7 +457,7 @@ pub async fn db_get_starred_messages(
 ) -> Result<Vec<Value>, String> {
     let conn = state.get_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json
+        "SELECT id, chat_address, sender_hash, content, timestamp, type, status, attachment_json, is_starred, reply_to_json, reactions_json
          FROM messages WHERE is_starred = 1 ORDER BY timestamp ASC"
     ).map_err(|e| e.to_string())?;
 
@@ -472,6 +474,7 @@ pub async fn db_get_starred_messages(
                 "attachmentJson": row.get::<_, Option<String>>(7)?,
                 "isStarred": row.get::<_, i32>(8)? != 0,
                 "replyToJson": row.get::<_, Option<String>>(9)?,
+                "reactionsJson": row.get::<_, Option<String>>(10)?,
             }))
         })
         .map_err(|e| e.to_string())?;

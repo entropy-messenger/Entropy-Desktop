@@ -55,7 +55,8 @@ commands.allow = [
     "db_set_contact_global_nickname",
     "update_group_name",
     "get_media_proxy_port",
-    "vault_retry_bridge"
+    "vault_retry_bridge",
+    "process_outgoing_reaction"
 ]
 
 [[set]]

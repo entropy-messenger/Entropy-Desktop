@@ -16,6 +16,7 @@ pub struct DbMessage {
     #[serde(default)]
     pub is_group: bool,
     pub reply_to_json: Option<String>,
+    pub reactions_json: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
