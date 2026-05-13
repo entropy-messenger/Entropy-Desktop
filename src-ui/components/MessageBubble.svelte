@@ -82,7 +82,7 @@
 
     <div class="flex flex-col {msg.isMine ? 'items-end' : 'items-start'} max-w-[65%] relative z-10">
         <div 
-            style="word-break: break-all; min-width: {msg.isMine ? '68px' : '52px'};"
+            style="min-width: {msg.isMine ? '68px' : '52px'};"
             ondblclick={() => setReplyingTo(msg)}
             onclick={() => { 
                 if (selectionMode) { toggleSelect(msg.id); } 

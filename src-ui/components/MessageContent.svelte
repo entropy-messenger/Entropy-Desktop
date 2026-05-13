@@ -113,7 +113,7 @@
             <div class="text-[10px] font-black {isMine ? 'text-white/90' : 'text-entropy-primary'} line-clamp-1 leading-tight tracking-wide mb-0.5">
                 {isReplyToMine ? 'You' : ($userStore.nicknames[msg.replyTo.senderHash] || msg.replyTo.senderAlias || msg.replyTo.senderHash?.slice(0, 8) || 'Peer')}
             </div>
-            <div class="{isMine ? 'text-white/80' : 'text-entropy-text-secondary'} text-[11px] line-clamp-2 opacity-90 leading-tight break-words">
+            <div class="{isMine ? 'text-white/80' : 'text-entropy-text-secondary'} text-[11px] line-clamp-2 opacity-90 leading-tight break-all">
                 {resolveHashesInText(msg.replyTo.content)}
             </div>
         </div>

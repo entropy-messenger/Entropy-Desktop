@@ -71,7 +71,6 @@ pub async fn vault_export_media(
         .await
         .map_err(|e| e.to_string())?;
 
-    // 3. Streaming Decryption (Zero-RAM Pipeline)
     let block_size_enc = 1319;
     let mut buf = vec![0u8; block_size_enc];
 

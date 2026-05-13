@@ -252,13 +252,17 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
             }
         }
 
-        const chat = get(userStore).chats[peerHash];
+        const currentState = get(userStore);
+        const chat = currentState.chats[peerHash];
+        const isActiveChat = currentState.activeChatHash === peerHash;
 
-        if (chat?.hasMoreNewer && !msg.isMine) {
-            return mStore;
-        }
-        if (chat?.hasMoreNewer && msg.isMine) {
-            needsSnapToPresent = true;
+        if (chat?.hasMoreNewer) {
+            if (isActiveChat) {
+                // User is watching this chat but in history mode — snap them to present
+                needsSnapToPresent = true;
+            }
+            // For both active and background chats in history mode, don't append to
+            // the in-memory slice. jumpToPresent will reload from DB with the new message included.
             return mStore;
         }
 
