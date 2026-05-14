@@ -125,6 +125,10 @@
             class="flex-1 flex items-center justify-center p-0 sm:p-4 z-10 min-h-0 min-w-0 w-full"
             style="padding-top: calc(var(--sat, 0px) + 6rem); padding-bottom: {$lightbox.content ? 'calc(var(--sab, 0px) + 8rem)' : 'calc(var(--sab, 0px) + 2rem)'};"
             onclick={close}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && close()}
+            aria-label="Close lightbox"
         >
             {#if loading}
                 <div class="flex flex-col items-center space-y-4">
@@ -138,17 +142,25 @@
                 </div>
             {:else if mediaUrl}
                 {#if $lightbox.type === 'video'}
-                    <div class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" onclick={(e) => e.stopPropagation()}>
+                    <div 
+                        class="w-full max-w-5xl aspect-video rounded-lg overflow-hidden shadow-2xl" 
+                        onclick={(e) => e.stopPropagation()}
+                        role="presentation"
+                    >
                         <VideoPlayer src={mediaUrl} expanded={true} />
                     </div>
                 {:else}
-                    <img 
-                        src={mediaUrl} 
-                        alt={$lightbox.alt}
-                        class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
-                        transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
+                    <button 
+                        class="contents"
                         onclick={(e) => e.stopPropagation()}
-                    />
+                    >
+                        <img 
+                            src={mediaUrl} 
+                            alt={$lightbox.alt}
+                            class="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+                            transition:scale={{ duration: 400, start: 0.9, opacity: 0 }}
+                        />
+                    </button>
                 {/if}
             {/if}
         </div>

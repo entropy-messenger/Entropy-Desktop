@@ -88,7 +88,7 @@ pub async fn handle_group_invite(
                     is_starred: false,
                     is_group: true,
                     reply_to_json: None,
-            reactions_json: None,
+                    reactions_json: None,
                 };
                 if internal_db_save_message(&db_state, sys_msg.clone())
                     .await
@@ -313,7 +313,7 @@ pub async fn handle_group_update(
                 is_starred: false,
                 is_group: true,
                 reply_to_json: None,
-            reactions_json: None,
+                reactions_json: None,
             };
             if internal_db_save_message(&db_state, sys_msg.clone())
                 .await

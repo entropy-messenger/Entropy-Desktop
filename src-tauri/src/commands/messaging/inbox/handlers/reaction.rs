@@ -39,9 +39,7 @@ pub async fn handle_reaction(
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
 
-    let senders = reactions
-        .entry(emoji.clone())
-        .or_insert_with(|| json!([]));
+    let senders = reactions.entry(emoji.clone()).or_insert_with(|| json!([]));
 
     if let Some(arr) = senders.as_array_mut() {
         if let Some(pos) = arr.iter().position(|v| v.as_str() == Some(&sender)) {

@@ -12,7 +12,7 @@
   let isPlaying = $state(false);
   let isLoading = $state(false);
   let currentTime = $state(0);
-  let duration = $state(initialDuration);
+  let duration = $state(0);
   $effect(() => {
     duration = initialDuration;
   });

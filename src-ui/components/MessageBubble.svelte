@@ -155,7 +155,8 @@
 
         {#if msg.reactions && Object.keys(msg.reactions).length > 0}
             <div class="flex flex-wrap gap-1 mt-1 {msg.isMine ? 'justify-end' : 'justify-start'}">
-                {#each Object.entries(msg.reactions) as [emoji, senders]}
+                {#each Object.entries(msg.reactions ?? {}) as [emoji, reactionSenders]}
+                    {@const senders = reactionSenders as string[]}
                     {#if senders.length > 0}
                         {@const iMine = senders.includes($userStore.identityHash || '')}
                         <button

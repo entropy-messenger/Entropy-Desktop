@@ -505,11 +505,18 @@
             class="fixed inset-0 z-[9998]"
             onclick={() => contextMenu.set(null)}
             oncontextmenu={(e) => { e.preventDefault(); contextMenu.set(null); }}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && contextMenu.set(null)}
+            aria-label="Close context menu"
         ></div>
         <div
             class="fixed z-[9999] min-w-[170px] bg-entropy-surface/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden py-1 animate-in fade-in zoom-in-95 duration-100"
             style="left: {$contextMenu.x}px; top: {$contextMenu.y}px;"
             onclick={(e) => e.stopPropagation()}
+            role="menu"
+            tabindex="0"
+            onkeydown={(e) => e.stopPropagation()}
         >
             <div class="px-3 py-1.5 border-b border-white/5 mb-1 bg-white/5">
                 <p class="text-[9px] font-black text-entropy-text-dim uppercase tracking-[0.2em] truncate">File Options</p>

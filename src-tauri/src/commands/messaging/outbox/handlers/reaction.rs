@@ -85,9 +85,13 @@ pub async fn process_outgoing_reaction(
             continue;
         }
         let routing_hash = recipient.split('.').next().unwrap_or(recipient).to_string();
-        if let Ok(ciphertext_obj) =
-            internal_signal_encrypt(app.clone(), &net_state, recipient, signal_payload.to_string())
-                .await
+        if let Ok(ciphertext_obj) = internal_signal_encrypt(
+            app.clone(),
+            &net_state,
+            recipient,
+            signal_payload.to_string(),
+        )
+        .await
         {
             let payload_bytes = ciphertext_obj.to_string().into_bytes();
             let _ = internal_send_to_network(
