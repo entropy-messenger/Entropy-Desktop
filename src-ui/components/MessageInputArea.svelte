@@ -8,7 +8,8 @@
   import RecordingBar from './RecordingBar.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
   import { untrack } from 'svelte';
-  import { addToast } from '../lib/stores/ui';
+  import { get } from 'svelte/store';
+  import { addToast, stagedFile } from '../lib/stores/ui';
   import type { Chat } from '../lib/types';
 
   let { activeChat } = $props<{ activeChat: Chat }>();
@@ -20,7 +21,6 @@
 
   const MAX_CHAR_LIMIT = 4000;
   let replyingTo = $derived($userStore.replyingTo);
-  let stagedFile = $state<{ name: string, type: string, path: string, thumbnail?: string } | null>(null);
 
   $effect(() => {
     if (messageInput !== undefined && messageInputEl) {
@@ -86,7 +86,7 @@
         const localUrl = port ? `http://127.0.0.1:${port}/local?path=${encodedPath}` : null;
         const thumbnail = localUrl ? await generateThumbnail(localUrl, mimeType) : null;
 
-        stagedFile = { name: fileName, type: mimeType, path, thumbnail: thumbnail || undefined };
+        stagedFile.set({ name: fileName, type: mimeType, path, thumbnail: thumbnail || undefined });
     }
   }
 
@@ -193,12 +193,12 @@
                 </div>
             {/if}
 
-            {#if stagedFile}
+            {#if $stagedFile}
                 <div class="px-4 py-3 bg-entropy-surface/95 backdrop-blur-md flex items-center animate-in slide-in-from-bottom duration-300 border-t border-entropy-border/5">
                     <div class="flex-1 bg-entropy-surface-light rounded-xl p-3 border border-entropy-primary/20 flex items-center justify-between shadow-xl">
                         <div class="flex items-center space-x-3 min-w-0 pr-4">
-                            {#if stagedFile.thumbnail}
-                                <img src={stagedFile.thumbnail} class="w-12 h-12 rounded-lg object-cover shadow-md" alt="Preview" />
+                            {#if $stagedFile.thumbnail}
+                                <img src={$stagedFile.thumbnail} class="w-12 h-12 rounded-lg object-cover shadow-md" alt="Preview" />
                             {:else}
                                 <div class="w-12 h-12 bg-entropy-primary/10 rounded-lg flex items-center justify-center text-entropy-primary">
                                     <LucidePaperclip size={20} />
@@ -206,22 +206,25 @@
                             {/if}
                             <div class="min-w-0">
                                 <div class="text-[10px] font-black text-entropy-primary uppercase tracking-widest mb-1">SEND</div>
-                                <div class="text-xs font-bold text-entropy-text-primary truncate">{stagedFile.name}</div>
+                                <div class="text-xs font-bold text-entropy-text-primary truncate">{$stagedFile.name}</div>
                             </div>
                         </div>
                         <div class="flex items-center space-x-2">
                             <button 
-                                onclick={() => stagedFile = null}
+                                onclick={() => stagedFile.set(null)}
                                 class="px-4 py-2 bg-entropy-surface text-entropy-text-dim rounded-xl text-[10px] font-black uppercase tracking-tighter hover:bg-red-500 hover:text-white transition-all active:scale-95"
                             >
                                 No
                             </button>
                             <button 
                                 onclick={async () => {
-                                    if (stagedFile && activeChat) {
+                                    if ($stagedFile && activeChat) {
                                         const { sendFile } = await import('../lib/actions/chat');
-                                        sendFile(activeChat.peerHash, { name: stagedFile.name, type: stagedFile.type, path: stagedFile.path }, 'file', 0, stagedFile.thumbnail);
-                                        stagedFile = null;
+                                        const file = get(stagedFile);
+                                        if (file) {
+                                            sendFile(activeChat.peerHash, { name: file.name, type: file.type, path: file.path, data: file.data }, 'file', 0, file.thumbnail);
+                                            stagedFile.set(null);
+                                        }
                                     }
                                 }}
                                 class="px-6 py-2 bg-entropy-primary text-white rounded-xl text-[10px] font-black uppercase tracking-tighter hover:bg-entropy-primary-dim transition-all active:scale-95 shadow-lg"

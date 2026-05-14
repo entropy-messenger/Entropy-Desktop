@@ -10,8 +10,11 @@
   import ChatHeader from './ChatHeader.svelte';
   import MessageInputArea from './MessageInputArea.svelte';
   
-  import { tick } from 'svelte';
+  import { tick, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { playingVoiceNoteId } from '../lib/stores/audio';
+  import { stagedFile } from '../lib/stores/ui';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   
   let { showStarredMessages = $bindable(false), onCloseStarred, isMobile }: { showStarredMessages?: boolean; onCloseStarred?: () => void; isMobile?: boolean } = $props();
   
@@ -26,6 +29,7 @@
   let isLoadingMore = $state(false);
   let lastScrollHeight = 0;
   let showScrollToBottom = $state(false);
+  let isDragging = $state(false);
 
   let activeChat = $derived($userStore.activeChatHash ? $userStore.chats[$userStore.activeChatHash] : null);
   let activeMessages = $derived($userStore.activeChatHash ? ($messageStore[$userStore.activeChatHash] || []) : []);
@@ -150,6 +154,67 @@
           selectedIds = [...selectedIds, id];
       }
   };
+
+  onMount(() => {
+      let unlisten: any;
+      getCurrentWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'enter') {
+              isDragging = true;
+          } else if (event.payload.type === 'drop') {
+              isDragging = false;
+              if (activeChat && event.payload.paths.length > 0) {
+                  handlePathAction(event.payload.paths[0]);
+              }
+          } else if (event.payload.type === 'leave') {
+              isDragging = false;
+          }
+      }).then(u => unlisten = u);
+
+      return () => { 
+          if (unlisten) unlisten(); 
+      };
+  });
+
+  const handlePathAction = async (path: string) => {
+      const parts = path.split(/[/\\]/);
+      const fileName = parts[parts.length - 1];
+      
+      const ext = fileName.split('.').pop()?.toLowerCase();
+      let mimeType = 'application/octet-stream';
+      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
+
+      const { generateThumbnail } = await import('../lib/utils/thumbnails');
+      const { get } = await import('svelte/store');
+      const { mediaProxyPort } = await import('../lib/stores/ui');
+      const port = get(mediaProxyPort);
+      const encodedPath = encodeURIComponent(path);
+      const localUrl = port ? `http://127.0.0.1:${port}/local?path=${encodedPath}` : null;
+      const thumbnail = localUrl ? await generateThumbnail(localUrl, mimeType) : null;
+
+      stagedFile.set({ name: fileName, type: mimeType, path, thumbnail: thumbnail || undefined });
+  };
+
+  const handleFileAction = async (file: File) => {
+      const { generateThumbnail } = await import('../lib/utils/thumbnails');
+      const blobUrl = URL.createObjectURL(file);
+      const thumbnail = await generateThumbnail(blobUrl, file.type);
+      URL.revokeObjectURL(blobUrl);
+
+      const buffer = await file.arrayBuffer();
+      const data = new Uint8Array(buffer);
+
+      stagedFile.set({
+          name: file.name || (file.type.startsWith('image/') ? `pasted_image_${Date.now()}.png` : `file_${Date.now()}`),
+          type: file.type,
+          data,
+          thumbnail: thumbnail || undefined
+      });
+  };
+
+    
+
+    
 </script>
 
 {#if showStarredMessages}
@@ -169,8 +234,27 @@
         <p class="text-entropy-text-dim max-w-sm font-medium text-xs leading-relaxed opacity-60">Select a conversation to start messaging.</p>
     </div>
 {:else}
-    <div class="h-full w-full flex bg-entropy-bg relative overflow-hidden">
+    <div 
+        class="h-full w-full flex bg-entropy-bg relative overflow-hidden"
+        ondragover={(e) => { e.preventDefault(); }}
+        ondrop={(e) => { e.preventDefault(); }}
+        role="region"
+        aria-label="Conversation"
+    >
         <div class="flex-1 flex flex-col relative h-full min-w-0 chat-window-container">
+            {#if isDragging}
+                <div class="absolute inset-0 z-[100] bg-entropy-primary/10 backdrop-blur-sm border-4 border-dashed border-entropy-primary/40 flex items-center justify-center animate-in fade-in duration-200 m-4 rounded-3xl pointer-events-none">
+                    <div class="bg-entropy-surface p-8 rounded-3xl shadow-2xl flex flex-col items-center space-y-4 border border-entropy-primary/20 scale-110">
+                        <div class="w-16 h-16 bg-entropy-primary/20 rounded-2xl flex items-center justify-center text-entropy-primary">
+                            <LucideLoader size={32} class="animate-bounce" />
+                        </div>
+                        <div class="text-center">
+                            <h3 class="text-lg font-black text-entropy-primary uppercase tracking-tighter">Drop to Send</h3>
+                            <p class="text-xs font-bold text-entropy-text-dim uppercase tracking-widest opacity-60">Images and files will be staged</p>
+                        </div>
+                    </div>
+                </div>
+            {/if}
             
             <ChatHeader 
                 {activeChat}

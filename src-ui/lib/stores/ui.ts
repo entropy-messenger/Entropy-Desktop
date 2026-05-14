@@ -40,6 +40,14 @@ export interface ContextMenuOptions {
     onSave: () => void;
 }
 
+export interface StagedFile {
+    name: string;
+    type: string;
+    path?: string;
+    data?: Uint8Array;
+    thumbnail?: string;
+}
+
 import { writable } from 'svelte/store';
 
 export const toasts = writable<Toast[]>([]);
@@ -47,6 +55,7 @@ export const modal = writable<ModalOptions | null>(null);
 export const lightbox = writable<LightboxOptions | null>(null);
 export const contextMenu = writable<ContextMenuOptions | null>(null);
 export const mediaProxyPort = writable<number | null>(null);
+export const stagedFile = writable<StagedFile | null>(null);
 
 export const addToast = (message: string, type: ToastType = 'info', duration = 3000) => {
     const id = Math.random().toString(36).substring(2, 9);

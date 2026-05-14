@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.2] - 2026-05-14
 - Fixed issues with message bubbles text overflow
 - Added reaction emoji support
+- Added drag-and-drop support
 
 ## [0.2.1] - 2026-05-04
 -Fix CSP issue preventing thumbnail generation and media streaming
