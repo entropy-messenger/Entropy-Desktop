@@ -98,7 +98,6 @@ pub async fn process_outgoing_text(
         None,
         Some(payload_bytes),
         true,
-        false,
         None,
         false,
     )
@@ -206,14 +205,12 @@ pub async fn process_outgoing_group_text(
                     None,
                     Some(payload_bytes),
                     true,
-                    false,
                     None,
                     false,
                 )
                 .await;
             }
             Err(_e) => {
-                // Skipping member
             }
         }
     }

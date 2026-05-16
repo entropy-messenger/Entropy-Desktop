@@ -102,7 +102,6 @@ pub async fn process_outgoing_reaction(
                 None,
                 Some(payload_bytes),
                 true,
-                false,
                 None,
                 false,
             )

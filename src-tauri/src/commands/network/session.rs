@@ -317,9 +317,7 @@ pub(crate) async fn internal_establish_network(
                                                 if let Ok(mut pending) = app.state::<NetworkState>().pending_transfers.lock() {
                                                     let id_found = if let Some(transfer_id) = tid { pending.remove(&transfer_id) } else { None };
                                                     if let Some(id) = id_found {
-                                                        let status = if msg_type == "delivery_error" {
-                                                            if reason == "media_offline" { "offline" } else { "failed" }
-                                                        } else { "sent" };
+                                                        let status = if msg_type == "delivery_error" { "failed" } else { "sent" };
                                                         let db_state = app.state::<DbState>();
                                                         if let Ok(conn) = db_state.get_conn() {
                                                             let chat_info: Option<(String, String)> = conn.query_row(
@@ -337,7 +335,6 @@ pub(crate) async fn internal_establish_network(
                                                     }
                                                 }
                                                 if msg_type == "delivery_error" {
-                                                     if !target_peer.is_empty() && reason != "media_offline" && let Ok(mut l) = app.state::<NetworkState>().halted_targets.lock() { l.insert(target_peer.to_string()); }
                                                      let _ = app.emit("network-warning", json!({ "type": reason, "target": target_peer }));
                                                 }
                                                 handled = true;
@@ -366,7 +363,7 @@ pub(crate) async fn internal_establish_network(
                                                         } else {
                                                             let _ = app_inner.emit("network-status", "mining");
                                                             tokio::task::spawn_local(async move {
-                                                                let result = internal_mine_pow(s.clone(), d, i.clone(), modulus).await;
+                                                                let result = internal_mine_pow(s.clone(), d, modulus).await;
                                                                 let sig_res = SqliteSignalStore::new(app_inner.clone()).get_identity_key_pair().await.map_err(|e| e.to_string());
                                                                 let mut auth_payload = json!({"identity_hash": i, "seed": result["seed"], "nonce": result["nonce"], "modulus": result["modulus"]});
                                                                 if let Ok(kp) = sig_res {

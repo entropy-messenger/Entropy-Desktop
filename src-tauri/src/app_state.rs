@@ -11,7 +11,23 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use r2d2::Pool;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+
+pub struct FragmentAssembly {
+    pub total: u32,
+    pub chunks: HashMap<u32, Vec<u8>>,
+    pub last_activity: std::time::Instant,
+}
+
+impl FragmentAssembly {
+    pub fn new(total: u32) -> Self {
+        Self {
+            total,
+            chunks: HashMap::new(),
+            last_activity: std::time::Instant::now(),
+        }
+    }
+}
 
 pub struct RusqliteManager {
     pub path: std::path::PathBuf,
@@ -73,26 +89,6 @@ pub struct PacedMessage {
     pub msg: Message,
 }
 
-pub struct MediaTransferState {
-    pub total: u32,
-    pub received_chunks: Vec<bool>,
-    pub last_activity: std::time::Instant,
-    pub file_handle: Option<std::fs::File>,
-    pub received_count: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct PendingMediaMetadata {
-    pub id: String,
-    pub key: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct OutgoingTransferInfo {
-    pub file_path: std::path::PathBuf,
-    pub transit_key: [u8; 32],
-}
-
 pub struct NetworkState {
     pub is_enabled: Mutex<bool>,
     pub url: Mutex<Option<String>>,
@@ -105,12 +101,9 @@ pub struct NetworkState {
     pub is_authenticated: Mutex<bool>,
     pub identity_hash: Mutex<Option<String>>,
     pub session_token: Mutex<Option<String>>,
-    pub halted_targets: Mutex<std::collections::HashSet<String>>,
-    pub media_assembler: Mutex<std::collections::HashMap<String, MediaTransferState>>,
-    pub pending_media_links: Mutex<std::collections::HashMap<String, PendingMediaMetadata>>, // transfer_key -> (msg_id, dec_key)
     pub binary_receiver: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     pub is_refilling: Mutex<bool>,
     pub jailed_until: Mutex<Option<tokio::time::Instant>>,
     pub pending_transfers: Mutex<std::collections::HashMap<u32, String>>,
-    pub active_outgoing_transfers: Mutex<std::collections::HashMap<u32, OutgoingTransferInfo>>,
+    pub fragment_assembler: Mutex<HashMap<String, FragmentAssembly>>,
 }

@@ -16,7 +16,6 @@ use serde_json::json;
 pub async fn internal_mine_pow(
     seed: String,
     difficulty: u32,
-    _context: String,
     modulus: Option<String>,
 ) -> serde_json::Value {
     let n_str = modulus.as_ref().map(|s| s.to_string()).unwrap();
@@ -39,7 +38,6 @@ pub async fn internal_mine_pow(
     json!({
         "seed": seed,
         "nonce": result_hex,
-        "id_hash": _context,
         "modulus": modulus.unwrap(),
         "difficulty": difficulty
     })

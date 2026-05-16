@@ -23,116 +23,18 @@ pub fn start_media_server(app: tauri::AppHandle) {
                 async move { handle_media_request(app, id, range, query).await }
             });
 
-        // Streams a raw local file (pre-encryption) for same-origin thumbnail capture
-        let local_route = warp::path!("local")
-            .and(warp::query::<std::collections::HashMap<String, String>>())
-            .and(warp::header::optional::<String>("range"))
-            .and_then(|params: std::collections::HashMap<String, String>, range: Option<String>| async move {
-                let path = params.get("path").cloned().unwrap_or_default();
-                let path = percent_decode(&path);
-                handle_local_file_request(path, range).await
-            });
-
-        let routes = media_route.or(local_route);
+        let routes = media_route;
 
         // Bind to port 0 to let the OS assign any available port
         let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
         let (addr, server) = warp::serve(routes).bind_ephemeral(addr);
 
-        // Save the assigned port to app state
         if let Ok(mut port_lock) = app_handle2.state::<DbState>().media_proxy_port.lock() {
             *port_lock = Some(addr.port());
         }
 
         server.await;
     });
-}
-
-async fn handle_local_file_request(
-    path: String,
-    range: Option<String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    let file_path = std::path::PathBuf::from(&path);
-    if !file_path.exists() {
-        return Err(warp::reject());
-    }
-
-    let total_size = std::fs::metadata(&file_path)
-        .map_err(|_| warp::reject())?
-        .len();
-
-    let (start, end) = if let Some(r) = range {
-        if let Some(stripped) = r.strip_prefix("bytes=") {
-            let parts: Vec<&str> = stripped.split('-').collect();
-            let s = parts[0].parse::<u64>().unwrap_or(0);
-            let e = if parts.len() > 1 && !parts[1].is_empty() {
-                parts[1].parse::<u64>().unwrap_or(total_size - 1)
-            } else {
-                total_size - 1
-            };
-            (s, e)
-        } else {
-            (0, total_size - 1)
-        }
-    } else {
-        (0, total_size - 1)
-    };
-
-    let content_length = end - start + 1;
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let content_type = mime_from_ext(&ext);
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
-
-    tauri::async_runtime::spawn(async move {
-        use std::io::{Read, Seek, SeekFrom};
-        if let Ok(mut file) = std::fs::File::open(&file_path) {
-            let _ = file.seek(SeekFrom::Start(start));
-            let mut remaining = content_length as usize;
-            let mut buf = vec![0u8; 65536];
-            while remaining > 0 {
-                let to_read = remaining.min(buf.len());
-                match file.read(&mut buf[..to_read]) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx
-                            .send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                        remaining -= n;
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-    });
-
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let status = if start > 0 || end < total_size - 1 {
-        StatusCode::PARTIAL_CONTENT
-    } else {
-        StatusCode::OK
-    };
-    let mut resp = Response::builder()
-        .status(status)
-        .header("Content-Type", content_type)
-        .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Content-Length", content_length);
-    if start > 0 || end < total_size - 1 {
-        resp = resp.header(
-            "Content-Range",
-            format!("bytes {}-{}/{}", start, end, total_size),
-        );
-    }
-    Ok(resp.body(Body::wrap_stream(stream)).unwrap())
 }
 
 async fn handle_media_request(
@@ -163,11 +65,12 @@ async fn handle_media_request(
     };
     let key = Key::from_slice(&key_bytes);
 
-    // 2. Locate the file
+    // 2. Locate the file with path traversal protection
     let media_dir = get_media_dir(&app, &state).map_err(|_| warp::reject())?;
+    let media_dir_canonical = std::fs::canonicalize(&media_dir).map_err(|_| warp::reject())?;
     let file_path = media_dir.join(&id);
-
-    if !file_path.exists() {
+    let file_canonical = std::fs::canonicalize(&file_path).map_err(|_| warp::reject())?;
+    if !file_canonical.starts_with(&media_dir_canonical) {
         return Err(warp::reject());
     }
 
@@ -177,12 +80,14 @@ async fn handle_media_request(
     let metadata = file.metadata().await.map_err(|_| warp::reject())?;
     let total_vault_size = metadata.len();
 
-    // Each block is 1319 bytes (24B Nonce + 1279B Data + 16B Tag)
-    let num_blocks = total_vault_size / 1319;
-    let last_block_rem = total_vault_size % 1319;
+    // Each block is 8,388,632 bytes (24B Nonce + 8,388,608B Data + 16B Tag)
+    const BLOCK_SIZE_ENC: u64 = 8_388_648;
+    const BLOCK_SIZE_PLAIN: u64 = 8_388_608;
+    let num_blocks = total_vault_size / BLOCK_SIZE_ENC;
+    let last_block_rem = total_vault_size % BLOCK_SIZE_ENC;
 
     // Total plaintext size
-    let mut total_plain_size = num_blocks * 1279;
+    let mut total_plain_size = num_blocks * BLOCK_SIZE_PLAIN;
     if last_block_rem > 40 {
         total_plain_size += last_block_rem - 40;
     }
@@ -215,21 +120,18 @@ async fn handle_media_request(
     let content_length = end - start + 1;
     let cipher = XChaCha20Poly1305::new(key);
 
-    // 4. Create the streaming body
-    let (tx, rx) = tokio::sync::mpsc::channel(128);
+    // 4. Create the streaming body with small buffer to limit in-flight RAM
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
 
     tauri::async_runtime::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let mut current_offset = start;
-        let block_size_enc = 1319;
-        let block_size_plain = 1279;
-
         let mut first_run = true;
 
         while current_offset <= end {
-            let block_index = current_offset / block_size_plain as u64;
-            let vault_pos = block_index * block_size_enc as u64;
-            let offset_in_block = (current_offset % block_size_plain as u64) as usize;
+            let block_index = current_offset / BLOCK_SIZE_PLAIN;
+            let vault_pos = block_index * BLOCK_SIZE_ENC;
+            let offset_in_block = (current_offset % BLOCK_SIZE_PLAIN) as usize;
 
             if first_run {
                 if file
@@ -247,17 +149,22 @@ async fn handle_media_request(
                 break;
             }
 
-            let to_read = if remaining_file >= block_size_enc as u64 {
-                block_size_enc
+            let to_read = if remaining_file >= BLOCK_SIZE_ENC as u64 {
+                BLOCK_SIZE_ENC as usize
             } else {
                 remaining_file as usize
             };
 
-            let mut block_data = vec![0u8; to_read];
-            if file.read_exact(&mut block_data).await.is_err() {
-                break;
+            let mut block_data = Vec::with_capacity(to_read);
+            let mut read_buf = vec![0u8; 65536];
+            while block_data.len() < to_read {
+                let want = std::cmp::min(read_buf.len(), to_read - block_data.len());
+                let n = file.read(&mut read_buf[..want]).await.unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                block_data.extend_from_slice(&read_buf[..n]);
             }
-
             if block_data.len() < 40 {
                 break;
             }
@@ -304,7 +211,7 @@ async fn handle_media_request(
         })
         .header("Content-Type", mime_type.to_string())
         .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Origin", "null")
         .header(
             "Access-Control-Expose-Headers",
             "Content-Range, Content-Length, Accept-Ranges",

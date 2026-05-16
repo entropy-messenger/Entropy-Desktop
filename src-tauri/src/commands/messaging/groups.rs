@@ -111,7 +111,6 @@ pub async fn create_group(
                 None,
                 Some(ciphertext.to_string().into_bytes()),
                 true,
-                false,
                 None,
                 false,
             )
@@ -221,7 +220,6 @@ pub async fn add_to_group(
                 None,
                 Some(ciphertext.to_string().into_bytes()),
                 true,
-                false,
                 None,
                 false,
             )
@@ -243,7 +241,6 @@ pub async fn add_to_group(
                 None,
                 Some(ciphertext.to_string().into_bytes()),
                 true,
-                false,
                 None,
                 false,
             )
@@ -311,7 +308,6 @@ pub async fn update_group_name(
                 None,
                 Some(ciphertext.to_string().into_bytes()),
                 true,
-                false,
                 None,
                 false,
             )
@@ -374,7 +370,6 @@ pub async fn leave_group(
                 None,
                 Some(ciphertext.to_string().into_bytes()),
                 true,
-                false,
                 None,
                 false,
             )

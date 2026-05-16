@@ -25,7 +25,6 @@ use tauri::{
 
 pub fn run() {
     let profile = std::env::var("ENTROPY_PROFILE").unwrap_or_else(|_| "default".to_string());
-    println!("Starting Entropy (Profile: {})", profile);
 
     let mut builder = tauri::Builder::default()
         .manage(DbState {
@@ -45,14 +44,11 @@ pub fn run() {
             is_authenticated: Mutex::new(false),
             identity_hash: Mutex::new(None),
             session_token: Mutex::new(None),
-            halted_targets: Mutex::new(std::collections::HashSet::new()),
-            media_assembler: Mutex::new(std::collections::HashMap::new()),
-            pending_media_links: Mutex::new(std::collections::HashMap::new()),
             binary_receiver: Mutex::new(None),
             is_refilling: Mutex::new(false),
             jailed_until: Mutex::new(None),
             pending_transfers: Mutex::new(std::collections::HashMap::new()),
-            active_outgoing_transfers: Mutex::new(std::collections::HashMap::new()),
+            fragment_assembler: Mutex::new(std::collections::HashMap::new()),
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -118,7 +114,7 @@ pub fn run() {
             commands::process_outgoing_media,
             commands::process_outgoing_group_media,
             commands::process_outgoing_reaction,
-            commands::vault_retry_bridge
+            commands::download_media,
         ])
         .setup(|app| {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK

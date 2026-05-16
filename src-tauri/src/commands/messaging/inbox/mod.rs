@@ -63,7 +63,7 @@ pub async fn process_incoming_binary(
     let frame_type = body_data[0];
     let payload_data = &body_data[1..];
 
-    if frame_type == 0x01 || frame_type == 0x02 || frame_type == 0x04 {
+    if frame_type == 0x01 || frame_type == 0x04 {
         if payload_data.len() < 16 {
             return Err("Invalid binary fragment header (too short)".into());
         }
@@ -142,80 +142,6 @@ pub async fn process_incoming_binary(
                             .as_str()
                             .ok_or("Missing message type")?;
                         match p_type {
-                            "media_resend_request" => {
-                                let transfer_id = decrypted_json["transfer_id"]
-                                    .as_u64()
-                                    .ok_or("Missing transfer_id")?
-                                    as u32;
-                                let indices: Vec<u32> = decrypted_json["indices"]
-                                    .as_array()
-                                    .ok_or("Missing indices")?
-                                    .iter()
-                                    .filter_map(|v| v.as_u64().map(|i| i as u32))
-                                    .collect();
-                                let info = {
-                                    let active =
-                                        net_state.active_outgoing_transfers.lock().unwrap();
-                                    active.get(&transfer_id).cloned()
-                                };
-                                if let Some(info) = info {
-                                    let app_clone = app.clone();
-                                    let recipient = sender.clone();
-                                    tokio::spawn(async move {
-                                        let net_state = app_clone.state::<NetworkState>();
-                                        if let Ok(mut file) = std::fs::File::open(&info.file_path) {
-                                            let file_size =
-                                                file.metadata().map(|m| m.len()).unwrap_or(0);
-                                            let total_fragments =
-                                                (file_size as f64 / 1279.0).ceil() as u32;
-                                            let mut routing_hash = [0u8; 64];
-                                            let r_bytes = recipient.as_bytes();
-                                            let r_len = std::cmp::min(r_bytes.len(), 64);
-                                            routing_hash[..r_len]
-                                                .copy_from_slice(&r_bytes[..r_len]);
-
-                                            for idx in indices {
-                                                let mut buffer = vec![0u8; 1279];
-                                                let offset = (idx as u64) * 1279;
-                                                use std::io::{Read, Seek, SeekFrom};
-                                                if file.seek(SeekFrom::Start(offset)).is_ok() {
-                                                    let n = file.read(&mut buffer).unwrap_or(0);
-                                                    if n > 0 {
-                                                        let chunk = &buffer[..n];
-
-                                                        use chacha20poly1305::{
-                                                            Key as ChaKey, XChaCha20Poly1305,
-                                                            aead::{
-                                                                Aead, AeadCore, KeyInit, OsRng,
-                                                            },
-                                                        };
-                                                        let transit_cipher = XChaCha20Poly1305::new(
-                                                            ChaKey::from_slice(&info.transit_key),
-                                                        );
-                                                        let t_nonce =
-                                                            XChaCha20Poly1305::generate_nonce(
-                                                                &mut OsRng,
-                                                            );
-                                                        let t_cipher = transit_cipher
-                                                            .encrypt(&t_nonce, chunk)
-                                                            .unwrap();
-
-                                                        let mut packet =
-                                                            Vec::with_capacity(t_cipher.len() + 24);
-                                                        packet.extend_from_slice(&t_nonce);
-                                                        packet.extend_from_slice(&t_cipher);
-
-                                                        let _ = crate::commands::network::transit::internal_dispatch_fragment(
-                                                            app_clone.clone(), &net_state, routing_hash, None, transfer_id, idx, total_fragments, &packet, true, true, true
-                                                        ).await;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    });
-                                }
-                                return Ok(());
-                            }
                             "group_invite" => {
                                 handlers::groups::handle_group_invite(
                                     app.clone(),
@@ -298,14 +224,6 @@ pub async fn process_incoming_binary(
                     }
                     Err(e) => return Err(e),
                 }
-            } else if frame_type == 0x02 {
-                handlers::media::handle_media_completion(
-                    app.clone(),
-                    sender.clone(),
-                    transfer_id,
-                    &net_state,
-                )
-                .await?;
             }
         }
     }
@@ -330,14 +248,8 @@ pub async fn internal_send_volatile(
         None,
         Some(payload_bytes),
         true,
-        false,
         None,
         false,
     )
     .await
-}
-
-#[tauri::command]
-pub async fn vault_retry_bridge(app: tauri::AppHandle, msg_id: String) -> Result<(), String> {
-    handlers::media::handle_vault_retry_bridge(app, msg_id)
 }

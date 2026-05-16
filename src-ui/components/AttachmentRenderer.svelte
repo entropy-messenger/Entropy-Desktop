@@ -7,6 +7,7 @@
     import { userStore } from '../lib/stores/user';
     import { convertFileSrc, invoke } from '@tauri-apps/api/core';
     import { getMediaUrl, markAsDownloaded } from '../lib/actions/chat';
+    import { appDataDir } from '@tauri-apps/api/path';
     import { fromBase64 } from '../lib/crypto';
     import { addToast, lightbox, contextMenu, mediaProxyPort } from '../lib/stores/ui';
     import { get } from 'svelte/store';
@@ -54,9 +55,8 @@
     });
 
     let activeTransfer = $derived.by(() => {
-        const t_id = msg.attachment?.transferId;
-        if (!t_id) return null;
-        return $transfers[t_id] || null;
+        if ($transfers[0]?.msgId === msg.id && $transfers[0].current < $transfers[0].total) return $transfers[0];
+        return null;
     });
 
     let progress = $derived(activeTransfer ? Math.round((activeTransfer.current / activeTransfer.total) * 100) : 0);
@@ -78,12 +78,39 @@
     }
 
     async function openSavedFile() {
+        // Already exported or sender's original → open directly
         const path = exportedPath || (isMine ? (msg.attachment?.originalPath || msg.attachment?.path) : null);
-        if (!path) return;
-        try {
-            await invoke('open_file', { path });
-        } catch (e) {
-            addToast("Failed to open file", 'error');
+        if (path) {
+            try { await invoke('open_file', { path }); return; }
+            catch (e) {}
+        }
+
+        // For vault-only files
+        if (msg.attachment?.isDownloaded && msg.attachment?.vaultPath) {
+            const ft = msg.attachment.fileType || '';
+
+            // Images, video, audio → media proxy (streams decrypted, no temp file)
+            if (ft.startsWith('image/') || ft.startsWith('video/') || ft.startsWith('audio/') || isImage || isVideo) {
+                return; // handled by lightbox/player
+            }
+
+            // Everything else → export to temp, open, delete after 5s
+            try {
+                const tempDir = await appDataDir();
+                const exportName = msg.attachment.fileName || `${msg.id}.bin`;
+                const exportPath = `${tempDir}/temp_exports/${exportName}`;
+                await invoke('vault_export_media', { id: msg.id, targetPath: exportPath });
+                await invoke('open_file', { path: exportPath });
+                setTimeout(async () => {
+                    try {
+                        const { removeFile } = await import('@tauri-apps/plugin-fs');
+                        await removeFile(exportPath);
+                    } catch {}
+                }, 5000);
+                return;
+            } catch (e) {
+                addToast("Could not open file", 'warning');
+            }
         }
     }
 
@@ -197,18 +224,30 @@
                         <img 
                             src={msg.attachment.thumbnail || mediaUrl} 
                             alt={msg.attachment.fileName} 
-                            class="w-full h-full object-cover transition-all duration-700 hover:scale-105 {msg.attachment.thumbnail && !mediaUrl ? 'blur-[4px] scale-110 opacity-100' : 'opacity-100'}"
+                            class="w-full h-full object-cover transition-all duration-700 hover:scale-105 {msg.attachment.thumbnail && !mediaUrl ? 'blur-sm scale-110 opacity-100' : 'opacity-100'}"
                         />
                     {:else if isVideo}
                         <img 
                             src={msg.attachment.thumbnail} 
-                            class="w-full h-full object-cover opacity-100 blur-[4px] scale-110 group-hover/media:scale-100 group-hover/media:blur-0 transition-all duration-700" 
+                            class="w-full h-full object-cover opacity-100 blur-sm scale-110 group-hover/media:scale-100 group-hover/media:blur-0 transition-all duration-700" 
                             alt="Video preview"
                         />
                         <div class="absolute inset-0 flex items-center justify-center bg-black/10 group-hover/media:bg-black/30 transition-colors">
                             <div class="w-14 h-14 rounded-full bg-white/10 backdrop-blur-xl flex items-center justify-center text-white border border-white/20 group-hover/media:scale-110 transition-transform shadow-2xl">
                                 <LucidePlay size={28} fill="currentColor" class="ml-1" />
                             </div>
+                        </div>
+                    {/if}
+
+                    {#if !msg.attachment?.isDownloaded && !activeTransfer}
+                        <div class="absolute inset-0 z-10 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                            <button 
+                                onclick={() => invoke('download_media', { msgId: msg.id })}
+                                class="px-5 py-2 bg-entropy-primary text-white rounded-full text-[10px] font-bold uppercase tracking-wider shadow-lg active:scale-95 hover:opacity-90 transition-all"
+                            >
+                                <LucideDownload size={14} class="inline -mt-0.5 mr-1" />
+                                Retry Download
+                            </button>
                         </div>
                     {/if}
 
@@ -233,38 +272,46 @@
                     </div>
                 </div>
             </div>
-        {:else if msg.status === 'failed'}
-            <div class="flex flex-col items-center justify-center py-6 px-10 bg-red-500/10 rounded-[0.9rem] border border-red-500/20 w-full sm:w-[320px]">
-                <LucideAlertCircle size={24} class="text-red-500 mb-2" />
-                <span class="text-[10px] font-bold text-red-500 uppercase tracking-widest text-center">
-                    Decryption Failed
-                </span>
-                {#if msg.error}
-                    <span class="text-[9px] text-red-400/80 mt-1 text-center line-clamp-2 px-4 mb-3">
-                        {msg.error}
+        {:else if activeTransfer}
+            <div class="flex flex-col items-center justify-center py-6 px-10 bg-entropy-surface/60 rounded-[0.9rem] border border-white/10 w-full sm:w-[320px]">
+                <LucidePaperclip size={24} class="text-entropy-text-dim mb-2" />
+                <div class="text-[13px] font-bold text-entropy-text-primary truncate max-w-full text-center mb-1">
+                    {msg.attachment?.fileName || 'File'}
+                </div>
+                <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest text-center mb-3">
+                    {fileSize}
+                </div>
+                <div class="w-full max-w-[200px] mb-2">
+                    <div class="h-1 w-full bg-entropy-surface-light rounded-full overflow-hidden">
+                        <div class="h-full bg-entropy-primary transition-all duration-300" style="width: {progress}%"></div>
+                    </div>
+                    <span class="text-[9px] font-bold text-entropy-primary uppercase tracking-wider mt-1 block text-center">
+                        Receiving {progress}%
                     </span>
-                {/if}
-                
+                </div>
+            </div>
+        {:else if !msg.attachment?.isDownloaded}
+            <div class="flex flex-col items-center justify-center py-6 px-10 bg-entropy-surface/60 rounded-[0.9rem] border border-white/10 w-full sm:w-[320px]">
+                <LucideLoader size={24} class="animate-spin text-entropy-text-dim mb-2" />
+                <div class="text-[13px] font-bold text-entropy-text-primary truncate max-w-full text-center mb-1">
+                    {msg.attachment?.fileName || 'File'}
+                </div>
+                <div class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest text-center mb-3">
+                    {fileSize}
+                </div>
+                <div class="text-[9px] text-entropy-text-dim text-center">Preparing...</div>
                 <button 
                     onclick={async () => {
-                        loading = true;
                         try {
                             const { invoke } = await import('@tauri-apps/api/core');
-                            await invoke('vault_retry_bridge', { msgId: msg.id });
+                            await invoke('download_media', { msgId: msg.id });
                         } catch (e: any) {
-                            console.error(e);
-                        } finally {
-                            loading = false;
+                            addToast("Download failed", 'error');
                         }
                     }}
-                    class="mt-1 px-4 py-1.5 bg-red-500 text-white rounded-full text-[10px] font-bold uppercase tracking-wider hover:bg-red-600 transition-colors shadow-lg active:scale-95 disabled:opacity-50"
-                    disabled={loading}
+                    class="mt-2 px-3 py-1 bg-entropy-primary/20 text-entropy-primary rounded-full text-[9px] font-bold uppercase tracking-wider hover:bg-entropy-primary/30 transition-colors active:scale-95"
                 >
-                    {#if loading}
-                        <LucideLoader size={12} class="animate-spin" />
-                    {:else}
-                        Retry Decryption
-                    {/if}
+                    Retry
                 </button>
             </div>
         {:else if loading}
@@ -306,20 +353,20 @@
                 </div>
 
                 <div class="flex items-center space-x-1.5">
-                    <button 
-                        onclick={doExport}
-                        class="w-9 h-9 rounded-xl {isExporting ? 'bg-entropy-primary animate-pulse' : (exportedPath || msg.isMine ? 'bg-white text-entropy-primary' : 'bg-entropy-primary text-white')} flex items-center justify-center hover:bg-opacity-90 transition-all active:scale-95 shadow-lg disabled:opacity-50"
-                        title={exportedPath || msg.isMine ? "Open File" : "Export to Local PC"}
-                        disabled={isExporting}
-                    >
-                        {#if isExporting}
-                            <LucideLoader size={18} class="animate-spin" />
-                        {:else if msg.isMine || exportedPath}
-                            <LucidePaperclip size={18} />
-                        {:else}
-                            <LucideDownload size={18} />
-                        {/if}
-                    </button>
+                        <button 
+                            onclick={doExport}
+                            class="w-9 h-9 rounded-xl {isExporting ? 'bg-entropy-primary animate-pulse' : (exportedPath || msg.isMine ? 'bg-white text-entropy-primary' : 'bg-entropy-primary text-white')} flex items-center justify-center hover:bg-opacity-90 transition-all active:scale-95 shadow-lg disabled:opacity-50"
+                            title={exportedPath || msg.isMine ? "Open File" : "Save to Device"}
+                            disabled={isExporting}
+                        >
+                            {#if isExporting}
+                                <LucideLoader size={18} class="animate-spin" />
+                            {:else if msg.isMine || exportedPath}
+                                <LucidePaperclip size={18} />
+                            {:else}
+                                <LucideDownload size={18} />
+                            {/if}
+                        </button>
                 </div>
             </div>
         {/if}

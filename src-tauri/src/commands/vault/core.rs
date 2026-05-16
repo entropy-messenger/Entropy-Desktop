@@ -5,7 +5,10 @@ use argon2::{
 };
 use r2d2::Pool;
 use rusqlite::OpenFlags;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::{AppHandle, Manager, State};
+
+static LOGIN_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 
 const MIGRATIONS: &[&str] = &[
     // Version 1: Initial Schema
@@ -202,15 +205,6 @@ pub async fn init_vault(
     let db_path = app_data_dir.join(get_db_filename());
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-    let attempts_file = app_data_dir.join("login_attempts.dat");
-    let mut attempts = 0;
-    if attempts_file.exists()
-        && let Ok(s) = std::fs::read_to_string(&attempts_file)
-    {
-        attempts = s.trim().parse().unwrap_or(0);
-    }
-
-    // PANIC MODE CHECK
     let panic_file = app_data_dir.join("panic.dat");
     if panic_file.exists()
         && let Ok(stored_hash) = std::fs::read_to_string(&panic_file)
@@ -251,13 +245,11 @@ pub async fn init_vault(
             let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
             let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
             let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
-            let _ = std::fs::remove_file(&attempts_file);
             app.restart();
         }
     }
 
-    if attempts >= 10 {
-        // Nuclear reset logic inline
+    if LOGIN_ATTEMPTS.load(Ordering::Relaxed) >= 10 {
         let filename = get_db_filename();
         let _ = std::fs::remove_file(app_data_dir.join(&filename));
         let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
@@ -272,7 +264,6 @@ pub async fn init_vault(
         let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
         let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
         let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
-        let _ = std::fs::remove_file(&attempts_file);
         app.restart();
     }
 
@@ -328,15 +319,12 @@ pub async fn init_vault(
                 .query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
                 .is_err()
             {
-                attempts += 1;
-                let _ = std::fs::write(&attempts_file, attempts.to_string());
-                return Err(format!("Incorrect password. Attempt {}/10", attempts));
+                let cur = LOGIN_ATTEMPTS.fetch_add(1, Ordering::Relaxed) + 1;
+                return Err(format!("Incorrect password. Attempt {}/10", cur));
             }
 
             // Success - reset attempts
-            if attempts > 0 {
-                let _ = std::fs::remove_file(&attempts_file);
-            }
+            LOGIN_ATTEMPTS.store(0, Ordering::Relaxed);
         }
     }
 

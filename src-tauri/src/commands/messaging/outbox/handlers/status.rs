@@ -43,7 +43,6 @@ pub async fn send_typing_status(
             None,
             Some(encrypted.to_string().into_bytes()),
             true,
-            false,
             None,
             true,
         )
@@ -86,7 +85,6 @@ pub async fn send_receipt(
             None,
             Some(encrypted.to_string().into_bytes()),
             true,
-            false,
             None,
             true,
         )
@@ -120,7 +118,6 @@ pub async fn send_profile_update(
             None,
             Some(payload_bytes),
             true,
-            false,
             None,
             false,
         )

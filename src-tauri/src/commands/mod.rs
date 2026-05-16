@@ -12,5 +12,7 @@ pub mod vault;
 pub use vault::*;
 pub mod types;
 pub use types::*;
+pub mod download_media;
+pub use download_media::*;
 pub mod system;
 pub use system::*;

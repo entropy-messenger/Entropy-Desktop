@@ -46,13 +46,14 @@ tar = "0.4.44"
 flate2 = "1.1.9"
 aes-gcm = "0.10"
 tokio-rustls = "0.26.4"
-tokio-util = "0.7.18"
+tokio-util = { version = "0.7.18", features = ["io"] }
 tracing = "0.1"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
 chacha20poly1305 = "0.10.1"
 warp = "0.3"
 bytes = "1"
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
 tokio-stream = "0.1"
 r2d2 = "0.8"
 rustls = { version = "0.23.40", features = ["aws-lc-rs"] }

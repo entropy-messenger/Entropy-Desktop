@@ -24,7 +24,6 @@ pub async fn internal_send_to_network(
     msg: Option<String>,
     data: Option<Vec<u8>>,
     is_binary: bool,
-    is_media: bool,
     transfer_id_override: Option<u32>,
     is_volatile: bool,
 ) -> Result<(), String> {
@@ -68,26 +67,13 @@ pub async fn internal_send_to_network(
             }
 
             for i in 0..chunks {
-                let target_hash_str = hex::encode(&hash_bytes);
-                {
-                    let halted = state
-                        .halted_targets
-                        .lock()
-                        .map_err(|_| "Network state poisoned")?;
-                    if halted.contains(&target_hash_str) {
-                        break;
-                    }
-                }
-
                 let start = i * chunk_capacity;
                 let end = std::cmp::min(start + chunk_capacity, total_len);
                 let chunk_data = &data_bytes[start..end];
 
                 let mut envelope = Vec::with_capacity(PACKET_SIZE);
                 envelope.extend_from_slice(&hash_bytes);
-                if is_media {
-                    envelope.push(0x02);
-                } else if is_volatile {
+                if is_volatile {
                     envelope.push(0x04);
                 } else {
                     envelope.push(0x01);
@@ -190,96 +176,6 @@ pub async fn internal_send_to_network(
         Err("Network not connected. Message queued in outbox.".to_string())
     }
 }
-
-#[allow(clippy::too_many_arguments)]
-pub async fn internal_dispatch_fragment(
-    app: AppHandle,
-    state: &NetworkState,
-    target_hash_bytes: [u8; 64],
-    msg_id: Option<String>,
-    transfer_id: u32,
-    index: u32,
-    total: u32,
-    chunk_data: &[u8],
-    is_media: bool,
-    is_volatile: bool,
-    silent: bool,
-) -> Result<(), String> {
-    let mut envelope = Vec::with_capacity(PACKET_SIZE);
-    envelope.extend_from_slice(&target_hash_bytes);
-    if is_media {
-        envelope.push(0x02);
-    } else if is_volatile {
-        envelope.push(0x04);
-    } else {
-        envelope.push(0x01);
-    }
-    envelope.extend_from_slice(&transfer_id.to_be_bytes());
-    envelope.extend_from_slice(&index.to_be_bytes());
-    envelope.extend_from_slice(&total.to_be_bytes());
-    envelope.extend_from_slice(&(chunk_data.len() as u32).to_be_bytes());
-    envelope.extend_from_slice(chunk_data);
-
-    if let Some(ref id) = msg_id {
-        state
-            .pending_transfers
-            .lock()
-            .map_err(|_| "Network state poisoned")?
-            .insert(transfer_id, id.clone());
-    }
-
-    let paced_msg = PacedMessage {
-        msg: Message::Binary(envelope.into()),
-    };
-
-    let is_connected = state
-        .sender
-        .lock()
-        .map_err(|_| "Network state poisoned")?
-        .is_some();
-
-    if is_connected {
-        let tx = {
-            let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;
-            sender_lock.clone()
-        };
-        if let Some(tx) = tx {
-            tx.send(paced_msg).await.map_err(|e| e.to_string())?;
-        }
-
-        if !silent && (index.is_multiple_of(20) || index == total - 1) {
-            let _ = app.emit(
-                "transfer://progress",
-                json!({
-                    "transfer_id": transfer_id,
-                    "current": index + 1,
-                    "total": total,
-                    "direction": "upload",
-                    "msgId": msg_id
-                }),
-            );
-        }
-        Ok(())
-    } else {
-        let db_state = app.state::<DbState>();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        if let Ok(conn) = db_state.get_conn() {
-            let content = match &paced_msg.msg {
-                Message::Binary(b) => b.to_vec(),
-                _ => vec![],
-            };
-            let _ = conn.execute(
-                "INSERT INTO pending_outbox (msg_id, msg_type, content, timestamp) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![msg_id, "binary", content, timestamp],
-            );
-        }
-        Ok(())
-    }
-}
-
 pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Result<(), String> {
     let tx = {
         let sender_lock = state.sender.lock().map_err(|_| "Network state poisoned")?;

@@ -71,12 +71,12 @@ pub async fn vault_export_media(
         .await
         .map_err(|e| e.to_string())?;
 
-    let block_size_enc = 1319;
-    let mut buf = vec![0u8; block_size_enc];
+    const BLOCK_SIZE_ENC: usize = 8_388_648;
+    let mut buf = vec![0u8; BLOCK_SIZE_ENC];
 
     loop {
         let mut n = 0;
-        while n < block_size_enc {
+        while n < BLOCK_SIZE_ENC {
             match src_file.read(&mut buf[n..]).await {
                 Ok(0) => break,
                 Ok(read) => n += read,

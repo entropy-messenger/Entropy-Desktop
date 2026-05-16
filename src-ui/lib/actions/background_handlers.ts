@@ -42,7 +42,6 @@ export function setupBackgroundHandlers() {
                         try {
                             msg.attachment.data = fromHex(parsedBody.data);
                         } catch (e) {
-                            // Error decoding hex data
                         }
                     }
                 }

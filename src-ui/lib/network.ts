@@ -43,12 +43,10 @@ export class NetworkLayer {
             this.lastWarningTime.set(type, now);
 
             const { addToast } = await import('./stores/ui');
-            if (type === 'media_offline') {
-                addToast("Recipient is offline. Media cannot be sent.", 'warning');
-            } else if (type === 'storage_full' || type === 'Mailbox full') {
+            if (type === 'storage_full' || type === 'Mailbox full') {
                 addToast("Recipient's offline storage is full (500 limit).", 'error');
             } else if (type === 'sender_quota_exceeded' || type === 'Sender quota exceeded') {
-                addToast("You've hit your limit for this user's mailbox (15/15).", 'error');
+                addToast("Recipient's offline mailbox is full.", 'error');
             } else if (type) {
                 addToast(`Relay Error: ${type}`, 'error');
             }
@@ -182,31 +180,13 @@ export class NetworkLayer {
             });
         });
 
-        listen('network-bin-progress', (event) => {
-            const { transfer_id, current, total, sender } = event.payload as any;
+        listen('media-dl-progress', (event) => {
+            const { msg_id, received, total } = event.payload as any;
             import('./stores/transfers').then(m => {
-                m.updateTransferProgress(transfer_id, current, total, 'download', sender);
-                if (current >= total) {
-                    setTimeout(() => m.removeTransfer(transfer_id), 3000);
+                m.updateTransferProgress(0, received, total, 'download', undefined, msg_id);
+                if (received >= total) {
+                    setTimeout(() => m.removeTransfer(0), 3000);
                 }
-            });
-        });
-
-        listen('network-bin-complete', (event) => {
-            const { msg_id } = event.payload as any;
-            if (!msg_id) return;
-            
-            import('./actions/chat').then(m => {
-                m.refreshMessageUI(msg_id);
-            });
-        });
-
-        listen('network-bin-error', (event) => {
-            const { msg_id, error } = event.payload as any;
-            if (!msg_id) return;
-            
-            import('./actions/chat').then(m => {
-                m.markMessageAsError(msg_id, error);
             });
         });
     }

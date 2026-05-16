@@ -1,6 +1,6 @@
 <script lang="ts">
   import { userStore, messageStore } from '../lib/stores/user';
-  import { toggleStar, toggleBlock } from '../lib/actions/contacts';
+  import { toggleStar } from '../lib/actions/contacts';
   import { setReplyingTo, loadChatMessages, loadMoreMessages, loadNewerMessages, jumpToMessage, jumpToPresent, sendReceipt } from '../lib/actions/chat';
   import { LucideSearch, LucideX, LucideInfo, LucideLoader, LucideChevronDown, LucideBan } from 'lucide-svelte';
   

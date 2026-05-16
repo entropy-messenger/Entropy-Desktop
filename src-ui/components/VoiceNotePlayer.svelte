@@ -30,8 +30,15 @@
           const url = await getMediaUrl(id, 'audio/wav');
           proxyUrl = url;
           
-          // Generate real waveform by fetching from proxy
-          const response = await fetch(url);
+          // Retry up to 3 times — the auto-download may still be in progress
+          let response: Response | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+              response = await fetch(url);
+              if (response.ok) break;
+              if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+          }
+          if (!response || !response.ok) { isLoading = false; return; }
+          
           const arrayBuffer = await response.arrayBuffer();
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);

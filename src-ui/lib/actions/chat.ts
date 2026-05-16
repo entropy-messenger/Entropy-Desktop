@@ -1,4 +1,4 @@
-import { get, writable } from 'svelte/store';
+import { get } from 'svelte/store';
 import { userStore, messageStore } from '../stores/user';
 import { network } from '../network';
 import { invoke } from '@tauri-apps/api/core';
@@ -38,9 +38,8 @@ export const sendReaction = async (peerHashRaw: string, targetMsgId: string, emo
                 groupMembers: chat?.members || null,
             }
         });
-    } catch (e) {
-        // Reaction send failed
-    }
+            } catch (e) {
+            }
 };
 
 /**
@@ -101,7 +100,6 @@ export const sendMessage = async (destIdRaw: string, content: string) => {
         });
         setReplyingTo(null);
     } catch (e) {
-        // Send failed
     }
 };
 
@@ -169,7 +167,6 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
             } : null
         }
     }).catch(async (e: any) => {
-        // Handle failure
         messageStore.update(mStore => {
             if (mStore[destId]) {
                 mStore[destId] = mStore[destId].map(m => m.id === tempId ? { ...m, status: 'failed' } : m);

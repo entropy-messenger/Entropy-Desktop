@@ -8,7 +8,7 @@
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
   import Onboarding from './components/Onboarding.svelte';
-  import { LucideShieldCheck, LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
+  import { LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
   import { signalManager } from './lib/signal_manager';
@@ -128,6 +128,14 @@
           } catch (e) {
             // Permission failed silently
           }
+
+          // Clean stale temp exports from previous session
+          try {
+            const { appDataDir } = await import('@tauri-apps/api/path');
+            const { removeDir } = await import('@tauri-apps/plugin-fs');
+            const tempDir = await appDataDir();
+            await removeDir(`${tempDir}/temp_exports`, { recursive: true });
+          } catch {}
         }
 
         updateDimensions();
