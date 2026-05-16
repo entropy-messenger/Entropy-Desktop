@@ -8,7 +8,7 @@
   import {
     LucidePlus, LucideCamera, LucideUser, LucideLock, LucideCheckCheck, 
     LucideBan, LucideEyeOff, LucideShieldAlert, LucideGlobe, LucideTrash2, 
-    LucideSun, LucideMoon
+    LucideSun, LucideMoon, LucideBell, LucideBellOff
   } from 'lucide-svelte';
   import Avatar from './Avatar.svelte';
 
@@ -148,6 +148,31 @@
                         <div class="flex justify-end pt-2">
                             <button onclick={() => updatePrivacy({ readReceipts: !$userStore.privacySettings.readReceipts })} class="w-12 h-6 rounded-full transition-colors relative {$userStore.privacySettings.readReceipts ? 'bg-entropy-primary' : 'bg-entropy-surface-light'}" aria-label="Toggle Read Receipts">
                                 <div class="absolute top-1 w-4 h-4 bg-white rounded-full transition-all {$userStore.privacySettings.readReceipts ? 'left-7' : 'left-1'}"></div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-1">
+                        <h3 class="font-bold text-entropy-text-primary flex items-center space-x-2">
+                            {#if $userStore.privacySettings.notificationsEnabled}
+                                <LucideBell size={18} class="text-entropy-primary" />
+                            {:else}
+                                <LucideBellOff size={18} class="text-red-500" />
+                            {/if}
+                            <span>Notifications</span>
+                        </h3>
+                        <p class="text-xs text-entropy-text-secondary leading-relaxed">Receive OS notifications for new messages from other peers.</p>
+                        <div class="flex justify-end pt-2">
+                            <button onclick={async () => {
+                                const next = !$userStore.privacySettings.notificationsEnabled;
+                                try {
+                                    await invoke('set_notification_enabled', { enabled: next });
+                                    updatePrivacy({ notificationsEnabled: next });
+                                } catch (e) {
+                                    addToast("Failed to update notification setting", 'error');
+                                }
+                            }} class="w-12 h-6 rounded-full transition-colors relative {$userStore.privacySettings.notificationsEnabled ? 'bg-entropy-primary' : 'bg-entropy-surface-light'}" aria-label="Toggle Notifications">
+                                <div class="absolute top-1 w-4 h-4 bg-white rounded-full transition-all {$userStore.privacySettings.notificationsEnabled ? 'left-7' : 'left-1'}"></div>
                             </button>
                         </div>
                     </div>

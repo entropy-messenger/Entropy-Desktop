@@ -69,6 +69,26 @@
             resolveIdentity(msg.replyTo.senderHash);
         }
     });
+
+    // Close reaction picker when clicking outside
+    $effect(() => {
+        if (showReactionPicker) {
+            const handleClick = (e: MouseEvent) => {
+                const target = e.target as HTMLElement;
+                if (!target.closest('.reaction-picker') && !target.closest('.reaction-trigger')) {
+                    showReactionPicker = false;
+                }
+            };
+            // Use timeout to avoid immediate closure from the opening click
+            const timer = setTimeout(() => {
+                window.addEventListener('click', handleClick);
+            }, 0);
+            return () => {
+                clearTimeout(timer);
+                window.removeEventListener('click', handleClick);
+            };
+        }
+    });
 </script>
 
 <div id="msg-{msg.id}" class="flex {msg.isMine ? 'justify-end' : 'justify-start'} group items-center relative z-10 transition-opacity duration-300">
@@ -134,14 +154,14 @@
                 <button onclick={() => { toggleStar(activeChat.peerHash, msg.id); if(isMobile) showActions = false; }} class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-yellow-500 shadow-md transition active:scale-90" title="Star"><LucideStar size={isMobile ? 16 : 14} class={msg.isStarred ? 'fill-yellow-500 text-yellow-500' : ''} /></button>
                 <button
                     onclick={() => { showReactionPicker = !showReactionPicker; showActions = false; }}
-                    class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-accent shadow-md transition active:scale-90"
+                    class="p-1.5 hover:bg-entropy-surface-light bg-entropy-surface/90 backdrop-blur-sm rounded-full text-entropy-text-dim hover:text-entropy-accent shadow-md transition active:scale-90 reaction-trigger"
                     title="React"
                 >😊</button>
             </div>
 
             {#if showReactionPicker}
                 <div
-                    class="absolute {msg.isMine ? 'right-0' : 'left-0'} -top-10 flex items-center space-x-1 bg-entropy-surface/95 backdrop-blur-xl border border-entropy-border/10 rounded-2xl px-2 py-1.5 shadow-xl z-20 animate-in fade-in slide-in-from-bottom-2 duration-200"
+                    class="absolute {msg.isMine ? 'right-0' : 'left-0'} -top-10 flex items-center space-x-1 bg-entropy-surface/95 backdrop-blur-xl border border-entropy-border/10 rounded-2xl px-2 py-1.5 shadow-xl z-20 animate-in fade-in slide-in-from-bottom-2 duration-200 reaction-picker"
                 >
                     {#each PRESET_EMOJIS as emoji}
                         <button

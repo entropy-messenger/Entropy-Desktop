@@ -194,6 +194,8 @@ async fn handle_media_msg_inner(
     app.emit("msg://added", final_json.clone())
         .map_err(|e: tauri::Error| e.to_string())?;
 
+    crate::notification::send_message_notification(&app, &sender, &chat_address, &db_msg.content);
+
     // Auto-download all received files (skip own messages — sender already has the vault file)
     if let Ok(hash_lock) = app.state::<NetworkState>().identity_hash.lock()
         && let Some(own_hash) = hash_lock.clone()

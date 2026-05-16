@@ -609,3 +609,30 @@ pub async fn internal_db_upsert_chat(state: &DbState, chat: DbChat) -> Result<()
 
     Ok(())
 }
+
+#[tauri::command]
+pub fn set_notification_enabled(state: State<'_, DbState>, enabled: bool) -> Result<(), String> {
+    let conn = state.get_conn()?;
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('notifications_enabled', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![if enabled { "1" } else { "0" }],
+    )
+    .map_err(|e| format!("Failed to set notification setting: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_notification_enabled(state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.get_conn()?;
+    let result: Result<String, _> = conn.query_row(
+        "SELECT value FROM settings WHERE key = 'notifications_enabled'",
+        [],
+        |row| row.get(0),
+    );
+    match result {
+        Ok(val) => Ok(val == "1"),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true), // default: enabled
+        Err(e) => Err(format!("Failed to read notification setting: {}", e)),
+    }
+}

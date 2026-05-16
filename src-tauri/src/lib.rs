@@ -10,6 +10,7 @@ mod app_state;
 mod commands;
 mod media_proxy;
 mod noise;
+mod notification;
 mod signal_store;
 
 #[cfg(test)]
@@ -115,6 +116,8 @@ pub fn run() {
             commands::process_outgoing_group_media,
             commands::process_outgoing_reaction,
             commands::download_media,
+            commands::set_notification_enabled,
+            commands::get_notification_enabled,
         ])
         .setup(|app| {
             // Linux-specific fix: Allow microphone permission request for WebKitGTK

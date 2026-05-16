@@ -48,6 +48,7 @@ export interface PrivacySettings {
     routingMode: 'direct' | 'tor' | 'custom';
     proxyUrl?: string;
     theme?: 'light' | 'dark';
+    notificationsEnabled: boolean;
 }
 
 /**

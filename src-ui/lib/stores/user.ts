@@ -34,7 +34,8 @@ const initialState: AppState = {
         typingStatus: 'everyone',
         routingMode: 'direct',
         proxyUrl: 'socks5://127.0.0.1:9050',
-        theme: 'dark'
+        theme: 'dark',
+        notificationsEnabled: true
     },
     isSynced: false,
     connectionStatus: 'disconnected',

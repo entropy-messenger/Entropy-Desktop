@@ -23,7 +23,19 @@ pub fn start_media_server(app: tauri::AppHandle) {
                 async move { handle_media_request(app, id, range, query).await }
             });
 
-        let routes = media_route;
+        let local_route = warp::path!("local")
+            .and(warp::query::<std::collections::HashMap<String, String>>())
+            .and(warp::header::optional::<String>("range"))
+            .and_then(
+                |params: std::collections::HashMap<String, String>,
+                 range: Option<String>| async move {
+                    let path = params.get("path").cloned().unwrap_or_default();
+                    let path = percent_decode(&path);
+                    handle_local_file_request(path, range).await
+                },
+            );
+
+        let routes = media_route.or(local_route);
 
         // Bind to port 0 to let the OS assign any available port
         let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
@@ -35,6 +47,106 @@ pub fn start_media_server(app: tauri::AppHandle) {
 
         server.await;
     });
+}
+
+async fn handle_local_file_request(
+    path: String,
+    range: Option<String>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let path_buf = std::path::PathBuf::from(&path);
+    let canonical = std::fs::canonicalize(&path_buf).map_err(|_| warp::reject())?;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let allowed = if !home.is_empty() {
+        let home_path = std::path::PathBuf::from(&home);
+        let home_canonical = std::fs::canonicalize(&home_path).unwrap_or(home_path);
+        canonical.starts_with(&home_canonical)
+    } else {
+        canonical.starts_with("/home/")
+            || canonical.starts_with("/Users/")
+            || canonical.starts_with("/tmp/")
+    };
+    if !allowed {
+        return Err(warp::reject());
+    }
+
+    let total_size = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_| warp::reject())?
+        .len();
+
+    let (start, end) = if let Some(r) = range {
+        if let Some(stripped) = r.strip_prefix("bytes=") {
+            let parts: Vec<&str> = stripped.split('-').collect();
+            let s = parts[0].parse::<u64>().unwrap_or(0);
+            let e = if parts.len() > 1 && !parts[1].is_empty() {
+                parts[1].parse::<u64>().unwrap_or(total_size - 1)
+            } else {
+                total_size - 1
+            };
+            (s, e)
+        } else {
+            (0, total_size - 1)
+        }
+    } else {
+        (0, total_size - 1)
+    };
+
+    let content_length = end - start + 1;
+    let ext = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let content_type = mime_from_ext(&ext);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
+
+    tauri::async_runtime::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+        if let Ok(mut file) = tokio::fs::File::open(&canonical).await {
+            let _ = file.seek(std::io::SeekFrom::Start(start)).await;
+            let mut remaining = content_length as usize;
+            let mut buf = vec![0u8; 65536];
+            while remaining > 0 {
+                let to_read = remaining.min(buf.len());
+                match file.read(&mut buf[..to_read]).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx
+                            .send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        remaining -= n;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    let status = if start > 0 || end < total_size - 1 {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let mut resp = Response::builder()
+        .status(status)
+        .header("Content-Type", content_type)
+        .header("Accept-Ranges", "bytes")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Content-Length", content_length);
+    if start > 0 || end < total_size - 1 {
+        resp = resp.header(
+            "Content-Range",
+            format!("bytes {}-{}/{}", start, end, total_size),
+        );
+    }
+    Ok(resp.body(Body::wrap_stream(stream)).unwrap())
 }
 
 async fn handle_media_request(
@@ -211,7 +323,7 @@ async fn handle_media_request(
         })
         .header("Content-Type", mime_type.to_string())
         .header("Accept-Ranges", "bytes")
-        .header("Access-Control-Allow-Origin", "null")
+        .header("Access-Control-Allow-Origin", "*")
         .header(
             "Access-Control-Expose-Headers",
             "Content-Range, Content-Length, Accept-Ranges",

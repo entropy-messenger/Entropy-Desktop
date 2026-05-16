@@ -37,7 +37,7 @@ pub async fn handle_text_msg(
         id: msg_id.clone(),
         chat_address: chat_address.clone(),
         sender_hash: sender.clone(),
-        content,
+        content: content.clone(),
         timestamp,
         r#type: "text".to_string(),
         status: "delivered".to_string(),
@@ -81,6 +81,8 @@ pub async fn handle_text_msg(
 
     app.emit("msg://added", final_json.clone())
         .map_err(|e: tauri::Error| e.to_string())?;
+
+    crate::notification::send_message_notification(&app, &sender, &chat_address, &content);
 
     // Enforce 1:1 delivery receipts
     if !is_group {

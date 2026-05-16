@@ -48,7 +48,7 @@ export const initApp = async (password: string) => {
             try {
                 const meta = JSON.parse(savedMeta);
                 globalNickname = meta.globalNickname || meta.myAlias || null;
-                privacySettings = meta.privacySettings || privacySettings;
+                privacySettings = { ...privacySettings, ...meta.privacySettings };
             } catch (e) {
                 // Parse failed
             }

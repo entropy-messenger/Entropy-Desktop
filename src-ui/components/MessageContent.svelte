@@ -130,7 +130,7 @@
                 </span>
                 {#if isMine}
                     {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
-                    <div class="flex items-center scale-90 translate-y-[0.5px]">
+                    <div class="flex items-center translate-y-[0.5px]">
                         {#if msg.status === 'pending' || msg.status === 'sending'}<LucideClock size={10} class="text-white/70 animate-pulse" />
                         {:else if msg.status === 'failed'}<LucideX size={11} class="text-red-400" />
                         {:else if msg.status === 'read' && canSeeReceipts}<LucideCheckCheck size={11} class="text-cyan-400" />
@@ -154,7 +154,7 @@
                     </span>
                     {#if isMine}
                         {@const canSeeReceipts = $userStore.privacySettings.readReceipts}
-                        <div class="flex items-center scale-90 translate-y-[0.5px] opacity-70">
+                        <div class="flex items-center shrink-0 translate-y-[0.5px] opacity-70">
                             {#if msg.status === 'pending' || msg.status === 'sending'}
                                 <LucideClock size={10} class="{isMine ? 'text-white/70' : 'text-entropy-text-dim/70'} animate-pulse" />
                             {:else if msg.status === 'failed'}

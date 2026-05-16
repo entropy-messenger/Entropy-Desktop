@@ -9,9 +9,8 @@
   import TitleBar from './components/TitleBar.svelte';
   import Onboarding from './components/Onboarding.svelte';
   import { LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
-  import { signalManager } from './lib/signal_manager';
+import { invoke } from '@tauri-apps/api/core';
+import { signalManager } from './lib/signal_manager';
   import Toast from './components/Toast.svelte';
   import Modal from './components/Modal.svelte';
   import Lightbox from './components/Lightbox.svelte';
@@ -104,9 +103,9 @@
    * Orchestrates OS-level notification permissions required for incoming message alerts.
    */
   const checkNotificationPermission = async () => {
-    let permission = await isPermissionGranted();
-    if (!permission) {
-      permission = await requestPermission() === 'granted';
+    const granted: boolean | null = await invoke('plugin:notification|is_permission_granted');
+    if (granted === null) {
+      await invoke('plugin:notification|request_permission');
     }
   };
 

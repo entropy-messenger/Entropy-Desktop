@@ -300,11 +300,9 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
         jumpToPresent(peerHash);
     }
 
-    // Persistence & Notifications
+    // Persistence
     if (updatedChatMetadata) {
         syncChatToDb(updatedChatMetadata);
-        const s = get(userStore);
-        if (!msg.isMine && s.activeChatHash !== peerHash) triggerNativeNotification(updatedChatMetadata, msg);
 
     }
 };
@@ -380,21 +378,6 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
     }, 300);
 };
 
-const triggerNativeNotification = (chat: Chat, msg: Message) => {
-    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        import('@tauri-apps/plugin-notification').then(({ sendNotification, isPermissionGranted }) => {
-            isPermissionGranted().then((granted: boolean) => {
-                if (granted) {
-                    sendNotification({
-                        title: `Message from ${chat.peerNickname || 'Peer'}`,
-                        body: msg.content.length > 50 ? msg.content.substring(0, 47) + '...' : msg.content
-                    });
-                }
-            });
-        });
-    }
-};
-
 export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0, direction: 'jump' | 'older' | 'newer' = 'jump') => {
     try {
         const state = get(userStore);
@@ -408,33 +391,36 @@ export const loadChatMessages = async (peerHash: string, limit = 50, offset = 0,
             type: m.type as any,
             isMine: m.senderHash === identityHash,
             status: m.status as any,
-            attachment: m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined,
             isStarred: !!m.isStarred,
-            replyTo: m.replyToJson ? JSON.parse(m.replyToJson) : undefined,
-            reactions: m.reactionsJson ? JSON.parse(m.reactionsJson) : undefined
+            get attachment() { return m.attachmentJson ? JSON.parse(m.attachmentJson) : undefined; },
+            get replyTo() { return m.replyToJson ? JSON.parse(m.replyToJson) : undefined; },
+            get reactions() { return m.reactionsJson ? JSON.parse(m.reactionsJson) : undefined; }
         }));
 
         messageStore.update(mStore => {
             const existing = mStore[peerHash] || [];
 
-            // Merge newly loaded messages with existing ones
-            const combined = [...existing];
-            messages.forEach(newMsg => {
-                if (!combined.some(m => m.id === newMsg.id)) {
-                    combined.push(newMsg);
-                }
-            });
+            // Linear merge O(n+m) — both arrays are already timestamp-sorted
+            const merged: Message[] = [];
+            let i = 0, j = 0;
+            const seen = new Set<string>();
+            while (i < existing.length && j < messages.length) {
+                const useExisting = existing[i].timestamp <= messages[j].timestamp;
+                const msg = useExisting ? existing[i] : messages[j];
+                if (!seen.has(msg.id)) { merged.push(msg); seen.add(msg.id); }
+                if (useExisting) i++; else j++;
+            }
+            while (i < existing.length) { if (!seen.has(existing[i].id)) merged.push(existing[i]); i++; }
+            while (j < messages.length) { if (!seen.has(messages[j].id)) merged.push(messages[j]); j++; }
 
-            const sorted = combined.sort((a, b) => a.timestamp - b.timestamp);
-
-            let final = sorted;
-            if (sorted.length > 2000) {
+            let final = merged;
+            if (merged.length > 2000) {
                 const chat = get(userStore).chats[peerHash];
                 if (chat?.hasMoreNewer) {
-                    const mid = Math.floor(sorted.length / 2);
-                    final = sorted.slice(mid - 500, mid + 500);
+                    const mid = Math.floor(merged.length / 2);
+                    final = merged.slice(mid - 500, mid + 500);
                 } else {
-                    final = sorted.slice(-1000);
+                    final = merged.slice(-1000);
                 }
             }
 

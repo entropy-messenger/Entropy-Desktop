@@ -162,6 +162,11 @@ const MIGRATIONS: &[&str] = &[
     ",
     // Version 2: Reaction Emojis — adds reactions_json to existing databases
     "ALTER TABLE messages ADD COLUMN reactions_json TEXT;",
+    // Version 3: App settings table
+    "CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );",
 ];
 
 pub fn get_db_filename() -> String {

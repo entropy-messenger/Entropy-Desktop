@@ -255,19 +255,21 @@
                                  </div>
                             {/if}
                         </div>
-                        <div class="flex items-center justify-between mt-0.5">
-                            <div class="text-[12px] truncate pr-2 flex-1 {chat.isTyping && canSeeTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
+                        <div class="flex items-center justify-between mt-0.5 relative">
+                            <div class="text-[11.5px] truncate pr-2 flex-1 {chat.isTyping && canSeeTyping ? 'text-entropy-accent font-bold' : 'text-entropy-text-dim'}">
                                 {#if chat.isTyping && canSeeTyping}
                                     <span class="animate-pulse">typing...</span>
                                 {:else if chat.lastMsg}
-                                    <div class="flex items-center space-x-1">
+                                    <div class="flex items-center min-w-0">
                                         {#if chat.lastIsMine}
-                                            {#if chat.lastStatus === 'sending' || chat.lastStatus === 'pending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
-                                            {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-cyan-300" />
-                                            {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary opacity-70" />
-                                            {:else}<LucideCheck size={13} class="text-entropy-text-secondary opacity-70" />{/if}
+                                            <div class="flex shrink-0 mr-1.5">
+                                                {#if chat.lastStatus === 'sending' || chat.lastStatus === 'pending'}<LucideClock size={13} class="text-entropy-text-secondary animate-pulse" />
+                                                {:else if chat.lastStatus === 'read' && canSeeReceipts}<LucideCheckCheck size={13} class="text-cyan-300" />
+                                                {:else if chat.lastStatus === 'read' || chat.lastStatus === 'delivered'}<LucideCheckCheck size={13} class="text-entropy-text-secondary opacity-70" />
+                                                {:else}<LucideCheck size={13} class="text-entropy-text-secondary opacity-70" />{/if}
+                                            </div>
                                         {/if}
-                                        <span class="truncate opacity-70">
+                                        <span class="truncate opacity-70 flex-1 min-w-0">
                                             {#if chat.isGroup && !chat.lastIsMine}<span class="text-entropy-primary font-bold">{$userStore.nicknames[chat.lastSenderHash || ''] || chat.lastSenderHash?.slice(0, 6) || ''}:</span>{/if}
                                             {resolveHashesInText(chat.lastMsg)}
                                         </span>
@@ -275,27 +277,29 @@
                                 {/if}
                             </div>
                             
-                            {#if chat.unreadCount > 0}
-                                <div class="bg-entropy-primary text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[17px] text-center shadow-sm">{chat.unreadCount}</div>
-                            {/if}
-                            
-                            <div class="hidden group-hover/item:flex items-center space-x-1 ml-2">
-                                 <button onclick={(e) => {e.stopPropagation(); togglePin(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Pin/Unpin"><LucidePin size={12} class={chat.isPinned ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
-                                 <button onclick={(e) => {e.stopPropagation(); toggleArchive(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Archive/Unarchive"><LucideArchive size={12} class={chat.isArchived ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
-                                 <button 
-                                    onclick={async (e) => { 
-                                        e.stopPropagation(); 
-                                        const msg = "Are you sure you want to delete this conversation's history?";
-                                        const title = "Delete Chat History";
-                                        if (await showConfirm(msg, title)) {
-                                            deleteChat(chat.peerHash);
-                                        }
-                                    }} 
-                                    class="p-1 hover:bg-red-500/10 rounded transition text-entropy-text-dim hover:text-red-500" 
-                                     title="Delete Chat History"
-                                 >
-                                    <LucideTrash2 size={12} />
-                                 </button>
+                            <div class="flex items-center space-x-1 relative">
+                                {#if chat.unreadCount > 0}
+                                    <div class="bg-entropy-primary text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[17px] text-center shadow-sm group-hover/item:opacity-0 transition-opacity">{chat.unreadCount}</div>
+                                {/if}
+                                
+                                <div class="hidden group-hover/item:flex items-center space-x-1 absolute right-0 bg-entropy-bg/90 backdrop-blur-md pl-2 rounded-l-lg transition-all">
+                                     <button onclick={(e) => {e.stopPropagation(); togglePin(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Pin/Unpin"><LucidePin size={12} class={chat.isPinned ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
+                                     <button onclick={(e) => {e.stopPropagation(); toggleArchive(chat.peerHash)}} class="p-1 hover:bg-white/10 rounded transition text-entropy-text-dim hover:text-entropy-primary" title="Archive/Unarchive"><LucideArchive size={12} class={chat.isArchived ? 'fill-entropy-primary text-entropy-primary' : ''} /></button>
+                                     <button 
+                                        onclick={async (e) => { 
+                                            e.stopPropagation(); 
+                                            const msg = "Are you sure you want to delete this conversation's history?";
+                                            const title = "Delete Chat History";
+                                            if (await showConfirm(msg, title)) {
+                                                deleteChat(chat.peerHash);
+                                            }
+                                        }} 
+                                        class="p-1 hover:bg-red-500/10 rounded transition text-entropy-text-dim hover:text-red-500" 
+                                         title="Delete Chat History"
+                                     >
+                                        <LucideTrash2 size={12} />
+                                     </button>
+                                </div>
                             </div>
                         </div>
                     </div>

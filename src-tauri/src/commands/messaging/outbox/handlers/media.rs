@@ -187,13 +187,13 @@ fn validate_media_payload(
             .map_err(|_| "Access denied: Invalid or inaccessible file path".to_string())?;
 
         let metadata = std::fs::metadata(&canonical_path).map_err(|e| e.to_string())?;
-        if metadata.len() > 10_737_418_240u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if metadata.len() > 268_435_456u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         Ok((Some(canonical_path), metadata.len()))
     } else if let Some(ref d) = payload.file_data {
-        if d.len() as u64 > 10_737_418_240u64 {
-            return Err("File too large. Maximum size is 10GB.".to_string());
+        if d.len() as u64 > 268_435_456u64 {
+            return Err("File too large. Maximum size is 256MB.".to_string());
         }
         Ok((None, d.len() as u64))
     } else {
@@ -302,6 +302,22 @@ fn spawn_upload_task(
                 return;
             }
             let upload_resp = upload_resp.unwrap();
+
+            if upload_resp.get("type").and_then(|t| t.as_str()) == Some("error") {
+                let _ = std::fs::remove_file(&transit_temp);
+                let _error_msg = upload_resp.get("error").and_then(|e| e.as_str()).unwrap_or("Upload denied by relay");
+                if let Ok(conn) = db_state.get_conn() {
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'failed' WHERE id = ?1",
+                        rusqlite::params![msg_id],
+                    );
+                }
+                let _ = app.emit("msg://status", json!({
+                    "id": msg_id, "status": "failed", "chatAddress": payload.recipient
+                }));
+                return;
+            }
+
             let upload_url = upload_resp["upload_url"].as_str().unwrap_or("").to_string();
             let download_url = upload_resp["download_url"]
                 .as_str()
