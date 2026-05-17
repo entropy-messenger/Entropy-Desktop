@@ -8,15 +8,14 @@
   import ChatWindow from './components/ChatWindow.svelte';
   import TitleBar from './components/TitleBar.svelte';
   import Onboarding from './components/Onboarding.svelte';
-  import { LucideLock, LucideUnlock, LucideEye, LucideEyeOff } from 'lucide-svelte';
+  import { LucideLock, LucideUnlock, LucideEye, LucideEyeOff, LucideDownload } from 'lucide-svelte';
 import { invoke } from '@tauri-apps/api/core';
 import { signalManager } from './lib/signal_manager';
   import Toast from './components/Toast.svelte';
   import Modal from './components/Modal.svelte';
   import Lightbox from './components/Lightbox.svelte';
   import { addToast, showConfirm, contextMenu } from './lib/stores/ui';
-  import { LucideDownload } from 'lucide-svelte';
-  import { exportVault, importVault, resetDatabase as resetAccountAction } from './lib/actions/vault';
+  import { exportVaultWithDialog, importVaultWithDialog, resetDatabase as resetAccountAction } from './lib/actions/vault';
   import { getVersion } from '@tauri-apps/api/app';
 
   let updateAvailable = $state<string | null>(null);
@@ -125,7 +124,6 @@ import { signalManager } from './lib/signal_manager';
           try {
             await checkNotificationPermission();
           } catch (e) {
-            // Permission failed silently
           }
 
           // Clean stale temp exports from previous session
@@ -144,8 +142,7 @@ import { signalManager } from './lib/signal_manager';
 
       // Handle Android Back Button / Gesture
       const handlePopState = (e: PopStateEvent) => {
-          // Check Svelte stores to see what we should close
-          if ($lightbox) {
+      if ($lightbox) {
               lightbox.set(null);
           } else if ($modal) {
               modal.set(null);
@@ -167,7 +164,6 @@ import { signalManager } from './lib/signal_manager';
     let navDepth = $state(0);
 
     $effect(() => {
-        // Calculate how many layers are currently 'open'
         let currentDepth = 0;
         if (isMobile && $userStore.activeChatHash) currentDepth++;
         if ($modal) currentDepth++;
@@ -232,7 +228,6 @@ import { signalManager } from './lib/signal_manager';
             e.key === 'F12' ||
             (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C'))
         ) {
-            // Prevent opening dev tools in production mode
             if (!import.meta.env.DEV) e.preventDefault();
         }
 
@@ -249,51 +244,11 @@ import { signalManager } from './lib/signal_manager';
     }
 
     async function handleExportVault() {
-         try {
-            if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-                const { save } = await import('@tauri-apps/plugin-dialog');
-                const path = await save({
-                    defaultPath: `entropy_backup_${Date.now()}.entropy`,
-                    filters: [{
-                        name: 'Entropy Backup',
-                        extensions: ['entropy']
-                    }]
-                });
-
-                if (path) {
-                    const includeMedia = await showConfirm("Do you want to include all media files (photos/videos) in this backup?", "Backup Options");
-                    await exportVault(path, includeMedia);
-                }
-            } else {
-                addToast("Export not supported in web mode.", 'warning');
-            }
-        } catch (e) {
-        }
+        await exportVaultWithDialog();
     }
 
     async function handleImportVault() {
-        if (!await showConfirm("WARNING: Importing a backup will OVERWRITE any current data on this device. Continue?", "Restore Backup")) return;
-
-        try {
-            if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-                const { open } = await import('@tauri-apps/plugin-dialog');
-                const path = await open({
-                    multiple: false,
-                    filters: [{
-                        name: 'Entropy Backup',
-                        extensions: ['entropy', 'zip']
-                    }]
-                });
-
-                if (path) {
-                    const includeMedia = await showConfirm("This backup may contain media files. Do you want to extract and restore them as well?", "Restore Options");
-                    await importVault(path, includeMedia);
-                }
-            } else {
-                addToast("Import not supported in web mode.", 'warning');
-            }
-        } catch (e) {
-        }
+        await importVaultWithDialog();
     }
 </script>
 
@@ -315,7 +270,6 @@ import { signalManager } from './lib/signal_manager';
 
             <div class="max-w-6xl w-full mx-auto px-6 lg:px-12 py-8 lg:py-12 flex flex-col items-center justify-center animate-in fade-in duration-700 relative z-10 min-h-screen lg:min-h-[600px]">
                 <div class="w-full grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-24 items-center">
-                    <!-- Right/Branding Section -->
                     <div class="space-y-8 lg:space-y-12 text-center lg:text-left order-1">
                         <div class="flex flex-col items-center lg:items-start space-y-6 lg:space-y-8">
                             <div class="w-20 h-20 lg:w-24 lg:h-24 bg-entropy-surface rounded-2xl shadow-2xl flex items-center justify-center transform -rotate-6 transition-all duration-700 hover:rotate-0 hover:scale-105 group border border-white/10">
@@ -362,7 +316,6 @@ import { signalManager } from './lib/signal_manager';
                         </div>
                     </div>
 
-                    <!-- Left/Form Section -->
                     <div class="w-full space-y-8 order-2">
                         <div class="space-y-6">
                             <div class="flex justify-between items-center px-4">

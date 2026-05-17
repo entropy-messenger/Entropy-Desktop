@@ -1,4 +1,3 @@
-// Module Registry
 pub mod network;
 pub use network::*;
 pub mod messaging;

@@ -120,7 +120,6 @@ pub async fn process_incoming_binary(
                         let decrypted_json: serde_json::Value =
                             serde_json::from_str(&decrypted_str).map_err(|e| e.to_string())?;
 
-                        // Check if chat is active for group messages (except invites)
                         if let Some(p_type) = decrypted_json["type"].as_str()
                             && p_type != "group_invite"
                             && let Some(gid) = decrypted_json["groupId"].as_str()

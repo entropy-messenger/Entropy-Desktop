@@ -1,7 +1,3 @@
-/**
- * Generate a deterministic avatar based on an identity hash.
- */
-
 export interface FlowShard {
   type: 'polygon' | 'arc' | 'grain';
   points?: string;

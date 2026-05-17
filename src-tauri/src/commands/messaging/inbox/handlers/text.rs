@@ -52,7 +52,6 @@ pub async fn handle_text_msg(
 
     let db_state = app.state::<DbState>();
 
-    // If it's a group, check if the chat is active
     if is_group {
         let conn = db_state.get_conn()?;
         let is_active: i32 = conn
@@ -84,7 +83,6 @@ pub async fn handle_text_msg(
 
     crate::notification::send_message_notification(&app, &sender, &chat_address, &content);
 
-    // Enforce 1:1 delivery receipts
     if !is_group {
         let receipt_payload = json!({
             "type": "receipt",

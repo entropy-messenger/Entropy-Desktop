@@ -23,6 +23,22 @@
 
   let lastGeneratedId = $state<string | null>(null);
 
+  function computeWaveformData(audioBuffer: AudioBuffer, sampleCount = 45): number[] {
+      const rawData = audioBuffer.getChannelData(0);
+      const blockSize = Math.floor(rawData.length / sampleCount);
+      const result: number[] = [];
+      for (let i = 0; i < sampleCount; i++) {
+          let blockStart = blockSize * i;
+          let sum = 0;
+          for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
+              sum = sum + Math.abs(rawData[blockStart + j]);
+          }
+          result.push(sum / (blockSize || 1));
+      }
+      const max = Math.max(...result) || 1;
+      return result.map(n => Math.max(0.1, n / max));
+  }
+
   async function loadAudioProxy() {
       if (!id || id === 'preview') return;
       try {
@@ -43,22 +59,7 @@
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           
-          const rawData = audioBuffer.getChannelData(0);
-          const samples = 45; 
-          const blockSize = Math.floor(rawData.length / samples);
-          const result = [];
-          
-          for (let i = 0; i < samples; i++) {
-            let blockStart = blockSize * i;
-            let sum = 0;
-            for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
-              sum = sum + Math.abs(rawData[blockStart + j]);
-            }
-            result.push(sum / (blockSize || 1));
-          }
-          
-          const max = Math.max(...result) || 1;
-          waveformData = result.map(n => Math.max(0.1, n / max));
+          waveformData = computeWaveformData(audioBuffer);
           lastGeneratedId = id;
           drawWaveform();
       } catch (e) {
@@ -77,22 +78,7 @@
           const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
           const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           
-          const rawData = audioBuffer.getChannelData(0);
-          const samples = 45; 
-          const blockSize = Math.floor(rawData.length / samples);
-          const result = [];
-          
-          for (let i = 0; i < samples; i++) {
-            let blockStart = blockSize * i;
-            let sum = 0;
-            for (let j = 0; j < Math.min(blockSize, rawData.length - blockStart); j++) {
-              sum = sum + Math.abs(rawData[blockStart + j]);
-            }
-            result.push(sum / (blockSize || 1));
-          }
-          
-          const max = Math.max(...result) || 1;
-          waveformData = result.map(n => Math.max(0.1, n / max));
+          waveformData = computeWaveformData(audioBuffer);
           drawWaveform();
       } catch(e) {
           waveformData = Array(45).fill(0.2);
@@ -135,7 +121,6 @@
   async function togglePlay() {
     if (!audioEl) return;
 
-    // JIT Loading Logic
     if (!proxyUrl && !src && !isLoading) {
         await loadAudioProxy();
         

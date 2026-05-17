@@ -67,7 +67,6 @@ pub async fn internal_process_fragments(
         }
 
         if complete {
-            // Reassemble in order
             let total_size: usize = entry.chunks.values().map(|v| v.len()).sum();
             let mut data = Vec::with_capacity(total_size);
             for i in 0..entry.total {

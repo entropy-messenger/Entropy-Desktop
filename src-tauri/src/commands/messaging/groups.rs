@@ -207,7 +207,6 @@ pub async fn add_to_group(
     let invite_str = invite.to_string();
     let update_str = update.to_string();
 
-    // Invite new ones
     for member in &new_members {
         if let Ok(ciphertext) =
             internal_signal_encrypt(app.clone(), &state, member, invite_str.clone()).await

@@ -73,7 +73,6 @@
         role="button"
         tabindex="0"
     >
-        <!-- Top Bar (WhatsApp Style) -->
         <div 
             class="absolute top-0 inset-x-0 z-20 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between px-4 sm:px-6"
             style="padding-top: calc(var(--sat, 0px) + 1.5rem); height: calc(var(--sat, 0px) + 5.5rem);"
@@ -119,7 +118,6 @@
             </div>
         </div>
 
-        <!-- Media Container -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div 
             class="flex-1 flex items-center justify-center p-0 sm:p-4 z-10 min-h-0 min-w-0 w-full"
@@ -165,7 +163,6 @@
             {/if}
         </div>
 
-        <!-- Bottom Caption Bar (WhatsApp Style) -->
         {#if $lightbox.content}
             <div 
                 class="absolute bottom-0 inset-x-0 z-20 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 flex justify-center"
@@ -179,7 +176,6 @@
                 </div>
             </div>
         {:else}
-            <!-- Fallback dismissal hint -->
             <div class="absolute bottom-6 inset-x-0 flex justify-center opacity-30 pointer-events-none">
                 <span class="text-[10px] text-white font-bold uppercase tracking-[0.4em]">Tap to dismiss</span>
             </div>

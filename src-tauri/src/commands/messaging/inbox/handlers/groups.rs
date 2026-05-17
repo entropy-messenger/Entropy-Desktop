@@ -4,6 +4,23 @@ use rusqlite::params;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
+fn make_system_msg(chat_address: &str, sender_hash: &str, content: String, timestamp: i64) -> DbMessage {
+    DbMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_address: chat_address.to_string(),
+        sender_hash: sender_hash.to_string(),
+        content,
+        timestamp,
+        r#type: "system".to_string(),
+        status: "delivered".to_string(),
+        attachment_json: None,
+        is_starred: false,
+        is_group: true,
+        reply_to_json: None,
+        reactions_json: None,
+    }
+}
+
 pub async fn handle_group_invite(
     app: AppHandle,
     sender: String,
@@ -61,7 +78,6 @@ pub async fn handle_group_invite(
     if let Some(new_m_list) = decrypted_json["newMembers"].as_array() {
         for nm_val in new_m_list {
             if let Some(nm) = nm_val.as_str() {
-                let sys_id = uuid::Uuid::new_v4().to_string();
                 let sys_ts = chrono::Utc::now().timestamp_millis();
                 let content = if nm == own_hash {
                     handled_me = true;
@@ -76,20 +92,7 @@ pub async fn handle_group_invite(
                         &nm[0..8.min(nm.len())]
                     )
                 };
-                let sys_msg = DbMessage {
-                    id: sys_id,
-                    chat_address: gid.clone(),
-                    sender_hash: sender.clone(),
-                    content,
-                    timestamp: sys_ts,
-                    r#type: "system".to_string(),
-                    status: "delivered".to_string(),
-                    attachment_json: None,
-                    is_starred: false,
-                    is_group: true,
-                    reply_to_json: None,
-                    reactions_json: None,
-                };
+                let sys_msg = make_system_msg(&gid, &sender, content, sys_ts);
                 if internal_db_save_message(&db_state, sys_msg.clone())
                     .await
                     .is_ok()
@@ -101,25 +104,16 @@ pub async fn handle_group_invite(
     }
 
     if !handled_me {
-        let sys_id = uuid::Uuid::new_v4().to_string();
         let sys_ts = chrono::Utc::now().timestamp_millis();
-        let sys_msg = DbMessage {
-            id: sys_id,
-            chat_address: gid.clone(),
-            sender_hash: sender.clone(),
-            content: format!(
+        let sys_msg = make_system_msg(
+            &gid,
+            &sender,
+            format!(
                 "You were added to the group by {}",
                 &sender[0..8.min(sender.len())]
             ),
-            timestamp: sys_ts,
-            r#type: "system".to_string(),
-            status: "delivered".to_string(),
-            attachment_json: None,
-            is_starred: false,
-            is_group: true,
-            reply_to_json: None,
-            reactions_json: None,
-        };
+            sys_ts,
+        );
         internal_db_save_message(&db_state, sys_msg.clone()).await?;
         app.emit("msg://added", json!(sys_msg))
             .map_err(|e: tauri::Error| e.to_string())?;
@@ -155,22 +149,13 @@ pub async fn handle_group_leave(
         .to_string();
     let db_state = app.state::<DbState>();
 
-    let msg_id = uuid::Uuid::new_v4().to_string();
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let sys_msg = DbMessage {
-        id: msg_id,
-        chat_address: gid.clone(),
-        sender_hash: sender.clone(),
-        content: format!("{} left the group", &leaver[0..8]),
+    let sys_msg = make_system_msg(
+        &gid,
+        &sender,
+        format!("{} left the group", &leaver[0..8]),
         timestamp,
-        r#type: "system".to_string(),
-        status: "delivered".to_string(),
-        attachment_json: None,
-        is_starred: false,
-        is_group: true,
-        reply_to_json: None,
-        reactions_json: None,
-    };
+    );
     internal_db_save_message(&db_state, sys_msg.clone()).await?;
     app.emit("msg://added", json!(sys_msg))
         .map_err(|e: tauri::Error| e.to_string())?;
@@ -198,26 +183,17 @@ pub async fn handle_group_update(
     let db_state = app.state::<DbState>();
 
     if let Some(new_name) = group_name {
-        let sys_id = uuid::Uuid::new_v4().to_string();
         let sys_ts = chrono::Utc::now().timestamp_millis();
-        let sys_msg = DbMessage {
-            id: sys_id,
-            chat_address: gid.clone(),
-            sender_hash: sender.clone(),
-            content: format!(
+        let sys_msg = make_system_msg(
+            &gid,
+            &sender,
+            format!(
                 "{} changed the group name to \"{}\"",
                 &sender[0..8],
                 new_name
             ),
-            timestamp: sys_ts,
-            r#type: "system".to_string(),
-            status: "delivered".to_string(),
-            attachment_json: None,
-            is_starred: false,
-            is_group: true,
-            reply_to_json: None,
-            reactions_json: None,
-        };
+            sys_ts,
+        );
         let _ = internal_db_save_message(&db_state, sys_msg.clone()).await;
         let _ = app.emit("msg://added", json!(sys_msg));
     }
@@ -235,7 +211,6 @@ pub async fn handle_group_update(
         };
 
         if let Ok(conn) = db_state.get_conn() {
-            // Detection of changes in group membership
             if let Some(new_members) = decrypted_json["newMembers"].as_array() {
                 for nm_val in new_members {
                     if let Some(m) = nm_val.as_str() {
@@ -299,22 +274,8 @@ pub async fn handle_group_update(
         }
 
         for content in system_messages {
-            let sys_id = uuid::Uuid::new_v4().to_string();
             let sys_ts = chrono::Utc::now().timestamp_millis();
-            let sys_msg = DbMessage {
-                id: sys_id,
-                chat_address: gid.clone(),
-                sender_hash: sender.clone(),
-                content,
-                timestamp: sys_ts,
-                r#type: "system".to_string(),
-                status: "delivered".to_string(),
-                attachment_json: None,
-                is_starred: false,
-                is_group: true,
-                reply_to_json: None,
-                reactions_json: None,
-            };
+            let sys_msg = make_system_msg(&gid, &sender, content, sys_ts);
             if internal_db_save_message(&db_state, sys_msg.clone())
                 .await
                 .is_ok()

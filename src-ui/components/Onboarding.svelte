@@ -50,7 +50,6 @@
                     in:fly={{ y: 20, duration: 600, delay: 200, easing: cubicOut }}
                     out:fly={{ y: -20, duration: 400, easing: cubicOut }}
                 >
-                    <!-- Background Glow -->
                     <div class="absolute -top-24 -right-24 w-64 h-64 {s.bg} blur-[100px] rounded-full opacity-50"></div>
                     
                     <div class="relative items-center justify-center flex py-6 lg:py-8">

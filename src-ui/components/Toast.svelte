@@ -36,7 +36,6 @@
                 <LucideX size={14} />
             </button>
 
-            <!-- Progress bar for auto-hide -->
             {#if toast.duration && toast.duration > 0}
                 <div 
                     class="absolute bottom-0 left-0 h-1 bg-current opacity-10"

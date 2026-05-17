@@ -38,6 +38,8 @@ pub(crate) async fn internal_signal_encrypt(
         DeviceId::try_from(1u32).expect("valid ID"),
     );
 
+    // NOTE: the spawn_blocking + block_on + message_encrypt pattern below and in the
+    // session-establishment retry block are near-identical and could be factored out.
     let (app_clone, address_clone, own_address_clone) =
         (app.clone(), address.clone(), own_address.clone());
     let msg_clone = message.clone();
@@ -85,81 +87,82 @@ pub(crate) async fn internal_signal_encrypt(
                 "is_signal": true
             }))
         }
-        Err(e)
-            if e.to_string().to_lowercase().contains("session")
-                || e.to_string().to_lowercase().contains("not found") =>
-        {
-            let response = internal_request(
-                net_state,
-                "fetch_key",
-                json!({
-                    "target_hash": remote_hash,
-                    "initiator_hash": own_hash
-                }),
-            )
-            .await?;
+        Err(e) => {
+            let es = format!("{}", e);
+            if es.to_lowercase().contains("session") || es.to_lowercase().contains("not found") {
+                let response = internal_request(
+                    net_state,
+                    "fetch_key",
+                    json!({
+                        "target_hash": remote_hash,
+                        "initiator_hash": own_hash
+                    }),
+                )
+                .await?;
 
-            if !response["found"].as_bool().unwrap_or(false) {
-                return Err(format!("Peer {} not found on server", remote_hash));
-            }
+                if !response["found"].as_bool().unwrap_or(false) {
+                    return Err(format!("Peer {} not found on server", remote_hash));
+                }
 
-            let bundle = if let Some(bundles_val) = response.get("bundles") {
-                if let Some(bundles_obj) = bundles_val.as_object() {
-                    bundles_obj
-                        .get(remote_hash)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null)
+                let bundle = if let Some(bundles_val) = response.get("bundles") {
+                    if let Some(bundles_obj) = bundles_val.as_object() {
+                        bundles_obj
+                            .get(remote_hash)
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null)
+                    } else {
+                        serde_json::Value::Null
+                    }
                 } else {
-                    serde_json::Value::Null
+                    response["bundle"].clone()
+                };
+
+                if bundle.is_null() {
+                    return Err(format!("Bundle for {} is null in response", remote_hash));
                 }
-            } else {
-                response["bundle"].clone()
-            };
 
-            if bundle.is_null() {
-                return Err(format!("Bundle for {} is null in response", remote_hash));
-            }
+                internal_establish_session_logic(app.clone(), remote_hash, bundle).await?;
 
-            internal_establish_session_logic(app.clone(), remote_hash, bundle).await?;
-
-            let app_clone = app.clone();
-            let (address_clone, own_address_clone) = (address.clone(), own_address.clone());
-            let ciphertext = tauri::async_runtime::spawn_blocking(move || {
-                let mut store = SqliteSignalStore::new(app_clone);
-                let mut rng = StdRng::from_os_rng();
-                tauri::async_runtime::block_on(async {
-                    message_encrypt(
-                        message.as_bytes(),
-                        &address_clone,
-                        &own_address_clone,
-                        &mut store.clone(),
-                        &mut store,
-                        std::time::SystemTime::now(),
-                        &mut rng,
-                    )
-                    .await
+                let app_clone = app.clone();
+                let (address_clone, own_address_clone) = (address.clone(), own_address.clone());
+                let ciphertext = tauri::async_runtime::spawn_blocking(move || {
+                    let mut store = SqliteSignalStore::new(app_clone);
+                    let mut rng = StdRng::from_os_rng();
+                    tauri::async_runtime::block_on(async {
+                        message_encrypt(
+                            message.as_bytes(),
+                            &address_clone,
+                            &own_address_clone,
+                            &mut store.clone(),
+                            &mut store,
+                            std::time::SystemTime::now(),
+                            &mut rng,
+                        )
+                        .await
+                    })
                 })
-            })
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e: SignalProtocolError| e.to_string())?;
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e: SignalProtocolError| e.to_string())?;
 
-            let (type_val, body) = match ciphertext {
-                CiphertextMessage::SignalMessage(m) => {
-                    (CiphertextMessageType::Whisper, m.serialized().to_vec())
-                }
-                CiphertextMessage::PreKeySignalMessage(m) => {
-                    (CiphertextMessageType::PreKey, m.serialized().to_vec())
-                }
-                _ => return Err("Unsupported ciphertext type".into()),
-            };
-            Ok(json!({
-                "type": type_val as u8,
-                "body": base64::engine::general_purpose::STANDARD.encode(body),
-                "is_signal": true
-            }))
+                let (type_val, body) = match ciphertext {
+                    CiphertextMessage::SignalMessage(m) => {
+                        (CiphertextMessageType::Whisper, m.serialized().to_vec())
+                    }
+                    CiphertextMessage::PreKeySignalMessage(m) => {
+                        (CiphertextMessageType::PreKey, m.serialized().to_vec())
+                    }
+                    _ => return Err("Unsupported ciphertext type".into()),
+                };
+                Ok(json!({
+                    "type": type_val as u8,
+                    "body": base64::engine::general_purpose::STANDARD.encode(body),
+                    "is_signal": true
+                }))
+            } else {
+                Err(e.to_string())
+            }
         }
-        Err(e) => Err::<serde_json::Value, String>(e.to_string()),
     }
 }
 

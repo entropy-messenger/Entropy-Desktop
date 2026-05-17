@@ -37,7 +37,6 @@ pub fn start_media_server(app: tauri::AppHandle) {
 
         let routes = media_route.or(local_route);
 
-        // Bind to port 0 to let the OS assign any available port
         let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
         let (addr, server) = warp::serve(routes).bind_ephemeral(addr);
 
@@ -158,19 +157,18 @@ async fn handle_media_request(
     let mime_type = query.get("type").cloned().unwrap_or_default();
     let mime_type = percent_decode(&mime_type);
     let mime_type = if mime_type.is_empty() {
-        mime_from_ext(
-            std::path::Path::new(&id)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or(""),
-        )
+        let ext = std::path::Path::new(&id)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        mime_from_ext(&ext)
     } else {
         &mime_type
     };
 
     let state = app.state::<DbState>();
 
-    // 1. Get the media key
     let key_bytes = {
         let lock = state.media_key.lock().map_err(|_| warp::reject())?;
         lock.clone().ok_or_else(warp::reject)?
@@ -198,13 +196,11 @@ async fn handle_media_request(
     let num_blocks = total_vault_size / BLOCK_SIZE_ENC;
     let last_block_rem = total_vault_size % BLOCK_SIZE_ENC;
 
-    // Total plaintext size
     let mut total_plain_size = num_blocks * BLOCK_SIZE_PLAIN;
     if last_block_rem > 40 {
         total_plain_size += last_block_rem - 40;
     }
 
-    // 3. Handle Range Header
     let (start, end) = if let Some(r) = range.as_ref() {
         if let Some(stripped) = r.strip_prefix("bytes=") {
             let parts: Vec<&str> = stripped.split('-').collect();
@@ -342,7 +338,7 @@ async fn handle_media_request(
 }
 
 fn mime_from_ext(ext: &str) -> &'static str {
-    match ext.to_lowercase().as_str() {
+    match ext {
         "mp4" => "video/mp4",
         "webm" => "video/webm",
         "mov" => "video/quicktime",

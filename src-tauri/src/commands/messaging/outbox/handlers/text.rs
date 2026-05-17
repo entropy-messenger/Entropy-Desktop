@@ -90,7 +90,7 @@ pub async fn process_outgoing_text(
         .unwrap_or(&payload.recipient);
     let payload_bytes = ciphertext_obj.to_string().into_bytes();
 
-    let _ = internal_send_to_network(
+    let sent_ok = internal_send_to_network(
         app.clone(),
         &net_state,
         Some(routing_hash.to_string()),
@@ -101,27 +101,29 @@ pub async fn process_outgoing_text(
         None,
         false,
     )
-    .await;
+    .await
+    .is_ok();
 
+    let status = if sent_ok { "sent" } else { "pending" };
     {
         let conn = db_state.get_conn()?;
         let _ = conn.execute(
-            "UPDATE messages SET status = 'sent' WHERE id = ?1",
-            params![msg_id],
+            "UPDATE messages SET status = ?1 WHERE id = ?2",
+            params![status, msg_id],
         );
         let _ = conn.execute(
-            "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-            params![payload.recipient],
+            "UPDATE chats SET last_status = ?1 WHERE LOWER(address) = LOWER(?2)",
+            params![status, payload.recipient],
         );
     }
     app.emit(
         "msg://status",
-        json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+        json!({ "id": msg_id, "status": status, "chatAddress": payload.recipient }),
     )
     .map_err(|e: tauri::Error| e.to_string())?;
 
     if let Some(obj) = final_json.as_object_mut() {
-        let _ = obj.insert("status".to_string(), json!("sent"));
+        let _ = obj.insert("status".to_string(), json!(status));
     }
     Ok(final_json)
 }
@@ -184,6 +186,7 @@ pub async fn process_outgoing_group_text(
     });
     let payload_str = signal_inner_payload.to_string();
 
+    let mut any_sent = false;
     for member_id in members {
         if member_id == &own_id {
             continue;
@@ -197,7 +200,7 @@ pub async fn process_outgoing_group_text(
         {
             Ok(ciphertext_obj) => {
                 let payload_bytes = ciphertext_obj.to_string().into_bytes();
-                let _ = internal_send_to_network(
+                if internal_send_to_network(
                     app.clone(),
                     &net_state,
                     Some(routing_hash),
@@ -208,21 +211,26 @@ pub async fn process_outgoing_group_text(
                     None,
                     false,
                 )
-                .await;
+                .await
+                .is_ok()
+                {
+                    any_sent = true;
+                }
             }
             Err(_e) => {
             }
         }
     }
 
+    let status = if any_sent { "sent" } else { "pending" };
     if let Ok(conn) = db_state.get_conn() {
         let _ = conn.execute(
-            "UPDATE messages SET status = 'sent' WHERE id = ?1",
-            params![msg_id],
+            "UPDATE messages SET status = ?1 WHERE id = ?2",
+            params![status, msg_id],
         );
         let _ = conn.execute(
-            "UPDATE chats SET last_status = 'sent' WHERE LOWER(address) = LOWER(?1)",
-            params![payload.recipient],
+            "UPDATE chats SET last_status = ?1 WHERE LOWER(address) = LOWER(?2)",
+            params![status, payload.recipient],
         );
     }
 
@@ -237,13 +245,13 @@ pub async fn process_outgoing_group_text(
             "chatMembers".to_string(),
             serde_json::json!(payload.group_members.clone()),
         );
-        obj.insert("status".to_string(), json!("sent"));
+        obj.insert("status".to_string(), json!(status));
     }
     app.emit("msg://added", final_json.clone())
         .map_err(|e| e.to_string())?;
     app.emit(
         "msg://status",
-        json!({ "id": msg_id, "status": "sent", "chatAddress": payload.recipient }),
+        json!({ "id": msg_id, "status": status, "chatAddress": payload.recipient }),
     )
     .map_err(|e| e.to_string())?;
 

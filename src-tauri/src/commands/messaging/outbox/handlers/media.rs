@@ -215,16 +215,14 @@ fn spawn_upload_task(
             .enable_all()
             .build()
             .unwrap();
-        rt.block_on(async move {
+        let _: Result<(), String> = rt.block_on(async move {
             let db_state = app.state::<DbState>();
             let net_state = app.state::<NetworkState>();
 
-            // 1. Generate one-time transit key
             let net_key = XChaCha20Poly1305::generate_key(&mut OsRng);
             let transit_cipher = XChaCha20Poly1305::new(ChaKey::from_slice(&net_key));
 
-            // 2. Prepare vault file
-            let vault_key_bytes = db_state.media_key.lock().unwrap().clone().unwrap();
+            let vault_key_bytes = db_state.media_key.lock().map_err(|e| format!("Lock poisoned: {}", e))?.clone().ok_or("Media key not initialized".to_string())?;
             let vault_key = ChaKey::from_slice(&vault_key_bytes);
             let vault_cipher = XChaCha20Poly1305::new(vault_key);
             let media_dir = get_media_dir(&app, &db_state).unwrap();
@@ -239,10 +237,9 @@ fn spawn_upload_task(
             } else if let Some(ref d) = payload.file_data {
                 Box::new(std::io::Cursor::new(d.clone()))
             } else {
-                return;
+                return Ok(());
             };
 
-            // Temp file for the transit-encrypted blob (streamed to relay, not held in RAM)
             let transit_temp = media_dir.join(format!(".transit_{}", msg_id));
             let mut transit_file = std::fs::File::create(&transit_temp).unwrap();
 
@@ -266,7 +263,6 @@ fn spawn_upload_task(
                     }
                     let chunk = &buffer[..n];
 
-                    // Transit encrypt → write to temp file (not held in RAM)
                     let t_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
                     let t_cipher = transit_cipher
                         .encrypt(&t_nonce, chunk)
@@ -274,7 +270,6 @@ fn spawn_upload_task(
                     transit_file.write_all(&t_nonce).unwrap();
                     transit_file.write_all(&t_cipher).unwrap();
 
-                    // Vault encrypt → write to vault file
                     let v_nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
                     let v_cipher = vault_cipher
                         .encrypt(&v_nonce, chunk)
@@ -288,7 +283,6 @@ fn spawn_upload_task(
             transit_file.sync_all().unwrap();
             drop(transit_file);
 
-            // 4. Request upload URL from relay
             let upload_req = json!({
                 "type": "request_media_upload",
                 "size": file_size,
@@ -299,7 +293,16 @@ fn spawn_upload_task(
 
             if let Err(_) = upload_resp {
                 let _ = std::fs::remove_file(&transit_temp);
-                return;
+                if let Ok(conn) = db_state.get_conn() {
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'failed' WHERE id = ?1",
+                        rusqlite::params![msg_id],
+                    );
+                }
+                let _ = app.emit("msg://status", json!({
+                    "id": msg_id, "status": "failed", "chatAddress": payload.recipient
+                }));
+                return Ok(());
             }
             let upload_resp = upload_resp.unwrap();
 
@@ -315,7 +318,7 @@ fn spawn_upload_task(
                 let _ = app.emit("msg://status", json!({
                     "id": msg_id, "status": "failed", "chatAddress": payload.recipient
                 }));
-                return;
+                return Ok(());
             }
 
             let upload_url = upload_resp["upload_url"].as_str().unwrap_or("").to_string();
@@ -396,16 +399,23 @@ fn spawn_upload_task(
                 .send()
                 .await;
 
-            // Clean up temp file regardless of upload outcome
             let _ = std::fs::remove_file(&transit_temp);
 
-            if let Err(_) = upload_result {
-                return;
+            if upload_result.as_ref().map_or(true, |r| !r.status().is_success()) {
+                if let Ok(conn) = db_state.get_conn() {
+                    let _ = conn.execute(
+                        "UPDATE messages SET status = 'failed' WHERE id = ?1",
+                        rusqlite::params![msg_id],
+                    );
+                }
+                let _ = app.emit("msg://status", json!({
+                    "id": msg_id, "status": "failed", "chatAddress": payload.recipient
+                }));
+                return Ok(());
             }
 
             let key_b64 = base64::engine::general_purpose::STANDARD.encode(net_key);
 
-            // 7. Build announcement
             let mut announcement = serde_json::json!({
                 "type": "file",
                 "id": msg_id.clone(),
@@ -431,7 +441,7 @@ fn spawn_upload_task(
                 obj.insert("groupName".to_string(), json!(payload.group_name));
             }
 
-            // 8. Send Signal-encrypted announcement to each recipient
+            let mut any_sent = false;
             for recipient in &recipients {
                 if let Ok(encrypted) = internal_signal_encrypt(
                     app.clone(),
@@ -442,7 +452,7 @@ fn spawn_upload_task(
                 .await
                 {
                     let routing_hash = recipient.split('.').next().unwrap_or(recipient).to_string();
-                    let _ = internal_send_to_network(
+                    if internal_send_to_network(
                         app.clone(),
                         &net_state,
                         Some(routing_hash),
@@ -453,15 +463,18 @@ fn spawn_upload_task(
                         None,
                         false,
                     )
-                    .await;
+                    .await
+                    .is_ok()
+                    {
+                        any_sent = true;
+                    }
                 }
             }
 
-            // 9. Save thumbnail to vault if present
             if let Some(thumb_b64) = &payload.thumbnail
                 && let Ok(thumb_bytes) = base64::engine::general_purpose::STANDARD.decode(thumb_b64)
             {
-                let vault_key_bytes = db_state.media_key.lock().unwrap().clone().unwrap();
+                let vault_key_bytes = db_state.media_key.lock().map_err(|e| format!("Lock poisoned: {}", e))?.clone().ok_or("Media key not initialized".to_string())?;
                 let vault_key = ChaKey::from_slice(&vault_key_bytes);
                 let vault_cipher = XChaCha20Poly1305::new(vault_key);
                 let thumb_path = media_dir.join(format!("{}_thumb", msg_id));
@@ -476,7 +489,6 @@ fn spawn_upload_task(
                 }
             }
 
-            // 10. Update message status
             let final_attachment_obj = json!({
                 "fileName": payload.file_name,
                 "fileType": payload.file_type,
@@ -489,20 +501,23 @@ fn spawn_upload_task(
                 "isDownloaded": true,
             });
 
+            let status = if any_sent { "sent" } else { "pending" };
             if let Ok(conn) = db_state.get_conn() {
                 let _ = conn.execute(
-                    "UPDATE messages SET status = 'sent', attachment_json = ?2 WHERE id = ?1",
-                    rusqlite::params![msg_id, final_attachment_obj.to_string()],
+                    "UPDATE messages SET status = ?1, attachment_json = ?3 WHERE id = ?2",
+                    rusqlite::params![status, msg_id, final_attachment_obj.to_string()],
                 );
             }
             let _ = app.emit(
                 "msg://status",
                 json!({
-                    "id": msg_id, "status": "sent",
+                    "id": msg_id, "status": status,
                     "chatAddress": payload.recipient,
                     "attachment": final_attachment_obj
                 }),
             );
+
+            Ok(())
         });
     });
 }

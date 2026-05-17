@@ -28,7 +28,6 @@
     try {
         const result = await signalManager.getFingerprint(activeChat.peerHash);
         safetyNumber = result;
-        // Keep store in sync if it's different
         if (activeChat.trustLevel !== result.trustLevel) {
             userStore.update(s => {
                 if (s.chats[activeChat.peerHash]) s.chats[activeChat.peerHash].trustLevel = result.trustLevel;
@@ -36,7 +35,6 @@
             });
         }
     } catch (e) {
-        // Error loading safety number
     } finally {
         loadingSafetyNumber = false;
     }
@@ -172,8 +170,7 @@
                             if (input.length === 64 && /^[0-9a-fA-F]+$/.test(input)) {
                                 hash = input.toLowerCase();
                             } else {
-                                // Try mapping nickname to hash
-                                hash = await lookupNickname(input);
+                            hash = await lookupNickname(input);
                             }
 
                             if (hash) {

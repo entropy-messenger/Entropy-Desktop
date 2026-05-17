@@ -150,7 +150,6 @@ async fn handle_media_msg_inner(
         reactions_json: None,
     };
 
-    // Auto-create/rename chat for group messages
     if is_group {
         let conn = db_state.get_conn()?;
         let _ = conn.execute(
@@ -201,7 +200,6 @@ async fn handle_media_msg_inner(
         && let Some(own_hash) = hash_lock.clone()
         && sender == own_hash
     {
-        // Skip — this is our own sent message
     } else {
         let app_clone = app.clone();
         let msg_id_clone = msg_id.to_string();

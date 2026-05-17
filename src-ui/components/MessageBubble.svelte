@@ -35,15 +35,15 @@
 
     let showActions = $state(false);
     let showReactionPicker = $state(false);
-    const isSelected = $derived(selectedIds.includes(msg.id));
+    let selectedSet = $derived(new Set(selectedIds));
+    const isSelected = $derived(selectedSet.has(msg.id));
     const PRESET_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
     
-    /**
-     * Deterministically derives a vibrant, readable color from a sender's hash.
-     * This ensures each user has a consistent visual identity in group chats.
-     */
+    const colorCache = new Map<string, string>();
     const getSenderColor = (hash: string) => {
         if (!hash) return 'var(--entropy-primary)';
+        let color = colorCache.get(hash);
+        if (color) return color;
         
         const colors = [
             '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', 
@@ -51,12 +51,12 @@
             '#E67E22', '#2ECC71', '#F1C40F', '#E74C3C'
         ];
         
-        let hashValue = 0;
-        for (let i = 0; i < hash.length; i++) {
-            hashValue = hash.charCodeAt(i) + ((hashValue << 5) - hashValue);
-        }
+        let hashVal = 0;
+        for (let i = 0; i < hash.length; i++) hashVal = ((hashVal << 5) - hashVal) + hash.charCodeAt(i);
         
-        return colors[Math.abs(hashValue) % colors.length];
+        color = colors[Math.abs(hashVal) % colors.length];
+        colorCache.set(hash, color);
+        return color;
     };
 
     onMount(() => {
@@ -70,7 +70,6 @@
         }
     });
 
-    // Close reaction picker when clicking outside
     $effect(() => {
         if (showReactionPicker) {
             const handleClick = (e: MouseEvent) => {

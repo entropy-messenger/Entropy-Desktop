@@ -1,7 +1,3 @@
-/**
- * Utils for any frontend Encoding conversion
- */
-
 const HEX_TABLE = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
 
 export const toHex = (bytes: Uint8Array | number[]): string => {
@@ -25,9 +21,10 @@ export const toBase64 = (bytes: Uint8Array): string => {
     let binary = '';
     const len = bytes.byteLength;
     const CHUNK_SIZE = 0x4000;
+    const decoder = new TextDecoder('latin1');
     for (let i = 0; i < len; i += CHUNK_SIZE) {
         const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-        binary += String.fromCharCode(...chunk);
+        binary += decoder.decode(chunk);
     }
     return btoa(binary);
 };

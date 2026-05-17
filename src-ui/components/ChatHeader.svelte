@@ -61,7 +61,6 @@
               addToast("Nickname updated", 'success');
           }
       } catch (e) {
-          // Failed to set nickname
           addToast("Failed to set nickname", 'error');
       }
   };

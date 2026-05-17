@@ -19,7 +19,6 @@ pub async fn download_media(app: AppHandle, msg_id: String) -> Result<(), String
     let media_dir = get_media_dir(&app, &db_state)?;
     let vault_path = media_dir.join(&msg_id);
 
-    // 1. Read attachment metadata from message in DB
     const BLOCK_SIZE: u64 = 8_388_608;
     const ENC_BLOCK_SIZE: u64 = 8_388_648;
     let (download_url, key_b64, plain_size): (String, String, u64) = {
@@ -53,7 +52,6 @@ pub async fn download_media(app: AppHandle, msg_id: String) -> Result<(), String
     )
     .map_err(|e| format!("Invalid key: {}", e))?;
 
-    // 2. HTTP GET the blob from the relay
     let mut client_builder = reqwest::Client::builder();
     if let Ok(proxy_lock) = net_state.proxy_url.lock() {
         if let Some(ref proxy_url) = *proxy_lock {
@@ -162,13 +160,11 @@ pub async fn download_media(app: AppHandle, msg_id: String) -> Result<(), String
     }
     .await;
 
-    // Clean up partial vault file on failure
     if vault_write_result.is_err() {
         let _ = std::fs::remove_file(&vault_path);
         return vault_write_result;
     }
 
-    // 4. Update message in DB: mark as downloaded
     let mut chat_address = String::new();
     if let Ok(conn) = db_state.get_conn() {
         if let Ok(addr) = conn.query_row::<String, _, _>(
@@ -200,7 +196,6 @@ pub async fn download_media(app: AppHandle, msg_id: String) -> Result<(), String
         }
     }
 
-    // 5. Signal completion to the frontend
     let _ = app.emit(
         "media-dl-progress",
         json!({

@@ -289,7 +289,14 @@ pub(crate) async fn internal_establish_network(
                                                 }
                                                 let app_flush = app.clone();
                                                 tokio::task::spawn_local(async move {
-                                                    let _ = flush_outbox(app_flush.clone(), app_flush.state::<NetworkState>()).await;
+                                                    loop {
+                                                        let net_state = app_flush.state::<NetworkState>();
+                                                        if net_state.sender.lock().ok().and_then(|l| l.clone()).is_none() {
+                                                            break;
+                                                        }
+                                                        let _ = flush_outbox(app_flush.clone(), net_state).await;
+                                                        tokio::time::sleep(Duration::from_secs(30)).await;
+                                                    }
                                                 });
                                                 let _ = app.emit("network-status", "authenticated");
                                                 handled = true;
@@ -421,7 +428,6 @@ pub(crate) async fn internal_establish_network(
                     Ok(Some(Err(_))) => break,
                     Ok(None) => break,
                     Err(_) => {
-                        // Timeout reached - potential stale connection
                         return Err("Network read timeout - potential stale connection".into());
                     }
                 }
@@ -462,7 +468,6 @@ async fn run_connection_loop(app: AppHandle) {
         }
 
         if let Some(target_url) = url {
-            // Check if identity is jailed before trying to connect
             let jailed_until = if let Ok(l) = app.state::<NetworkState>().jailed_until.lock() {
                 *l
             } else {
@@ -478,7 +483,6 @@ async fn run_connection_loop(app: AppHandle) {
                         _ = token_val.cancelled() => break 'outer_loop,
                         _ = tokio::time::sleep(sleep_dur) => {}
                     }
-                    // Re-check everything after jail time expires
                     continue;
                 }
             }
@@ -488,7 +492,6 @@ async fn run_connection_loop(app: AppHandle) {
                 .await
                 .is_err()
             {
-                // Connection error handled by loop
             } else {
                 retry_count = 0;
             }

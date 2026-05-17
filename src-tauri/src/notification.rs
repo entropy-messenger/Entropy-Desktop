@@ -9,7 +9,6 @@ pub fn send_message_notification(
     chat_address: &str,
     content: &str,
 ) {
-    // Check if notifications are enabled
     if let Ok(conn) = app.state::<DbState>().get_conn() {
         let enabled: Result<String, _> = conn.query_row(
             "SELECT value FROM settings WHERE key = 'notifications_enabled'",

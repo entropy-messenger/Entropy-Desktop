@@ -30,15 +30,6 @@ export const vaultLoad = async (key: string): Promise<string | null> => {
     return null;
 };
 
-export const vaultDelete = async (key: string): Promise<void> => {
-    if (isTauri()) {
-        try {
-            await invoke('vault_delete', { key });
-        } catch (e) {
-        }
-    }
-};
-
 export const hasVault = async (): Promise<boolean> => {
     if (isTauri()) {
         try {

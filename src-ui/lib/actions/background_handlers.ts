@@ -24,7 +24,6 @@ export function setupBackgroundHandlers() {
             replyTo: dbMsg.reply_to_id ? { id: dbMsg.reply_to_id, content: "", type: 'text' as any } : undefined
         };
 
-        // Handle Voicenotes and Files correctly
         if ((msg.type === 'voice_note' || msg.type === 'file') && dbMsg.body) {
             try {
                 const parsedBody = JSON.parse(dbMsg.body);
@@ -46,7 +45,6 @@ export function setupBackgroundHandlers() {
                     }
                 }
             } catch (e) {
-                // Could not parse dbMsg.body
             }
         }
 

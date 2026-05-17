@@ -11,6 +11,7 @@
   import { get } from 'svelte/store';
   import { addToast, stagedFile } from '../lib/stores/ui';
   import type { Chat } from '../lib/types';
+  import { getFileMimeType } from '../lib/utils/file';
 
   let { activeChat } = $props<{ activeChat: Chat }>();
 
@@ -29,7 +30,6 @@
     }
   });
 
-  // Focus input when replyingTo changes
   $effect(() => {
     if (replyingTo && messageInputEl) {
         untrack(() => {
@@ -72,11 +72,7 @@
         const parts = path.split(/[/\\]/);
         const fileName = parts[parts.length - 1];
         
-        // Detect file type for thumbnail generation
-        const ext = fileName.split('.').pop()?.toLowerCase();
-        let mimeType = 'application/octet-stream';
-        if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-        if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
+        let mimeType = getFileMimeType(fileName);
 
         const { generateThumbnail } = await import('../lib/utils/thumbnails');
         const { get } = await import('svelte/store');
@@ -154,7 +150,6 @@
     const end = messageInputEl?.selectionEnd || messageInput.length;
     messageInput = messageInput.slice(0, start) + emoji + messageInput.slice(end);
     
-    // Set focus back to input
     setTimeout(() => {
         messageInputEl?.focus();
         const newPos = start + emoji.length;

@@ -15,10 +15,8 @@
         onSelect(event.detail.unicode);
       });
 
-      // Handle clicking outside to close
       const handleClickOutside = (event: MouseEvent) => {
         const target = event.target as Element;
-        // Don't close if clicking the trigger button (the button handles toggling)
         if (target.closest('#emoji-toggle-btn')) return;
         
         if (pickerEl && !pickerEl.contains(target)) {

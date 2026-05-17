@@ -18,15 +18,23 @@ pub async fn internal_mine_pow(
     difficulty: u32,
     modulus: Option<String>,
 ) -> serde_json::Value {
-    let n_str = modulus.as_ref().map(|s| s.to_string()).unwrap();
+    let n_str = match modulus.as_ref() {
+        Some(s) => s.clone(),
+        None => {
+            return json!({
+                "seed": seed,
+                "error": "No PoW modulus configured",
+            })
+        }
+    };
 
+    let n_str_block = n_str.clone();
     let seed_clone = seed.clone();
     let result_hex = tauri::async_runtime::spawn_blocking(move || {
-        let n = BigUint::parse_bytes(n_str.as_bytes(), 10).expect("Valid modulus");
+        let n = BigUint::parse_bytes(n_str_block.as_bytes(), 10).expect("Valid modulus");
         let x_bytes = hex::decode(&seed_clone).unwrap_or_default();
         let mut x = BigUint::from_bytes_be(&x_bytes) % &n;
 
-        // verifiable delay function: sequential squaring (y = x^(2^T) mod N)
         for _ in 0..difficulty {
             x = (&x * &x) % &n;
         }
@@ -38,7 +46,7 @@ pub async fn internal_mine_pow(
     json!({
         "seed": seed,
         "nonce": result_hex,
-        "modulus": modulus.unwrap(),
+        "modulus": n_str,
         "difficulty": difficulty
     })
 }

@@ -61,7 +61,6 @@ async function performSave(state: AppState) {
         };
         await vaultSave(`entropy_meta_${state.identityHash}`, JSON.stringify(metadata));
     } catch (e) {
-        // Auto-save failed
     }
 }
 

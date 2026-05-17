@@ -15,6 +15,7 @@
   import { playingVoiceNoteId } from '../lib/stores/audio';
   import { stagedFile } from '../lib/stores/ui';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { getFileMimeType } from '../lib/utils/file';
   
   let { showStarredMessages = $bindable(false), onCloseStarred, isMobile }: { showStarredMessages?: boolean; onCloseStarred?: () => void; isMobile?: boolean } = $props();
   
@@ -67,7 +68,6 @@
   const scrollToBottom = async () => {
       await tick();
       if (scrollContainer && !selectionMode) {
-          // If we were in a historical context, reloading chat messages resets back to current
           const state = $userStore;
           if (state.activeChatHash && state.chats[state.activeChatHash]?.hasMoreNewer) {
               await jumpToPresent(state.activeChatHash);
@@ -78,7 +78,6 @@
 
   $effect(() => {
     if (activeMessages.length > 0 && activeChat && $userStore.activeChatHash === activeChat.peerHash) {
-        // Reset local unread count for current active chat
         if (activeChat.unreadCount > 0) {
             userStore.update(s => {
                 const c = s.chats[activeChat.peerHash];
@@ -100,8 +99,6 @@
 
   let lastMessageCount = 0;
   $effect(() => {
-    // Only auto-scroll if the NUMBER of messages increased (new message sent/received)
-    // Avoid jumps for background status updates or starring.
     if (activeMessages.length > lastMessageCount) {
         if (!isLoadingMore && !activeChat?.hasMoreNewer) {
             scrollToBottom();
@@ -179,10 +176,7 @@
       const parts = path.split(/[/\\]/);
       const fileName = parts[parts.length - 1];
       
-      const ext = fileName.split('.').pop()?.toLowerCase();
-      let mimeType = 'application/octet-stream';
-      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-      if (['mp4', 'webm', 'mov', 'ogg'].includes(ext || '')) mimeType = `video/${ext === 'mov' ? 'quicktime' : ext}`;
+      let mimeType = getFileMimeType(fileName);
 
       const { generateThumbnail } = await import('../lib/utils/thumbnails');
       const { get } = await import('svelte/store');

@@ -14,7 +14,6 @@ export const broadcastProfile = async (peerHash: string) => {
     try {
         await invoke('send_profile_update', { peerHash, alias: state.globalNickname || undefined });
     } catch (e) {
-        // Failed to broadcast
     }
 };
 
@@ -79,7 +78,6 @@ export const toggleStar = (peerHash: string, msgId: string) => {
 export const setLocalNickname = (peerHash: string, nickname: string | null) => {
     userStore.update(s => {
         if (s.chats[peerHash]) s.chats[peerHash].localNickname = nickname || undefined;
-        // Priority update: Local Alias > Global Nickname
         if (nickname) {
             s.nicknames[peerHash] = nickname;
         } else {
@@ -97,7 +95,7 @@ export const toggleBlock = (peerHash: string) => userStore.update(s => {
     const nextStatus = !isBlocked;
     if (nextStatus) s.blockedHashes = [...s.blockedHashes, peerHash];
     else s.blockedHashes = s.blockedHashes.filter(h => h !== peerHash);
-    if (s.chats[peerHash]) s.chats[peerHash].isBlocked = nextStatus;
+    if (s.chats[peerHash]) s.chats[peerHash] = { ...s.chats[peerHash], isBlocked: nextStatus };
     invoke('db_set_contact_blocked', { hash: peerHash, isBlocked: nextStatus }).catch(() => { });
     return { ...s };
 });

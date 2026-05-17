@@ -10,17 +10,11 @@
     async function loadThumbnail() {
         if (!msg.attachment) return;
 
-        // 1. Prioritize pre-rendered thumbnail
         if (msg.attachment.thumbnail) {
             thumbUrl = msg.attachment.thumbnail;
             return;
         }
 
-        // 2. If no thumbnail exists, we strictly do NOT use the proxy here.
-        // We show a placeholder until the user choose to VIEW it.
-        if (msg.attachment.fileType?.startsWith('image/')) {
-            // No-op
-        }
     }
 
     $effect(() => {

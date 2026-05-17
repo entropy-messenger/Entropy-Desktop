@@ -26,6 +26,7 @@
 
   const pendingResolutions = new Set<string>();
   $effect(() => {
+     const timeouts: ReturnType<typeof setTimeout>[] = [];
      const unknownHashes = Object.values($userStore.chats)
          .filter(chat => chat.isGroup && chat.lastSenderHash && !$userStore.nicknames[chat.lastSenderHash])
          .map(chat => chat.lastSenderHash as string);
@@ -37,14 +38,16 @@
          pendingResolutions.add(hash);
          
          // Stagger requests to avoid relay rate-limiting and UI thread saturation
-         setTimeout(async () => {
+         const timeoutId = setTimeout(async () => {
              try {
                 await resolveIdentity(hash);
              } finally {
                 pendingResolutions.delete(hash);
              }
          }, 500 + (Math.random() * 2000));
+         timeouts.push(timeoutId);
      });
+     return () => { timeouts.forEach(clearTimeout); };
     });
   let filter = $state<'all' | 'archived'>('all');
   

@@ -215,8 +215,9 @@ pub async fn flush_outbox(app: AppHandle, state: State<'_, NetworkState>) -> Res
             } else {
                 Message::Binary(content.into())
             };
-            let _ = tx.send(PacedMessage { msg }).await;
-            ids_to_delete.push(id);
+            if tx.send(PacedMessage { msg }).await.is_ok() {
+                ids_to_delete.push(id);
+            }
         }
         if !ids_to_delete.is_empty() {
             let db_state = app.state::<DbState>();

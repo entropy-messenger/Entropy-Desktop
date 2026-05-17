@@ -109,7 +109,6 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
     if (!state.identityHash) return;
     const chat = state.chats[destId];
 
-    // 1. Create an Optimistic Message for immediate UI feedback
     const tempId = 'opt-' + Math.random().toString(36).substring(2, 9);
     const optimisticMsg: Message = {
         id: tempId,
@@ -129,7 +128,6 @@ export const sendFile = async (destIdRaw: string, file: { name: string, type: st
         }
     };
 
-    // Add to UI immediately
     addMessage(destId, optimisticMsg);
 
     const command = chat?.isGroup ? 'process_outgoing_group_media' : 'process_outgoing_media';
@@ -190,7 +188,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
 
     let updatedChatMetadata: Chat | null = null;
 
-    // Update Chat Metadata
     let isNewChat = false;
     userStore.update(s => {
         if (!s.chats[peerHash]) {
@@ -210,7 +207,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
         }
         const chat = { ...s.chats[peerHash] };
 
-        // Update alias if we got a better one from the message metadata
         if (msg.chatAlias && (!chat.peerNickname || chat.peerNickname === peerHash.slice(0, 8))) {
             chat.peerNickname = msg.chatAlias;
         }
@@ -237,7 +233,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
         return { ...s, chats: { ...s.chats } };
     });
 
-    // Update History
     let needsSnapToPresent = false;
     messageStore.update(mStore => {
         const msgs = mStore[peerHash] || [];
@@ -282,7 +277,14 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
             return mStore;
         }
 
-        const combined = [...finalMsgs, msg].sort((a, b) => a.timestamp - b.timestamp);
+        const combined = [...finalMsgs];
+        let lo = 0, hi = combined.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (combined[mid].timestamp < msg.timestamp) lo = mid + 1;
+            else hi = mid;
+        }
+        combined.splice(lo, 0, msg);
         let final = combined;
         if (combined.length > 2000) {
             if (chat?.hasMoreNewer) {
@@ -300,7 +302,6 @@ export const addMessage = async (peerHashRaw: string, msg: Message) => {
         jumpToPresent(peerHash);
     }
 
-    // Persistence
     if (updatedChatMetadata) {
         syncChatToDb(updatedChatMetadata);
 
@@ -328,7 +329,6 @@ export const syncChatToDb = async (chat: Chat) => {
             }
         });
     } catch (e) {
-        // DB sync failed
     }
 };
 
@@ -373,7 +373,6 @@ export const sendReceipt = async (peerHash: string, msgIds: string[], status: 'd
                 invoke('db_update_messages', { ids: finalIds, status: 'read' }).catch(() => { });
             }
         } catch (e) {
-            // Receipt failed
         }
     }, 300);
 };
@@ -482,7 +481,6 @@ export const loadStarredMessages = async () => {
                     newStore[peerHash].push(msg);
                 }
             });
-            // Resort all updated chats
             Object.keys(newStore).forEach(hash => {
                 newStore[hash].sort((a, b) => a.timestamp - b.timestamp);
             });
@@ -558,15 +556,16 @@ export const deleteMessage = async (peerHash: string, msgIds: string[]) => {
         invoke('vault_delete_media', { id }).catch(() => { });
     });
 
+    const idSet = new Set(msgIds);
     let newLastMsg: Message | undefined;
     let deletedUnreadCount = 0;
 
     messageStore.update(mStore => {
         if (mStore[peerHash]) {
-            const toDelete = mStore[peerHash].filter(m => msgIds.includes(m.id));
+            const toDelete = mStore[peerHash].filter(m => idSet.has(m.id));
             deletedUnreadCount = toDelete.filter(m => !m.isMine && m.status !== 'read').length;
 
-            mStore[peerHash] = mStore[peerHash].filter(m => !msgIds.includes(m.id));
+            mStore[peerHash] = mStore[peerHash].filter(m => !idSet.has(m.id));
             newLastMsg = mStore[peerHash][mStore[peerHash].length - 1];
         }
         return { ...mStore };
@@ -678,7 +677,6 @@ export const updateMessageStatusUI = (peerHash: string, msgIds: string[], status
 
 export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddress?: string, attachment?: any) => {
     messageStore.update(mStore => {
-        // Direct lookup if chatAddress is known
         if (chatAddress && mStore[chatAddress]) {
             const index = mStore[chatAddress].findIndex(m => m.id === msgId);
             if (index !== -1) {
@@ -692,7 +690,6 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
 
                 userStore.update(s => {
                     if (s.chats[chatAddress]) {
-                        // Immutably update the chat object same way
                         s.chats[chatAddress] = { ...s.chats[chatAddress], lastStatus: status };
                     }
                     return { ...s, chats: { ...s.chats } };
@@ -701,7 +698,6 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
             }
         }
 
-        // Search all chats if address is missing
         for (const peerHash of Object.keys(mStore)) {
             const index = mStore[peerHash].findIndex(m => m.id === msgId);
             if (index !== -1) {
@@ -727,27 +723,23 @@ export const updateSingleMessageStatusUI = (msgId: string, status: any, chatAddr
 };
 
 export const markAsDownloaded = async (peerHash: string, msgId: string, exportedPath?: string) => {
+    let updatedMsg: Message | undefined;
     messageStore.update(mStore => {
         if (!mStore[peerHash]) return mStore;
-        const msgs = mStore[peerHash].map(m => {
-            if (m.id === msgId && m.attachment) {
-                const updatedMsg = {
-                    ...m,
-                    attachment: {
-                        ...m.attachment,
-                        isDownloaded: true,
-                        exportedPath: exportedPath || m.attachment.exportedPath
-                    }
-                };
-                invoke('db_update_messages', {
-                    ids: [msgId],
-                    attachmentJson: JSON.stringify(updatedMsg.attachment)
-                }).catch(() => { });
-                return updatedMsg;
-            }
-            return m;
-        });
+        const msgs = [...mStore[peerHash]];
+        const idx = msgs.findIndex(m => m.id === msgId);
+        if (idx === -1 || !msgs[idx]) return mStore;
+        const found = msgs[idx];
+        if (!found.attachment) return mStore;
+        updatedMsg = { ...found, attachment: { ...found.attachment, vaultPath: exportedPath || found.attachment.vaultPath, isDownloaded: true } };
+        msgs[idx] = updatedMsg;
         return { ...mStore, [peerHash]: msgs };
     });
+    if (updatedMsg) {
+        invoke('db_update_messages', {
+            ids: [msgId],
+            attachmentJson: JSON.stringify(updatedMsg.attachment)
+        }).catch(() => { });
+    }
 };
 

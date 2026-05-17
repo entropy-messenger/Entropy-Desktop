@@ -11,9 +11,7 @@ use tauri::{AppHandle, Manager, State};
 static LOGIN_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 
 const MIGRATIONS: &[&str] = &[
-    // Version 1: Initial Schema
     "
-    /* Core Infrastructure */
     CREATE TABLE IF NOT EXISTS kv_store (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -27,7 +25,6 @@ const MIGRATIONS: &[&str] = &[
         timestamp INTEGER
     );
 
-    /* Signal Protocol State */
     CREATE TABLE IF NOT EXISTS signal_identity (
         id INTEGER PRIMARY KEY CHECK (id = 0),
         registration_id INTEGER,
@@ -187,6 +184,22 @@ pub fn get_media_dirname() -> String {
     "media".to_string()
 }
 
+fn cleanup_app_data(app_data_dir: &std::path::Path, filename: &str) {
+    let _ = std::fs::remove_file(app_data_dir.join(filename));
+    let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
+    let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
+    let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("temp_media"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("streaming_cache"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("WebKitCache"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("databases"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("storage"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("CacheStorage"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
+    let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
+    let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
+}
+
 #[tauri::command]
 pub fn vault_exists(app: AppHandle) -> bool {
     if let Ok(app_data_dir) = app.path().app_data_dir() {
@@ -233,42 +246,18 @@ pub async fn init_vault(
         let password_hash = argon2
             .hash_password(passphrase.as_bytes(), &salt)
             .map_err(|e| format!("Argon2 hash failed: {}", e))?;
-        let input_hash = hex::encode(password_hash.hash.unwrap().as_ref());
+        let input_hash = hex::encode(password_hash.hash.ok_or("Argon2 hashing failed — no hash produced".to_string())?.as_ref());
 
         if input_hash == stored_hash.trim() {
             let filename = get_db_filename();
-            let _ = std::fs::remove_file(app_data_dir.join(&filename));
-            let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
-            let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-            let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("temp_media"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("streaming_cache"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("WebKitCache"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("databases"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("storage"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("CacheStorage"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
-            let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
-            let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
+            cleanup_app_data(&app_data_dir, &filename);
             app.restart();
         }
     }
 
     if LOGIN_ATTEMPTS.load(Ordering::Relaxed) >= 10 {
         let filename = get_db_filename();
-        let _ = std::fs::remove_file(app_data_dir.join(&filename));
-        let _ = std::fs::remove_file(app_data_dir.join(format!("{}-wal", filename)));
-        let _ = std::fs::remove_file(app_data_dir.join(format!("{}-shm", filename)));
-        let _ = std::fs::remove_dir_all(app_data_dir.join(get_media_dirname()));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("temp_media"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("streaming_cache"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("WebKitCache"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("databases"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("storage"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("CacheStorage"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("mediakeys"));
-        let _ = std::fs::remove_dir_all(app_data_dir.join("deviceidhashsalts"));
-        let _ = std::fs::remove_file(app_data_dir.join("hsts-storage.sqlite"));
+        cleanup_app_data(&app_data_dir, &filename);
         app.restart();
     }
 
@@ -308,7 +297,7 @@ pub async fn init_vault(
                 let password_hash = argon2
                     .hash_password(passphrase.as_bytes(), &salt)
                     .map_err(|e| e.to_string())?;
-                Ok::<String, String>(hex::encode(password_hash.hash.unwrap()))
+                Ok::<String, String>(hex::encode(password_hash.hash.ok_or("Argon2 hashing failed — no hash produced".to_string())?))
             })
             .await
             .map_err(|e| e.to_string())??;
@@ -316,10 +305,10 @@ pub async fn init_vault(
             derived_key_hex_for_customizer = derived_key_hex.clone();
 
             {
-                let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", derived_key_hex));
+                let escaped = derived_key_hex.replace("'", "''");
+                let _ = conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", escaped));
             }
 
-            // Test if key is correct by reading master table
             if conn
                 .query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
                 .is_err()
@@ -328,7 +317,6 @@ pub async fn init_vault(
                 return Err(format!("Incorrect password. Attempt {}/10", cur));
             }
 
-            // Success - reset attempts
             LOGIN_ATTEMPTS.store(0, Ordering::Relaxed);
         }
     }
@@ -354,7 +342,6 @@ pub async fn init_vault(
     let conn = state.get_conn()?;
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
 
-    // Migrations
     let current_version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| format!("Schema check failed: {}", e))?;
@@ -413,7 +400,6 @@ pub async fn init_vault(
         *state_key = Some(media_key);
     }
 
-    // Restore the secure session from the vault
     let (pub_key_opt, token_opt) = {
         let pool_lock = state.pool.lock().map_err(|_| "Pool lock poisoned")?;
         if let Some(p) = pool_lock.as_ref() {
@@ -472,7 +458,7 @@ pub fn set_panic_password(app: tauri::AppHandle, password: String) -> Result<(),
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| format!("Argon2 hash failed: {}", e))?;
-    let hash = hex::encode(password_hash.hash.unwrap().as_ref());
+    let hash = hex::encode(password_hash.hash.ok_or("Argon2 hashing failed — no hash produced".to_string())?.as_ref());
 
     std::fs::write(app_data_dir.join("panic.salt"), salt_str).map_err(|e| e.to_string())?;
     std::fs::write(app_data_dir.join("panic.dat"), hash).map_err(|e| e.to_string())?;
@@ -508,16 +494,7 @@ pub fn reset_database(app: tauri::AppHandle, state: State<'_, DbState>) -> Resul
         let _ = std::fs::remove_dir_all(media_dir);
     }
 
-    // Comprehensive clean of all volatile app data
-    let _ = std::fs::remove_dir_all(app_dir.join("temp_media"));
-    let _ = std::fs::remove_dir_all(app_dir.join("streaming_cache"));
-    let _ = std::fs::remove_dir_all(app_dir.join("WebKitCache"));
-    let _ = std::fs::remove_dir_all(app_dir.join("databases"));
-    let _ = std::fs::remove_dir_all(app_dir.join("storage"));
-    let _ = std::fs::remove_dir_all(app_dir.join("CacheStorage"));
-    let _ = std::fs::remove_dir_all(app_dir.join("mediakeys"));
-    let _ = std::fs::remove_dir_all(app_dir.join("deviceidhashsalts"));
-    let _ = std::fs::remove_file(app_dir.join("hsts-storage.sqlite"));
+    cleanup_app_data(&app_dir, &filename);
 
     app.restart();
     #[allow(unreachable_code)]

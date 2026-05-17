@@ -36,7 +36,6 @@
         class="fixed inset-0 z-[200] flex items-center justify-center p-6"
         onkeydown={handleKeydown}
     >
-        <!-- Backdrop -->
         <div 
             class="absolute inset-0 bg-entropy-bg/60 backdrop-blur-sm"
             transition:fade={{ duration: 200 }}
@@ -47,7 +46,6 @@
             aria-label="Close modal"
         ></div>
 
-        <!-- Modal Content -->
         <div 
             class="bg-entropy-surface rounded-[2.5rem] shadow-[0_30px_100px_-10px_rgba(0,0,0,0.5)] w-full max-w-md overflow-hidden relative z-10"
             transition:scale={{ duration: 300, start: 0.9, opacity: 0 }}

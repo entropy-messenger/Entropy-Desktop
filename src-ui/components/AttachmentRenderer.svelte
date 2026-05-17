@@ -24,26 +24,12 @@
     let isExporting = $state(false);
     let isMine = $derived(msg.senderHash === $userStore.identityHash || msg.isMine);
     
-    // Consolidate exported path logic
     let exportedPath = $state<string | null>(null);
     $effect(() => {
         exportedPath = msg.attachment?.exportedPath || (isMine && !msg.attachment?.vaultPath ? msg.attachment?.originalPath : null);
     });
 
-    // Cleanup on unmount
-    $effect(() => {
-        return () => {
-            mediaUrl = null;
-        };
-    });
 
-    // Thumbnails are used in the bubble; proxy is used for lightbox/export.
-    // We strictly do NOT pre-load the full media in the bubble to prevent background decryption.
-    $effect(() => {
-        if ((isImage || isVideo) && msg.attachment?.vaultPath && !mediaUrl && !loading && !failed) {
-            // No auto-load. We only load on explicit user interaction (Lightbox/Export).
-        }
-    });
 
     let isImage = $derived(msg.attachment?.fileType?.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(msg.attachment?.fileName || ''));
     let isVideo = $derived(msg.attachment?.fileType?.startsWith('video/') || /\.(mp4|webm|mov|ogg)$/i.test(msg.attachment?.fileName || ''));
@@ -62,7 +48,6 @@
     let progress = $derived(activeTransfer ? Math.round((activeTransfer.current / activeTransfer.total) * 100) : 0);
 
     async function loadAttachment() {
-        // loadAttachment is now only used for getting a URL for specific interactions if needed.
         if (!msg.attachment || mediaUrl || loading || failed) return;
         
         loading = true;
@@ -78,20 +63,18 @@
     }
 
     async function openSavedFile() {
-        // Already exported or sender's original → open directly
         const path = exportedPath || (isMine ? (msg.attachment?.originalPath || msg.attachment?.path) : null);
         if (path) {
             try { await invoke('open_file', { path }); return; }
             catch (e) {}
         }
 
-        // For vault-only files
         if (msg.attachment?.isDownloaded && msg.attachment?.vaultPath) {
             const ft = msg.attachment.fileType || '';
 
             // Images, video, audio → media proxy (streams decrypted, no temp file)
             if (ft.startsWith('image/') || ft.startsWith('video/') || ft.startsWith('audio/') || isImage || isVideo) {
-                return; // handled by lightbox/player
+                return;
             }
 
             // Everything else → export to temp, open, delete after 5s
@@ -161,7 +144,6 @@
 
     let element = $state<HTMLElement | null>(null);
 
-    // Interaction handler to trigger full decryption (Lightbox)
     function triggerFullView(e: MouseEvent) {
         e.stopPropagation();
         if (isImage || isVideo) {
@@ -208,7 +190,6 @@
 {:else if msg.type === 'file'}
     <div class="flex flex-col space-y-2 max-w-full">
         {#if (isImage || isVideo)}
-            <!-- Media Container with Context Menu Support -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
                 class="relative group/media overflow-hidden rounded-[0.9rem] border border-white/10 shadow-xl bg-entropy-surface flex flex-col w-full sm:w-[320px] transition-all hover:shadow-2xl active:scale-[0.98]"
@@ -258,7 +239,6 @@
                     {/if}
                 </div>
                 
-                <!-- Info Bar -->
                 <div class="p-3 bg-entropy-surface flex items-center justify-between border-t border-white/5">
                     <div class="flex-1 min-w-0">
                         <div class="text-[12px] font-bold text-entropy-text-primary truncate mb-0.5 leading-none">{msg.attachment.fileName}</div>
@@ -320,7 +300,6 @@
                 <span class="text-[10px] font-bold text-entropy-text-dim uppercase tracking-widest">Decrypting...</span>
             </div>
         {:else}
-            <!-- Generic File UI -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div 
                 role="button"

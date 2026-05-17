@@ -1,7 +1,4 @@
 
-/**
- * Represents an individual message in a conversation.
- */
 export interface Message {
     id: string;
     timestamp: number;
@@ -51,9 +48,6 @@ export interface PrivacySettings {
     notificationsEnabled: boolean;
 }
 
-/**
- * Represents a conversation thread with a single peer or a group.
- */
 export interface Chat {
     peerHash: string;
     messages?: Message[];

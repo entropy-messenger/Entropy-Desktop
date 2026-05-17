@@ -7,6 +7,9 @@
     import AttachmentRenderer from './AttachmentRenderer.svelte';
     import { open } from '@tauri-apps/plugin-shell';
 
+    const URL_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|net|org|io|dev|ai|app|me|network|xyz)(?:\/[^\s]*)?)/gi;
+    const HASH_REGEX = /\b([a-fA-F0-9]{64})\b/g;
+
     let { 
         msg, 
         isMine, 
@@ -27,18 +30,14 @@
 
     const escapeHTML = (text: string) => {
         if (!text) return '';
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        return text.replace(/[&<>"']/g, char => ESCAPE_MAP[char]);
     };
+
+    const ESCAPE_MAP: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
     const linkify = (text: string, mine: boolean) => {
         if (!text) return '';
-        // Robust URL regex matching http(s), www. OR naked domains
-        const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|net|org|io|dev|ai|app|me|network|xyz)(?:\/[^\s]*)?)/gi;
+        const urlRegex = URL_REGEX;
         const linkClass = mine ? 'text-cyan-300 font-bold underline decoration-cyan-300/40' : 'text-entropy-primary font-bold underline decoration-1';
         
         return text.split(urlRegex).map(part => {
@@ -48,7 +47,6 @@
                     rawHref = `https://${rawHref}`;
                 }
                 
-                // Escape everything for the attributes AND the content
                 const safePart = escapeHTML(part);
                 const safeHref = escapeHTML(rawHref);
 
@@ -74,8 +72,7 @@
      */
     const resolveHashesInText = (text: string) => {
         if (!text) return text;
-        const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
-        return text.replace(hashRegex, (match) => {
+        return text.replace(HASH_REGEX, (match) => {
             const nick = $userStore.nicknames[match.toLowerCase()];
             return nick ? nick : match.slice(0, 8);
         });
@@ -85,8 +82,7 @@
     import { resolveIdentity } from '../lib/actions/contacts';
     $effect(() => {
         if (msg.type === 'group_management' || msg.type === 'system') {
-            const hashRegex = /\b([a-fA-F0-9]{64})\b/g;
-            const matches = msg.content.match(hashRegex);
+            const matches = msg.content.match(HASH_REGEX);
             if (matches) {
                 matches.forEach((hash: string) => {
                     const h = hash.toLowerCase();
@@ -174,7 +170,6 @@
     {/if}
 
 
-    <!-- Compact Mode Status Cluster -->
     {#if compactMode}
         <div class="mt-1 flex items-center space-x-2 select-none pointer-events-none">
             {#if msg.isStarred}

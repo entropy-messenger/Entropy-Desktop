@@ -19,7 +19,6 @@
     clickable?: boolean;
   }>();
 
-  // Deterministically fetch the visual style from the hash
   let s = $derived(getAvatarData(hash));
   let gradId = $derived(`grad-${hash.substring(0, 8)}`);
 

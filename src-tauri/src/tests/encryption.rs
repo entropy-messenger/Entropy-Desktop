@@ -665,8 +665,6 @@ async fn identity_rotation_detection() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-// --- Helper Functions for Tests ---
-
 async fn setup_test_user(
     name: &str,
     reg_id: u32,

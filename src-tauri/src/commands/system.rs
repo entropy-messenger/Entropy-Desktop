@@ -16,7 +16,6 @@ pub fn open_file(
     // as users need to open files they've exported to their local filesystem.
     // The hidden file check below still provides a baseline security layer.
 
-    // reject hidden files
     if canonical_path
         .file_name()
         .map(|n| n.to_string_lossy().starts_with('.'))

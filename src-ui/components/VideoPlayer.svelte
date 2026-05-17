@@ -112,14 +112,11 @@
         autoplay={expanded}
     ></video>
 
-    <!-- Overlay Controls -->
     <div 
         class="absolute inset-0 transition-opacity duration-300 flex flex-col {isPro ? 'justify-end p-3 bg-gradient-to-t from-black/60 via-transparent to-transparent' : 'justify-center items-center'} {showControls || !isPlaying ? 'opacity-100' : 'opacity-0 pointer-events-none'}"
         style={isPro ? "padding-bottom: calc(var(--sab) + 0.75rem); padding-left: calc(var(--sal) + 0.75rem); padding-right: calc(var(--sar) + 0.75rem);" : ""}
     >
         {#if isPro}
-            <!-- Full Controls (Only in Fullscreen) -->
-            <!-- Progress Bar -->
             <div class="relative w-full h-1 group/progress mb-3 px-1">
                 <input 
                     type="range" 
@@ -137,7 +134,6 @@
                 </div>
             </div>
 
-            <!-- Controls Bar -->
             <div class="flex items-center justify-between w-full">
                 <div class="flex items-center space-x-4">
                     <button 
@@ -174,7 +170,6 @@
                 </button>
             </div>
         {:else}
-            <!-- Minimal Center Play Button (Normal Mode) -->
             <button 
                 class="w-16 h-16 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white border border-white/10 hover:bg-black/60 transition-all scale-110 shadow-2xl active:scale-95"
                 onclick={togglePlay}

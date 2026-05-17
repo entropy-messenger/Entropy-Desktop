@@ -16,7 +16,6 @@ export const initApp = async (password: string) => {
     try {
         await initVault(password);
         
-        // Fetch and set the media proxy port immediately after vault init
         const port = await invoke<number>('get_media_proxy_port');
         mediaProxyPort.set(port);
     } catch (e: any) {
@@ -28,7 +27,6 @@ export const initApp = async (password: string) => {
     try {
         idHash = await signalManager.init();
     } catch (e) {
-        // Signal init failed
     }
 
     if (idHash) {
@@ -42,7 +40,6 @@ export const initApp = async (password: string) => {
             proxyUrl: ''
         };
 
-        // Load Global Metadata
         const savedMeta = await vaultLoad(`entropy_meta_${idHash}`);
         if (savedMeta) {
             try {
@@ -50,11 +47,9 @@ export const initApp = async (password: string) => {
                 globalNickname = meta.globalNickname || meta.myAlias || null;
                 privacySettings = { ...privacySettings, ...meta.privacySettings };
             } catch (e) {
-                // Parse failed
             }
         }
 
-        // Load relational data
         let nicknames: Record<string, string> = {};
         try {
             const dbContacts = await invoke<any[]>('db_get_contacts');
@@ -91,7 +86,6 @@ export const initApp = async (password: string) => {
                 };
             }
         } catch (e) {
-            // DB load failed
         }
 
         userStore.update(s => ({
@@ -129,7 +123,6 @@ export const createIdentity = async (password: string) => {
     if (idHash) {
         userStore.update(s => ({ ...s, identityHash: idHash }));
         
-        // Ensure proxy port is set for new identities
         try {
             const port = await invoke<number>('get_media_proxy_port');
             mediaProxyPort.set(port);
@@ -155,6 +148,5 @@ export const purgeIdentity = async () => {
         await new Promise(r => setTimeout(r, 1000));
         await invoke('reset_database');
     } catch (err) {
-        // Reset failed
     }
 }

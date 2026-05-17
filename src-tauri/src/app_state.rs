@@ -67,7 +67,8 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for SqlCip
     fn on_acquire(&self, conn: &mut rusqlite::Connection) -> Result<(), rusqlite::Error> {
         if !self.key.is_empty() {
             {
-                conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", self.key))?;
+                let escaped = self.key.replace("'", "''");
+                conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", escaped))?;
             }
         }
         Ok(())

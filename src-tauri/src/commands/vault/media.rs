@@ -22,8 +22,6 @@ pub fn get_media_dir(
     Ok(media_dir)
 }
 
-// vault_save_media handles encryption now.
-
 #[tauri::command]
 pub async fn vault_delete_media(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let state = app.state::<DbState>();
@@ -49,7 +47,6 @@ pub async fn vault_export_media(
     id: String,
     target_path: String,
 ) -> Result<(), String> {
-    // 1. Get the media key
     let key_bytes = {
         let lock = state.media_key.lock().map_err(|_| "Vault not open")?;
         lock.clone().ok_or("Vault not open")?
@@ -57,7 +54,6 @@ pub async fn vault_export_media(
     let key = Key::from_slice(&key_bytes);
     let cipher = XChaCha20Poly1305::new(key);
 
-    // 2. Locate the source file
     let media_dir = get_media_dir(&app, &state)?;
     let src_path = media_dir.join(&id);
     if !src_path.exists() {

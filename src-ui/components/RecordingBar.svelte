@@ -89,7 +89,6 @@
         updateVolume();
 
     } catch (e: any) { 
-        // Start Error
         recordingState = 'error';
         if (e.name === 'NotAllowedError') {
             errorMessage = "Microphone Permission Denied";
@@ -111,11 +110,8 @@
       const bars = 100;
       const barWidth = width / bars;
 
-      const imageData = ctx.getImageData(barWidth, 0, width - barWidth, height);
       ctx.clearRect(0, 0, width, height);
-      ctx.putImageData(imageData, 0, 0);
 
-      // More natural scaling (linear) and slightly smaller max height
       const barHeight = Math.max(2, currentVolume * height * 0.8);
       
       ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';

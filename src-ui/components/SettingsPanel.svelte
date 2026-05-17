@@ -31,48 +31,13 @@
   };
 
   const exportVault = async () => {
-    addToast("Starting export...", 'info'); 
-    try {
-        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-            const { save } = await import('@tauri-apps/plugin-dialog');
-            const path = await save({
-                defaultPath: `entropy_backup_${Date.now()}.entropy`,
-                filters: [{ name: 'Entropy Backup', extensions: ['entropy', 'zip'] }]
-            });
-            if (path) {
-                const includeMedia = await showConfirm("Do you want to include all media files (photos/videos) in this backup?", "Backup Options");
-                await invoke('export_database', { targetPath: path, includeMedia });
-                addToast("Backup exported successfully!", 'success');
-            } else {
-                addToast("Export cancelled.", 'info');
-            }
-        } else {
-            addToast("Export not supported in web mode.", 'warning');
-        }
-    } catch (e) {
-        addToast("Export failed: " + e, 'error');
-    }
+    const { exportVaultWithDialog } = await import('../lib/actions/vault');
+    await exportVaultWithDialog();
   };
 
   const importVault = async () => {
-    if (!await showConfirm("WARNING: Importing a backup will OVERWRITE all current data. This cannot be undone. Continue?", "Restore Backup")) return;
-    try {
-        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const path = await open({
-                multiple: false,
-                filters: [{ name: 'Entropy Backup', extensions: ['entropy', 'zip'] }]
-            });
-            if (path) {
-                const includeMedia = await showConfirm("This backup may contain media files. Do you want to extract and restore them as well?", "Restore Options");
-                await invoke('import_database', { srcPath: path, includeMedia });
-                addToast("Backup restored! The app will now reload.", 'success');
-                setTimeout(() => window.location.reload(), 2000);
-            }
-        }
-    } catch (e) {
-        addToast("Import failed: " + e, 'error');
-    }
+    const { importVaultWithDialog } = await import('../lib/actions/vault');
+    await importVaultWithDialog();
   };
 
 

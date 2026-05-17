@@ -3,6 +3,9 @@ import { listen } from '@tauri-apps/api/event';
 import { get } from 'svelte/store';
 import { userStore } from './stores/user';
 import { addMessage, updateMessageStatusUI, updateSingleMessageStatusUI, handleTypingSignal } from './actions/chat';
+import { addToast } from './stores/ui';
+
+const msgIdToChat = new Map<string, string>();
 
 export class NetworkLayer {
     private url: string = "";
@@ -12,7 +15,6 @@ export class NetworkLayer {
     private lastWarningTime: Map<string, number> = new Map();
 
     constructor() {
-        // bridge native tauri events to svelte state
         listen('network-status', (event) => {
             const payload = event.payload as any;
             const status = typeof payload === 'string' ? payload : payload.status;
@@ -42,7 +44,6 @@ export class NetworkLayer {
             if (now - last < 10000) return;
             this.lastWarningTime.set(type, now);
 
-            const { addToast } = await import('./stores/ui');
             if (type === 'storage_full' || type === 'Mailbox full') {
                 addToast("Recipient's offline storage is full (500 limit).", 'error');
             } else if (type === 'sender_quota_exceeded' || type === 'Sender quota exceeded') {
@@ -61,6 +62,8 @@ export class NetworkLayer {
                 catch (e) { return undefined; }
             };
 
+            msgIdToChat.set(m.id, m.chatAddress);
+
             const uiMsg: any = {
                 ...m,
                 isMine: m.senderHash === state.identityHash,
@@ -74,19 +77,22 @@ export class NetworkLayer {
 
         listen('msg://reaction', (event) => {
             const { targetMsgId, reactions } = event.payload as any;
-            import('./stores/user').then(({ messageStore }) => {
-                messageStore.update(mStore => {
-                    for (const chatAddress in mStore) {
-                        const idx = mStore[chatAddress].findIndex(m => m.id === targetMsgId);
+            const chatAddress = msgIdToChat.get(targetMsgId);
+            if (chatAddress) {
+                import('./stores/user').then(({ messageStore }) => {
+                    messageStore.update(mStore => {
+                        const msgs = mStore[chatAddress];
+                        if (!msgs) return mStore;
+                        const idx = msgs.findIndex(m => m.id === targetMsgId);
                         if (idx !== -1) {
-                            const msgs = [...mStore[chatAddress]];
-                            msgs[idx] = { ...msgs[idx], reactions };
-                            return { ...mStore, [chatAddress]: msgs };
+                            const updated = [...msgs];
+                            updated[idx] = { ...updated[idx], reactions };
+                            return { ...mStore, [chatAddress]: updated };
                         }
-                    }
-                    return mStore;
+                        return mStore;
+                    });
                 });
-            });
+            }
         });
 
         listen('msg://status', (event) => {
@@ -198,7 +204,6 @@ export class NetworkLayer {
         if (this.connectingPromise) return this.connectingPromise;
 
         this.connectingPromise = (async () => {
-            // resolve proxy configuration based on privacy settings
             try {
                 let proxyUrl = undefined;
                 const state = get(userStore) as any;
@@ -233,7 +238,6 @@ export class NetworkLayer {
         try {
             await invoke('disconnect_network');
         } catch (e) {
-            // Native disconnect failed
         }
 
         this.isConnected = false;
@@ -281,7 +285,6 @@ export class NetworkLayer {
             jailTimeRemaining: 300
         }));
 
-        // Start local countdown for UI
         const timer = setInterval(() => {
             userStore.update(s => {
                 if (s.jailTimeRemaining && s.jailTimeRemaining > 0) {
